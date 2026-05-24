@@ -12,6 +12,7 @@ from .data_loader import load_universe_ohlcv
 from .event_study import run_event_study
 from .indicator_engine import calculate_indicator
 from .reports import export_event_study_reports, export_scan_reports
+from .resample import research_mtf_derivations, resample_universe
 from .scoring import score_dataframe
 from .states import classify_states
 
@@ -196,6 +197,39 @@ def event_study_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def resample_command(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe_config(args.config)
+        derivations = (
+            research_mtf_derivations()
+            if args.preset == "research-mtf"
+            else [(args.from_timeframe, tuple(args.to_timeframe))]
+        )
+        all_written: list[Path] = []
+        all_warnings: list[str] = []
+        for from_timeframe, to_timeframes in derivations:
+            written, warnings = resample_universe(
+                universe,
+                data_dir=args.data_dir,
+                from_timeframe=from_timeframe,
+                to_timeframes=to_timeframes,
+            )
+            all_written.extend(written)
+            all_warnings.extend(warnings)
+    except Exception as exc:
+        print(f"Resample failed: {exc}")
+        return 1
+
+    print(f"Wrote {len(all_written)} resampled CSV files.")
+    for path in all_written:
+        print(f"Wrote: {path}")
+    if all_warnings:
+        print(f"Warnings: {len(all_warnings)}")
+        for warning in all_warnings:
+            print(f"- {warning}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="riskflow", description="Riskflow meme leadership research CLI.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -214,6 +248,28 @@ def build_parser() -> argparse.ArgumentParser:
     event_study = subparsers.add_parser("event-study", help="Run simple signal event studies.")
     add_common_arguments(event_study)
     event_study.set_defaults(func=event_study_command)
+
+    resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
+    resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    resample.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    resample.add_argument(
+        "--from-timeframe",
+        default="1d",
+        help="Source timeframe suffix, such as 1d or 1h. Ignored when --preset research-mtf is used.",
+    )
+    resample.add_argument(
+        "--to-timeframe",
+        nargs="+",
+        default=["1w", "3d"],
+        help="Target timeframe suffixes to create, such as 1w 3d or 12h 4h.",
+    )
+    resample.add_argument(
+        "--preset",
+        choices=["custom", "research-mtf"],
+        default="custom",
+        help="Use research-mtf to derive 1w/3d from 1d and 12h/4h from 1h.",
+    )
+    resample.set_defaults(func=resample_command)
 
     return parser
 

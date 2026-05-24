@@ -59,7 +59,33 @@ date,open,high,low,close,volume
 2024-01-01,0.09,0.10,0.08,0.095,1000000
 ```
 
-The loader parses `date` as the index, sorts rows, keeps the last duplicate date, and converts OHLCV columns to numeric values.
+TradingView CSV exports are supported. Columns such as `time`, `Date`, `Open`, `High`, `Low`, `Close`, and `Volume` are normalized automatically. If volume is missing, Riskflow fills it with `0` because v1 calculations do not use volume.
+
+To use TradingView data:
+
+1. Open the symbol and timeframe in TradingView.
+2. Export chart data to CSV.
+3. Rename the file to match the Riskflow symbol, such as `DOGE_1d.csv` or `BRETT_1d.csv`.
+4. Put it in `data/raw`.
+
+The loader parses the date/time column as the index, sorts rows, keeps the last duplicate date, and converts OHLCV columns to numeric values.
+
+## Resample Timeframes
+
+Riskflow can derive higher-timeframe OHLCV files from lower-timeframe CSVs. This reduces TradingView exports: for the research stack, export `1d` and `1h` data, then derive the rest locally.
+
+```bash
+python3 -m riskflow resample --config configs/meme_universe.yaml --from-timeframe 1d --to-timeframe 1w 3d
+python3 -m riskflow resample --config configs/meme_universe.yaml --from-timeframe 1h --to-timeframe 12h 4h
+```
+
+Or run the preset:
+
+```bash
+python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
+```
+
+Resampling uses standard OHLCV aggregation: first open, highest high, lowest low, last close, and summed volume.
 
 If CSVs are missing, the CLI emits warnings or fails clearly. It does not generate fake production reports.
 

@@ -15,19 +15,21 @@ Current foundation:
 - core indicator engine exists
 - compression, states, scoring exist
 - scan and event-study CLI exist
+- resampling CLI exists for deriving 1W/3D from 1D and 12H/4H from 1H
 - tests exist
 - GitHub repo and Obsidian vault exist
 
 Next priorities:
 
-1. Add real OHLCV data files locally.
-2. Run the first real meme leaderboard.
-3. Review missing/bad data warnings.
-4. Tighten Pine-to-Python parity where it matters.
-5. Add score component columns to leaderboard.
-6. Add ex-target basket option so each coin can be compared to the basket excluding itself.
-7. Improve event-study reporting and add Obsidian event-study markdown.
-8. Validate whether compression plus improving relative strength predicts forward relative outperformance.
+1. Add real OHLCV data files locally across the meme universe.
+2. Use resampling to build the first multi-timeframe local dataset.
+3. Run the first real meme leaderboard across enough assets to be meaningful.
+4. Review missing/bad data warnings.
+5. Tighten Pine-to-Python parity where it matters.
+6. Add score component columns to leaderboard.
+7. Add ex-target basket option so each coin can be compared to the basket excluding itself.
+8. Improve event-study reporting and add Obsidian event-study markdown.
+9. Validate whether compression plus improving relative strength predicts forward relative outperformance.
 
 ## Stage 2: Crypto Sector Engine
 
@@ -59,7 +61,9 @@ Use:
 - weekly for regime
 - 3D for swing structure
 - daily for tactical confirmation
+- 12H for lower swing confirmation
 - 4H for timing and reset
+- 1H for intraday structure and source data for 4H/12H resampling
 
 Potential labels:
 
@@ -117,4 +121,3 @@ Extend the same normalized architecture into:
 - AI stocks
 - energy
 - small caps
-

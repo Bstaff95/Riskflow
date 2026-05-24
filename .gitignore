@@ -21,3 +21,5 @@ obsidian/reports/*
 .DS_Store
 .idea/
 .vscode/
+obsidian/**/.obsidian/
+obsidian/.obsidian/

@@ -8,6 +8,15 @@ These instructions are for Codex or any coding agent working in this repo.
 - The Python package name is `riskflow`.
 - Do not rename the package back to `leaderflow`; that was an earlier naming error.
 
+## Start Of Session
+
+- Read this file first.
+- Then read `docs/PROJECT_CONTEXT.md`.
+- For code work, also read `docs/ARCHITECTURE.md`.
+- For planning work, also read `docs/ROADMAP.md`.
+- For workflow/git/Obsidian questions, also read `docs/WORKFLOW.md`.
+- Treat these docs as the durable project memory between sessions.
+
 ## Core Workflow
 
 - Make focused, explainable changes.
@@ -15,6 +24,7 @@ These instructions are for Codex or any coding agent working in this repo.
 - After meaningful code or documentation changes, remind the user to commit and push.
 - Do not commit or push unless the user asks.
 - Use clear commit messages when committing.
+- If product direction or architecture changes, update the relevant `docs/` file in the same change.
 
 ## Verification
 
@@ -36,3 +46,7 @@ These instructions are for Codex or any coding agent working in this repo.
 - Focus on relative forward returns versus the relevant basket, not only absolute returns.
 - Treat Obsidian as the research memory layer, not the calculation engine.
 
+## User Environment Notes
+
+- The real project README is `README.md` at the repo root.
+- `.pytest_cache/README.md` is pytest internals and should not be edited.

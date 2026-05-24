@@ -98,6 +98,17 @@ python3 -m pytest
 
 Tests use synthetic data only. They cover bootstrap z-scores, missing-member basket math, indicator output contracts, compression score bounds, state validity, and event-study schema.
 
+## Project Memory
+
+Durable project context lives in `docs/`:
+
+- `docs/PROJECT_CONTEXT.md` explains what Riskflow is trying to become.
+- `docs/ARCHITECTURE.md` explains how the current Python package is organized.
+- `docs/ROADMAP.md` explains staged next steps.
+- `docs/WORKFLOW.md` explains the GitHub, Codex, and Obsidian workflow.
+
+Agent behavior and repo guardrails live in `AGENTS.md`.
+
 ## Config
 
 Edit `configs/meme_universe.yaml` to change the universe, benchmark settings, indicator weights, indicator settings, and compression settings.

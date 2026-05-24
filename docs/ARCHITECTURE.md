@@ -48,6 +48,40 @@ scoring.py calculates opportunity score
 reports.py exports CSV/HTML/Obsidian markdown
 ```
 
+## Universe Model Direction
+
+The current `configs/meme_universe.yaml` is intentionally simple: each asset has a symbol, name, sector, and subgroup.
+
+The target direction is more flexible. Riskflow should evolve from a rigid tree taxonomy into a tagged, graph-ready universe model.
+
+Important separations:
+
+- Asset identity: the canonical research symbol and what the asset is.
+- Data identity: the TradingView/exchange/API symbols used to fetch candles.
+- Memberships: structural, tactical, and research groupings.
+- Benchmark policy: the preferred comparison basket or parent.
+- Quality metadata: label confidence, feed notes, liquidity tier, and data warnings.
+
+This matters because assets often belong to multiple useful groups. For example, BRETT can be a meme, a Base ecosystem asset, a high-beta meme, and a member of the current meme MVP scan. The architecture should support that without forcing one permanent category.
+
+For v1, keep the YAML simple unless the extra metadata is needed by code. When expanding Layer 1, prefer backward-compatible additions over schema churn.
+
+## Benchmark And Tag Direction
+
+Layer 2 is documented in `docs/LAYER_2_BENCHMARKS_AND_TAGS.md`.
+
+The target direction is a configurable benchmark engine with:
+
+- ex-target baskets
+- basket viability diagnostics
+- benchmark roles and fallback policies
+- benchmark confidence
+- audit notes explaining why each comparison was chosen
+- basket-as-asset support
+- controlled primary states and secondary tags
+
+The architecture should keep observations separate from interpretations. Raw features such as signal, relative component, compression score, and active member count should stay distinct from derived labels such as state, tags, confidence, and opportunity score.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.

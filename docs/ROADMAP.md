@@ -1,5 +1,7 @@
 # Riskflow Roadmap
 
+For the adaptable long-term product vision, see `docs/END_STATE.md`. The roadmap should stay grounded in what we can test next; the end-state guide should stay flexible and evidence-driven.
+
 ## Stage 1: Meme MVP
 
 Goal:
@@ -28,8 +30,9 @@ Next priorities:
 5. Tighten Pine-to-Python parity where it matters.
 6. Add score component columns to leaderboard.
 7. Add ex-target basket option so each coin can be compared to the basket excluding itself.
-8. Improve event-study reporting and add Obsidian event-study markdown.
-9. Validate whether compression plus improving relative strength predicts forward relative outperformance.
+8. Add basket viability diagnostics, benchmark confidence, and benchmark audit notes.
+9. Improve event-study reporting and add Obsidian event-study markdown.
+10. Validate whether compression plus improving relative strength predicts forward relative outperformance.
 
 ## Stage 2: Crypto Sector Engine
 

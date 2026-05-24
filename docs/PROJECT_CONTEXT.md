@@ -73,3 +73,8 @@ Riskflow should separate:
 
 The system should prefer explainable evidence over impressive labels.
 
+## Living End-State Guide
+
+The broad cathedral-scale vision is tracked in `docs/END_STATE.md`.
+
+That document is intentionally a living guide rather than a fixed spec. Riskflow should use it to preserve direction while continuing to question whether each layer is the best way to accomplish the goal.

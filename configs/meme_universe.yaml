@@ -1,0 +1,106 @@
+name: meme_universe_v1
+benchmark:
+  type: equal_weight_basket
+  name: MEME_BASKET
+min_active_members: 3
+default_weights:
+  price_weight: 1.20
+  relative_weight: 0.65
+  risk_weight: 0.85
+default_indicator_settings:
+  z_len: 100
+  component_z_clamp: 3.5
+  use_risk: false
+  viscosity_lookback: 20
+  viscosity_fast: 2
+  viscosity_slow: 34
+  velocity_weight: 0.55
+  slope_weight: 0.25
+  accel_weight: 0.08
+  gradient_smooth_len: 3
+  gradient_smooth_blend: 0.55
+default_compression_settings:
+  length: 20
+  percentile_window: 252
+assets:
+  - symbol: DOGE
+    name: Dogecoin
+    sector: memes
+    subgroup: large_memes
+  - symbol: SHIB
+    name: Shiba Inu
+    sector: memes
+    subgroup: large_memes
+  - symbol: PEPE
+    name: Pepe
+    sector: memes
+    subgroup: large_memes
+  - symbol: WIF
+    name: dogwifhat
+    sector: memes
+    subgroup: sol_memes
+  - symbol: BONK
+    name: Bonk
+    sector: memes
+    subgroup: sol_memes
+  - symbol: FLOKI
+    name: Floki
+    sector: memes
+    subgroup: large_memes
+  - symbol: BRETT
+    name: Brett
+    sector: memes
+    subgroup: base_memes
+  - symbol: MOG
+    name: Mog Coin
+    sector: memes
+    subgroup: eth_memes
+  - symbol: POPCAT
+    name: Popcat
+    sector: memes
+    subgroup: sol_memes
+  - symbol: TURBO
+    name: Turbo
+    sector: memes
+    subgroup: ai_memes
+  - symbol: FARTCOIN
+    name: Fartcoin
+    sector: memes
+    subgroup: sol_memes
+  - symbol: SPX6900
+    name: SPX6900
+    sector: memes
+    subgroup: cult_memes
+  - symbol: GIGA
+    name: Gigachad
+    sector: memes
+    subgroup: sol_memes
+  - symbol: MEW
+    name: cat in a dogs world
+    sector: memes
+    subgroup: sol_memes
+  - symbol: TOSHI
+    name: Toshi
+    sector: memes
+    subgroup: base_memes
+  - symbol: PNUT
+    name: Peanut the Squirrel
+    sector: memes
+    subgroup: sol_memes
+  - symbol: PENGU
+    name: Pudgy Penguins
+    sector: memes
+    subgroup: sol_memes
+  - symbol: TRUMP
+    name: Official Trump
+    sector: memes
+    subgroup: political_memes
+  - symbol: NEIRO
+    name: Neiro
+    sector: memes
+    subgroup: eth_memes
+  - symbol: TROLL
+    name: Troll
+    sector: memes
+    subgroup: eth_memes
+

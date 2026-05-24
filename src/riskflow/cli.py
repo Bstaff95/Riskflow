@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+from .baskets import build_equal_weight_return_index
+from .compression import calculate_compression_features
+from .config import UniverseConfig, load_universe_config
+from .data_loader import load_universe_ohlcv
+from .event_study import run_event_study
+from .indicator_engine import calculate_indicator
+from .reports import export_event_study_reports, export_scan_reports
+from .scoring import score_dataframe
+from .states import classify_states
+
+
+LEADERBOARD_COLUMNS = [
+    "symbol",
+    "name",
+    "sector",
+    "subgroup",
+    "latest_close",
+    "final_signal",
+    "price_component",
+    "relative_component",
+    "viscosity",
+    "above_viscosity",
+    "gradient_driver",
+    "compression_score",
+    "state",
+    "opportunity_score",
+    "notes",
+]
+
+
+def build_analysis_frames(
+    universe: UniverseConfig,
+    raw_frames: dict[str, pd.DataFrame],
+) -> tuple[dict[str, pd.DataFrame], pd.Series, list[str]]:
+    warnings: list[str] = []
+    closes = {symbol: frame["close"] for symbol, frame in raw_frames.items()}
+    basket = build_equal_weight_return_index(
+        closes,
+        min_active_members=universe.min_active_members,
+        name=universe.benchmark.name,
+    )
+    if basket.dropna().empty:
+        warnings.append(
+            f"Benchmark {universe.benchmark.name} has no valid values. "
+            f"Check min_active_members={universe.min_active_members} and CSV overlap."
+        )
+
+    analysis_frames: dict[str, pd.DataFrame] = {}
+    for asset in universe.assets:
+        raw = raw_frames.get(asset.symbol)
+        if raw is None:
+            continue
+        indicator = calculate_indicator(
+            raw["close"],
+            basket,
+            settings=universe.indicator_settings,
+            weights=universe.weights,
+        )
+        compression = calculate_compression_features(raw, settings=universe.compression_settings)
+        analysis = indicator.join(compression[["compression_score"]], how="left")
+        analysis["state"] = classify_states(analysis)
+        analysis["opportunity_score"] = score_dataframe(analysis)
+        analysis_frames[asset.symbol] = analysis
+
+    return analysis_frames, basket, warnings
+
+
+def _latest_notes(row: pd.Series) -> str:
+    notes: list[str] = []
+    if pd.isna(row.get("benchmark")):
+        notes.append("benchmark unavailable")
+    if pd.isna(row.get("relative_component")):
+        notes.append("relative unavailable")
+    if pd.isna(row.get("compression_score")):
+        notes.append("compression unavailable")
+    if row.get("state") == "Unknown":
+        notes.append("insufficient or mixed signal")
+    return "; ".join(notes)
+
+
+def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    assets = universe.asset_by_symbol
+
+    for symbol, analysis in analysis_frames.items():
+        asset = assets[symbol]
+        latest_index = analysis["target"].last_valid_index()
+        if latest_index is None:
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": asset.name,
+                    "sector": asset.sector,
+                    "subgroup": asset.subgroup,
+                    "notes": "no valid close data",
+                }
+            )
+            continue
+
+        latest = analysis.loc[latest_index]
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": asset.name,
+                "sector": asset.sector,
+                "subgroup": asset.subgroup,
+                "latest_close": latest.get("target"),
+                "final_signal": latest.get("final_signal"),
+                "price_component": latest.get("price_component"),
+                "relative_component": latest.get("relative_component"),
+                "viscosity": latest.get("viscosity"),
+                "above_viscosity": bool(latest.get("above_viscosity")) if pd.notna(latest.get("above_viscosity")) else False,
+                "gradient_driver": latest.get("gradient_driver"),
+                "compression_score": latest.get("compression_score"),
+                "state": latest.get("state"),
+                "opportunity_score": latest.get("opportunity_score"),
+                "notes": _latest_notes(latest),
+            }
+        )
+
+    leaderboard = pd.DataFrame(rows)
+    for column in LEADERBOARD_COLUMNS:
+        if column not in leaderboard.columns:
+            leaderboard[column] = pd.NA
+    leaderboard = leaderboard[LEADERBOARD_COLUMNS]
+    return leaderboard.sort_values(["opportunity_score", "final_signal"], ascending=[False, False], na_position="last")
+
+
+def load_and_analyze(
+    config_path: str | Path,
+    data_dir: str | Path,
+    timeframe: str,
+) -> tuple[UniverseConfig, pd.DataFrame, dict[str, pd.DataFrame], list[str]]:
+    universe = load_universe_config(config_path)
+    raw_frames, load_warnings = load_universe_ohlcv(universe, data_dir=data_dir, timeframe=timeframe)
+    if not raw_frames:
+        raise RuntimeError(
+            f"No usable CSV files found in {Path(data_dir)}. "
+            "Expected files like DOGE.csv or DOGE_1d.csv with date, open, high, low, close, volume."
+        )
+    analysis_frames, _basket, analysis_warnings = build_analysis_frames(universe, raw_frames)
+    leaderboard = build_leaderboard(universe, analysis_frames)
+    return universe, leaderboard, analysis_frames, [*load_warnings, *analysis_warnings]
+
+
+def scan_command(args: argparse.Namespace) -> int:
+    try:
+        universe, leaderboard, _analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Scan failed: {exc}")
+        return 1
+
+    paths = export_scan_reports(
+        leaderboard,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote leaderboard CSV: {paths['csv']}")
+    print(f"Wrote leaderboard HTML: {paths['html']}")
+    print(f"Wrote Obsidian report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def event_study_command(args: argparse.Namespace) -> int:
+    try:
+        _universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Event study failed: {exc}")
+        return 1
+
+    summary, _records = run_event_study(analysis_frames)
+    paths = export_event_study_reports(summary, report_dir=args.report_dir)
+    print(f"Wrote event study CSV: {paths['csv']}")
+    print(f"Wrote event study HTML: {paths['html']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="riskflow", description="Riskflow meme leadership research CLI.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_common_arguments(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+        subparser.add_argument("--timeframe", default="1d", help="Timeframe suffix for CSV lookup, e.g. 1d or 4h.")
+        subparser.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+        subparser.add_argument("--report-dir", default="reports", help="Directory for CSV and HTML reports.")
+
+    scan = subparsers.add_parser("scan", help="Build the latest meme leaderboard.")
+    add_common_arguments(scan)
+    scan.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    scan.set_defaults(func=scan_command)
+
+    event_study = subparsers.add_parser("event-study", help="Run simple signal event studies.")
+    add_common_arguments(event_study)
+    event_study.set_defaults(func=event_study_command)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return int(args.func(args))

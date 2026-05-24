@@ -1,0 +1,9 @@
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+reports:
+  report_dir: reports
+  obsidian_dir: obsidian
+runtime:
+  default_timeframe: 1d
+

@@ -82,6 +82,22 @@ The target direction is a configurable benchmark engine with:
 
 The architecture should keep observations separate from interpretations. Raw features such as signal, relative component, compression score, and active member count should stay distinct from derived labels such as state, tags, confidence, and opportunity score.
 
+## Signal Research Direction
+
+Layer 3 is documented in `docs/LAYER_3_SIGNAL_RESEARCH.md`.
+
+The current Pine-style `final_signal` remains the production incumbent and is treated as `core_signal_v0` in research outputs. Challenger signals are tested in a separate research path before any leaderboard or opportunity-score changes.
+
+Signal definitions live in `signal_registry.py`. This registry is the contract layer between research experiments and downstream consumers such as states, scoring, reports, and TradingView-style interpretation. Future indicator formulas should be added as new versioned signals, not silent edits to `core_signal_v0`.
+
+The first challenger families are:
+
+- relative volatility-adjusted momentum
+- relative percentile strength
+- cross-sectional relative rank
+
+Riskflow should preserve the current oscillator-style user experience while testing whether challenger observations improve forward relative-return evidence.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -94,6 +110,8 @@ The architecture should keep observations separate from interpretations. Raw fea
 - `states.py`: deterministic lifecycle state classification.
 - `scoring.py`: explainable opportunity score.
 - `event_study.py`: event detection and forward absolute/relative return summaries.
+- `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
+- `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `reports.py`: CSV, HTML, and Obsidian markdown export helpers.
 - `cli.py`: command-line entry points.
 
@@ -102,6 +120,7 @@ The architecture should keep observations separate from interpretations. Raw fea
 ```bash
 python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

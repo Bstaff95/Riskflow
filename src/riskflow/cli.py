@@ -11,9 +11,10 @@ from .config import UniverseConfig, load_universe_config
 from .data_loader import load_universe_ohlcv
 from .event_study import run_event_study
 from .indicator_engine import calculate_indicator
-from .reports import export_event_study_reports, export_scan_reports
+from .reports import export_event_study_reports, export_scan_reports, export_signal_research_reports
 from .resample import research_mtf_derivations, resample_universe
 from .scoring import score_dataframe
+from .signal_research import run_signal_research
 from .states import classify_states
 
 
@@ -197,6 +198,34 @@ def event_study_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def signal_research_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Signal research failed: {exc}")
+        return 1
+
+    summary, records = run_signal_research(
+        analysis_frames,
+        timeframe=args.timeframe,
+        benchmark_name=universe.benchmark.name,
+        min_sample_size=args.min_sample_size,
+        cooldown_bars=args.cooldown_bars,
+        entry_lag_bars=args.entry_lag_bars,
+    )
+    paths = export_signal_research_reports(summary, records, report_dir=args.report_dir)
+    print(f"Wrote signal research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote signal research summary HTML: {paths['summary_html']}")
+    print(f"Wrote signal research event records CSV: {paths['records_csv']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -248,6 +277,28 @@ def build_parser() -> argparse.ArgumentParser:
     event_study = subparsers.add_parser("event-study", help="Run simple signal event studies.")
     add_common_arguments(event_study)
     event_study.set_defaults(func=event_study_command)
+
+    signal_research = subparsers.add_parser("signal-research", help="Run Layer 3 challenger-signal research.")
+    add_common_arguments(signal_research)
+    signal_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=5,
+        help="Minimum event count before a signal result can be classified beyond inconclusive.",
+    )
+    signal_research.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol/variant can fire another research event.",
+    )
+    signal_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the signal event before forward-return measurement starts.",
+    )
+    signal_research.set_defaults(func=signal_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

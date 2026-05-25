@@ -13,6 +13,9 @@ LEADERBOARD_HTML = "latest_meme_leaderboard.html"
 OBSIDIAN_SCAN_MD = "latest_meme_scan.md"
 EVENT_SUMMARY_CSV = "event_study_summary.csv"
 EVENT_SUMMARY_HTML = "event_study_summary.html"
+SIGNAL_RESEARCH_SUMMARY_CSV = "signal_research_summary.csv"
+SIGNAL_RESEARCH_SUMMARY_HTML = "signal_research_summary.html"
+SIGNAL_RESEARCH_RECORDS_CSV = "signal_research_records.csv"
 
 
 def _format_value(value: object) -> str:
@@ -173,3 +176,25 @@ def export_event_study_reports(
     summary.to_csv(csv_path, index=False)
     write_html_report(summary, html_path, "Meme Event Study Summary")
     return {"csv": csv_path, "html": html_path}
+
+
+def export_signal_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    report_dir: str | Path = "reports",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    report_path.mkdir(parents=True, exist_ok=True)
+
+    summary_csv_path = report_path / SIGNAL_RESEARCH_SUMMARY_CSV
+    summary_html_path = report_path / SIGNAL_RESEARCH_SUMMARY_HTML
+    records_csv_path = report_path / SIGNAL_RESEARCH_RECORDS_CSV
+
+    summary.to_csv(summary_csv_path, index=False)
+    records.to_csv(records_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 3 Signal Research Summary")
+    return {
+        "summary_csv": summary_csv_path,
+        "summary_html": summary_html_path,
+        "records_csv": records_csv_path,
+    }

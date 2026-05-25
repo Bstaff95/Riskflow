@@ -31,6 +31,7 @@ It can:
 - Score opportunities with transparent rules.
 - Export leaderboard CSV, HTML, and Obsidian markdown reports.
 - Run simple event studies focused on forward relative returns.
+- Run a separate Layer 3 signal-research pass for challenger indicators.
 
 ## Setup
 
@@ -116,6 +117,28 @@ Outputs:
 
 The key metric is forward relative return versus the meme basket over 3, 7, 14, and 30 bars.
 
+## Run Signal Research
+
+```bash
+python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/signal_research_summary.csv`
+- `reports/signal_research_summary.html`
+- `reports/signal_research_records.csv`
+
+This command keeps the Pine-style `final_signal` as `core_signal_v0`, then compares a small set of challenger and baseline signals against forward relative returns. It does not change the default leaderboard or opportunity score.
+
+Useful research guardrails:
+
+```bash
+python3 -m riskflow signal-research --cooldown-bars 30 --entry-lag-bars 1
+```
+
+The cooldown avoids counting overlapping events from the same symbol as independent evidence. The entry lag starts forward-return measurement after the signal bar closes.
+
 ## Run Tests
 
 ```bash
@@ -132,6 +155,7 @@ Durable project context lives in `docs/`:
 - `docs/ARCHITECTURE.md` explains how the current Python package is organized.
 - `docs/ROADMAP.md` explains staged next steps.
 - `docs/WORKFLOW.md` explains the GitHub, Codex, and Obsidian workflow.
+- `docs/LAYER_3_SIGNAL_RESEARCH.md` explains the adversarial signal-research plan.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.
 

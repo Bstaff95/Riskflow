@@ -31,8 +31,9 @@ Next priorities:
 6. Add score component columns to leaderboard.
 7. Add ex-target basket option so each coin can be compared to the basket excluding itself.
 8. Add basket viability diagnostics, benchmark confidence, and benchmark audit notes.
-9. Improve event-study reporting and add Obsidian event-study markdown.
-10. Validate whether compression plus improving relative strength predicts forward relative outperformance.
+9. Add the Layer 3 challenger-signal research path without changing production leaderboard behavior.
+10. Improve event-study reporting and add Obsidian event-study markdown.
+11. Validate whether compression plus improving relative strength predicts forward relative outperformance.
 
 ## Stage 2: Crypto Sector Engine
 

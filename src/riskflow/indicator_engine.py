@@ -5,6 +5,7 @@ import pandas as pd
 
 from .config import IndicatorSettings, WeightSettings
 from .features import clamp_series, normalize_to_first_valid, rolling_zscore, safe_log
+from .signal_registry import CORE_SIGNAL_V0, CORE_SIGNAL_V0_FORMULA_VERSION
 
 
 INDICATOR_COLUMNS = [
@@ -84,7 +85,11 @@ def _weighted_fusion(components: pd.DataFrame, weights: dict[str, float]) -> pd.
     return signal
 
 
-def calculate_indicator(
+ENGINE_SIGNAL_ID = CORE_SIGNAL_V0
+ENGINE_FORMULA_VERSION = CORE_SIGNAL_V0_FORMULA_VERSION
+
+
+def calculate_core_signal_v0(
     target_close: pd.Series,
     benchmark_close: pd.Series,
     risk_series: pd.Series | None = None,
@@ -168,3 +173,25 @@ def calculate_indicator(
     frame["gradient_driver"] = blend * gradient_smoothed + (1.0 - blend) * gradient_raw
 
     return frame[INDICATOR_COLUMNS]
+
+
+def calculate_indicator(
+    target_close: pd.Series,
+    benchmark_close: pd.Series,
+    risk_series: pd.Series | None = None,
+    settings: IndicatorSettings | None = None,
+    weights: WeightSettings | None = None,
+) -> pd.DataFrame:
+    """Return the active production indicator.
+
+    The active production indicator currently delegates to frozen core v0.
+    Future formula changes should add a new versioned function and run it
+    side-by-side before promoting it here.
+    """
+    return calculate_core_signal_v0(
+        target_close,
+        benchmark_close,
+        risk_series=risk_series,
+        settings=settings,
+        weights=weights,
+    )

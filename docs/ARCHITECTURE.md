@@ -48,6 +48,9 @@ scoring.py calculates opportunity score
 mtf.py optionally appends completed multi-timeframe context
         |
         v
+flow_graph.py optionally builds graph nodes/edges/chains
+        |
+        v
 reports.py exports CSV/HTML/Obsidian markdown
 ```
 
@@ -137,6 +140,12 @@ Layer 8 is documented in `docs/LAYER_8_MULTI_TIMEFRAME_CONTEXT.md`.
 
 Layer 8 adds optional `mtf_context_v0` sidecar fields. It uses completed-candle `available_at` timestamps and as-of joins so higher-timeframe context is never visible before the bar closes. MTF context is research and interpretation support only; it does not change default scan schemas, scores, states, or leaderboard ranking unless explicitly requested and later promoted with Layer 7 evidence.
 
+## Capital-Flow Graph Direction
+
+Layer 9 is documented in `docs/LAYER_9_CAPITAL_FLOW_GRAPH.md`.
+
+Layer 9 adds optional `capital_flow_graph_v0` table outputs for nodes, edges, and chains. It treats capital flow as inferred relative leadership context, not literal fund-flow proof. Current subgroup and sector graph nodes are structural placeholders until Layer 2 adds independent subgroup/sector baskets and benchmark confidence.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -157,6 +166,8 @@ Layer 8 adds optional `mtf_context_v0` sidecar fields. It uses completed-candle 
 - `event_study.py`: event detection and forward absolute/relative return summaries.
 - `mtf.py`: Layer 8 completed-candle multi-timeframe context joins and deterministic context labels.
 - `mtf_research.py`: Layer 8 aligned versus non-aligned MTF evidence reports.
+- `flow_graph.py`: Layer 9 table-based capital-flow graph nodes, edges, and chain context.
+- `flow_research.py`: Layer 9 supportive-chain versus non-supportive-chain evidence reports.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
@@ -174,6 +185,8 @@ python3 -m riskflow setup-research --config configs/meme_universe.yaml --timefra
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow mtf-research --config configs/meme_universe.yaml --primary-timeframe 1d --context-timeframes 1w 3d 12h 4h
+python3 -m riskflow flow-graph --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow flow-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

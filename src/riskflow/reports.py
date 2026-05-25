@@ -36,6 +36,13 @@ MTF_RESEARCH_RECORDS_CSV = "mtf_research_records.csv"
 MTF_RESEARCH_SUMMARY_CSV = "mtf_research_summary.csv"
 MTF_RESEARCH_SUMMARY_HTML = "mtf_research_summary.html"
 OBSIDIAN_MTF_RESEARCH_MD = "latest_mtf_research.md"
+FLOW_GRAPH_NODES_CSV = "flow_graph_nodes.csv"
+FLOW_GRAPH_EDGES_CSV = "flow_graph_edges.csv"
+FLOW_GRAPH_CHAINS_CSV = "flow_graph_chains.csv"
+FLOW_RESEARCH_RECORDS_CSV = "flow_research_records.csv"
+FLOW_RESEARCH_SUMMARY_CSV = "flow_research_summary.csv"
+FLOW_RESEARCH_SUMMARY_HTML = "flow_research_summary.html"
+OBSIDIAN_FLOW_GRAPH_MD = "latest_flow_graph.md"
 
 
 def _format_value(value: object) -> str:
@@ -727,6 +734,202 @@ def export_mtf_research_reports(
     write_html_report(summary, summary_html_path, "Layer 8 Multi-Timeframe Research Summary", warnings=warnings)
     obsidian_path.write_text(
         build_obsidian_mtf_research_report(summary, records, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "records_csv": records_csv_path,
+        "summary_csv": summary_csv_path,
+        "summary_html": summary_html_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_flow_graph_report(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    chains: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    node_columns = ["node_id", "node_type", "symbol", "name", "sector", "subgroup", "state", "notes"]
+    edge_columns = ["edge_id", "edge_type", "source_node_id", "target_node_id", "edge_state", "edge_confidence", "evidence_notes"]
+    chain_columns = [
+        "asset_symbol",
+        "chain_label",
+        "chain_support_score",
+        "chain_path",
+        "chain_alignment_tags",
+        "chain_conflict_tags",
+        "chain_confidence",
+        "chain_notes",
+    ]
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    verdict = "Graph v0 is a structural/evidence sidecar. It infers relative leadership context, not literal capital flows."
+    if not chains.empty:
+        complete_chains = chains[chains["chain_label"] != "Incomplete Chain"]
+        verdict = f"{len(complete_chains)} of {len(chains)} chains have measurable benchmark-parent context. Subgroup/sector parent support remains provisional."
+
+    return f"""# Latest Flow Graph
+
+Generated: {generated}
+Universe: {universe.name}
+Graph Model: capital_flow_graph_v0
+
+## Verdict
+{verdict}
+
+## Chain Context
+{dataframe_to_markdown(chains.sort_values("chain_support_score", ascending=False), columns=chain_columns, max_rows=30)}
+
+## Nodes
+{dataframe_to_markdown(nodes, columns=node_columns, max_rows=40)}
+
+## Edges
+{dataframe_to_markdown(edges, columns=edge_columns, max_rows=60)}
+
+## Warnings
+{warning_section}
+
+## Notes
+- This graph is table-based and local; no graph database is used.
+- Current subgroup and sector nodes are structural placeholders until Layer 2 adds independent subgroup/sector baskets.
+- Do not read graph labels as probabilities or literal fund-flow proof.
+
+## Concept Links
+- [[Capital Flow Graph]]
+- [[Relative Accumulation]]
+- [[Compression Before Repricing]]
+- [[Riskflow]]
+"""
+
+
+def export_flow_graph_reports(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    chains: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    nodes_csv_path = report_path / FLOW_GRAPH_NODES_CSV
+    edges_csv_path = report_path / FLOW_GRAPH_EDGES_CSV
+    chains_csv_path = report_path / FLOW_GRAPH_CHAINS_CSV
+    obsidian_path = obsidian_report_path / OBSIDIAN_FLOW_GRAPH_MD
+
+    nodes.to_csv(nodes_csv_path, index=False)
+    edges.to_csv(edges_csv_path, index=False)
+    chains.to_csv(chains_csv_path, index=False)
+    obsidian_path.write_text(
+        build_obsidian_flow_graph_report(nodes, edges, chains, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "nodes_csv": nodes_csv_path,
+        "edges_csv": edges_csv_path,
+        "chains_csv": chains_csv_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_flow_research_report(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    columns = [
+        "flow_event",
+        "classification",
+        "supportive_sample_size",
+        "non_supportive_sample_size",
+        "supportive_minus_non_supportive_spread_14",
+        "supportive_minus_non_supportive_spread_30",
+        "supportive_hit_rate_forward_relative_return_14",
+        "non_supportive_hit_rate_forward_relative_return_14",
+        "supportive_median_max_drawdown_30",
+        "non_supportive_median_max_drawdown_30",
+        "notes",
+    ]
+    useful = summary[summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "supportive_minus_non_supportive_spread_30"],
+        ascending=[True, False],
+    )
+    fragile = summary[summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    verdict = "No flow-chain event has enough useful/watchlist evidence yet."
+    if not useful.empty:
+        verdict = f"{len(useful)} flow-chain comparisons reached useful/watchlist evidence gates. Treat as research evidence, not ranking logic."
+
+    return f"""# Latest Flow Research
+
+Generated: {generated}
+Universe: {universe.name}
+Graph Model: capital_flow_graph_v0
+Records: {len(records)}
+
+## Verdict
+{verdict}
+
+## Useful / Watchlist Flow Comparisons
+{dataframe_to_markdown(useful, columns=columns, max_rows=20)}
+
+## Fragile / Inconclusive Flow Comparisons
+{dataframe_to_markdown(fragile, columns=columns, max_rows=20)}
+
+## Promotion Eligibility
+Flow-chain context cannot affect production ranking until supportive chains beat matched non-supportive baselines under Layer 7 evidence rules.
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Capital Flow Graph]]
+- [[Event Studies]]
+- [[Opportunity Score]]
+- [[Riskflow]]
+"""
+
+
+def export_flow_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    records_csv_path = report_path / FLOW_RESEARCH_RECORDS_CSV
+    summary_csv_path = report_path / FLOW_RESEARCH_SUMMARY_CSV
+    summary_html_path = report_path / FLOW_RESEARCH_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_FLOW_GRAPH_MD
+
+    records.to_csv(records_csv_path, index=False)
+    summary.to_csv(summary_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 9 Flow Research Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_flow_research_report(summary, records, universe, warnings),
         encoding="utf-8",
     )
     return {

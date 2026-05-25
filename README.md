@@ -35,6 +35,7 @@ It can:
 - Run Layer 4 setup research, Layer 5 state research, and Layer 6 score research without changing default leaderboard behavior.
 - Use a Layer 7 evidence engine to harden event studies with entry lag, cooldowns, concentration diagnostics, and Obsidian reports.
 - Add optional Layer 8 multi-timeframe context sidecars without changing default ranking or scan schema.
+- Export Layer 9 capital-flow graph tables and graph evidence without changing default ranking.
 
 ## Setup
 
@@ -201,6 +202,36 @@ Outputs:
 
 MTF research compares primary-timeframe events with and without completed higher/lower timeframe support. It is evidence for future context badges, not permission to change the default leaderboard ranking.
 
+## Run Flow Graph
+
+```bash
+python3 -m riskflow flow-graph --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/flow_graph_nodes.csv`
+- `reports/flow_graph_edges.csv`
+- `reports/flow_graph_chains.csv`
+- `obsidian/reports/latest_flow_graph.md`
+
+The flow graph is a table-based sidecar. It maps assets, subgroups, sectors, and the current benchmark basket, then labels whether each asset has partial, conflicted, or incomplete chain support. It infers relative leadership context from price-derived data; it is not literal fund-flow proof.
+
+## Run Flow Research
+
+```bash
+python3 -m riskflow flow-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/flow_research_records.csv`
+- `reports/flow_research_summary.csv`
+- `reports/flow_research_summary.html`
+- `obsidian/reports/latest_flow_graph.md`
+
+Flow research tests whether primary asset events work better when chain context is supportive. It does not change default scan ranking.
+
 ## Run Signal Research
 
 ```bash
@@ -245,6 +276,7 @@ Durable project context lives in `docs/`:
 - `docs/LAYER_6_OPPORTUNITY_SCORING.md` explains score validation and promotion gates.
 - `docs/LAYER_7_EVIDENCE_ENGINE.md` explains shared evidence methodology and promotion gates.
 - `docs/LAYER_8_MULTI_TIMEFRAME_CONTEXT.md` explains optional MTF context, completed-candle joins, and MTF research.
+- `docs/LAYER_9_CAPITAL_FLOW_GRAPH.md` explains capital-flow graph tables, chain context, and graph evidence.
 - `docs/LAYER_7_EVIDENCE_ENGINE.md` explains event-study hardening and evidence promotion gates.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.

@@ -10,9 +10,13 @@ from .compression import calculate_compression_features
 from .config import UniverseConfig, load_universe_config
 from .data_loader import load_universe_ohlcv
 from .event_study import run_event_study
+from .flow_graph import build_flow_graph_tables
+from .flow_research import run_flow_research
 from .indicator_engine import calculate_indicator
 from .reports import (
     export_event_study_reports,
+    export_flow_graph_reports,
+    export_flow_research_reports,
     export_mtf_research_reports,
     export_scan_reports,
     export_score_research_reports,
@@ -340,6 +344,76 @@ def mtf_research_command(args: argparse.Namespace) -> int:
     print(f"Wrote MTF research summary CSV: {paths['summary_csv']}")
     print(f"Wrote MTF research HTML: {paths['summary_html']}")
     print(f"Wrote Obsidian MTF research report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def flow_graph_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Flow graph failed: {exc}")
+        return 1
+
+    nodes, edges, chains = build_flow_graph_tables(
+        universe,
+        analysis_frames,
+        timeframe=args.timeframe,
+    )
+    paths = export_flow_graph_reports(
+        nodes,
+        edges,
+        chains,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote flow graph nodes CSV: {paths['nodes_csv']}")
+    print(f"Wrote flow graph edges CSV: {paths['edges_csv']}")
+    print(f"Wrote flow graph chains CSV: {paths['chains_csv']}")
+    print(f"Wrote Obsidian flow graph report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def flow_research_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Flow research failed: {exc}")
+        return 1
+
+    summary, records = run_flow_research(
+        universe,
+        analysis_frames,
+        timeframe=args.timeframe,
+        min_sample_size=args.min_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+        cooldown_bars=args.cooldown_bars,
+    )
+    paths = export_flow_research_reports(
+        summary,
+        records,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote flow research records CSV: {paths['records_csv']}")
+    print(f"Wrote flow research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote flow research HTML: {paths['summary_html']}")
+    print(f"Wrote Obsidian flow research report: {paths['obsidian']}")
     if warnings:
         print(f"Warnings: {len(warnings)}")
     return 0
@@ -723,6 +797,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum bars before the same symbol/MTF event can fire again.",
     )
     mtf_research.set_defaults(func=mtf_research_command)
+
+    flow_graph = subparsers.add_parser("flow-graph", help="Export Layer 9 capital-flow graph tables.")
+    add_common_arguments(flow_graph)
+    flow_graph.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    flow_graph.set_defaults(func=flow_graph_command)
+
+    flow_research = subparsers.add_parser("flow-research", help="Run Layer 9 capital-flow graph evidence reports.")
+    add_common_arguments(flow_research)
+    flow_research.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    flow_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=20,
+        help="Minimum supportive and non-supportive sample size before classification can move beyond inconclusive.",
+    )
+    flow_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the primary event before forward-return measurement starts.",
+    )
+    flow_research.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol/flow event can fire again.",
+    )
+    flow_research.set_defaults(func=flow_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

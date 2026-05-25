@@ -43,6 +43,8 @@ Next priorities:
 18. Use event-study records and Obsidian reports to decide which L3/L4/L5/L6 candidates deserve promotion notes.
 19. Use Layer 8 MTF context as an optional sidecar only, with completed-candle joins and no default ranking changes.
 20. Run `mtf-research` to test whether 3D/1W support and 12H/4H reset context improve primary daily outcomes.
+21. Use Layer 9 flow-graph tables to represent asset -> subgroup -> sector -> basket relationships without claiming literal fund flows.
+22. Run `flow-research` to test whether supportive chain context improves primary asset events before any graph-based ranking promotion.
 
 ## Stage 2: Crypto Sector Engine
 

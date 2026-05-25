@@ -286,6 +286,16 @@ Edges may include:
 
 This is the eventual map of where capital appears to be moving through the hierarchy.
 
+Current version:
+
+- `capital_flow_graph_v0` exports nodes, edges, and chains as tables.
+- Current graph nodes include universe, sector, subgroup, basket, and assets.
+- Current graph evidence focuses on asset versus benchmark and chain context.
+- Subgroup and sector parents are structural placeholders until independent baskets exist.
+- `flow-research` tests whether supportive chain context improves forward relative returns.
+
+Layer 9 should stay honest: it infers relative leadership/rotation pressure from available data. It should not claim literal capital flows, probabilities, or causal chains without stronger evidence.
+
 ### Layer 10: Probabilistic Transitions
 
 Estimate state-transition probabilities only after states have been validated.

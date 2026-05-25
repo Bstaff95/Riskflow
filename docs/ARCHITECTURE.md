@@ -106,6 +106,14 @@ Layer 4 separates leader quality from setup quality. The current implementation 
 
 Setup definitions live in `setup_registry.py`. This prevents silent changes to compression, state, setup-quality, and opportunity-score semantics.
 
+## Lifecycle State Direction
+
+Layer 5 is documented in `docs/LAYER_5_LIFECYCLE_STATES.md`.
+
+The active deterministic state model is `state_model_v0`. The state layer keeps the backward-compatible `state` column while adding state model id, confidence, reason, and tags. Future state logic should be added as side-by-side candidate models rather than silent edits to the production state vocabulary.
+
+State research evaluates whether state labels preserve useful future information. The `state-research` command exports state-level forward relative returns, duration diagnostics, concentration checks, and transition matrices without changing production scan behavior.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -115,7 +123,9 @@ Setup definitions live in `setup_registry.py`. This prevents silent changes to c
 - `features.py`: shared numerical helpers such as rolling z-score, logs, percentiles.
 - `indicator_engine.py`: Pine-style normalized component engine, viscosity, gradient driver.
 - `compression.py`: ATR%, range%, realized vol, Bollinger-style width, compression score.
-- `states.py`: deterministic lifecycle state classification.
+- `state_registry.py`: explicit lifecycle state model identity, vocabulary, tags, and output contract.
+- `states.py`: deterministic lifecycle state classification plus reasons, confidence, and state tags.
+- `state_research.py`: Layer 5 state outcome research, duration diagnostics, and transition matrices.
 - `scoring.py`: explainable opportunity score.
 - `event_study.py`: event detection and forward absolute/relative return summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
@@ -132,6 +142,7 @@ python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

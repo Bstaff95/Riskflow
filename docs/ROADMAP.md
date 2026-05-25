@@ -35,6 +35,8 @@ Next priorities:
 10. Improve event-study reporting and add Obsidian event-study markdown.
 11. Validate whether compression plus improving relative strength predicts forward relative outperformance.
 12. Review Layer 4 setup-quality components and decide when Trader Mode should get a separate ranking.
+13. Validate `state_model_v0` with state-level event studies before adding transition probabilities.
+14. Use `state-research` to decide whether `state_model_v1_candidate` should be built as an evidence-weighted challenger.
 
 ## Stage 2: Crypto Sector Engine
 

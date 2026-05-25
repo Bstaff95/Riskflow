@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .state_registry import STATE_MODEL_V0
 
 COMPRESSION_SCORE_V0 = "compression_score_v0"
-STATE_MODEL_V0 = "state_model_v0"
 SETUP_QUALITY_V0 = "setup_quality_v0"
 OPPORTUNITY_SCORE_V0 = "opportunity_score_v0"
 TRADER_SCORE_V0 = "trader_score_v0"

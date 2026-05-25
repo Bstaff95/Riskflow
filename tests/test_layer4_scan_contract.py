@@ -49,5 +49,12 @@ def test_leaderboard_includes_layer4_columns_and_existing_columns():
         "setup_tags",
         "opportunity_score_v0",
     }
+    layer5_columns = {
+        "state_model",
+        "state_confidence",
+        "state_reason",
+        "state_tags",
+    }
     assert existing_columns.issubset(leaderboard.columns)
     assert layer4_columns.issubset(leaderboard.columns)
+    assert layer5_columns.issubset(leaderboard.columns)

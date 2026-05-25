@@ -102,7 +102,7 @@ Outputs:
 - `reports/latest_meme_leaderboard.html`
 - `obsidian/reports/latest_meme_scan.md`
 
-Leaderboard fields include signal, relative component, viscosity, compression score, setup-quality components, lifecycle state, opportunity score, setup tags, and notes about missing data.
+Leaderboard fields include signal, relative component, viscosity, compression score, setup-quality components, lifecycle state, state model/reason/tags, opportunity score, setup tags, and notes about missing data.
 
 ## Run Event Study
 
@@ -128,6 +128,22 @@ Outputs:
 - `reports/setup_research_summary.csv`
 - `reports/setup_research_summary.html`
 - `reports/setup_research_records.csv`
+
+## Run State Research
+
+```bash
+python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/state_research_summary.csv`
+- `reports/state_research_summary.html`
+- `reports/state_research_records.csv`
+- `reports/state_transition_matrix.csv`
+- `obsidian/reports/latest_state_research.md`
+
+State research evaluates whether lifecycle labels have historically separated future relative returns, drawdowns, duration, and next-state transitions. It does not replace the active `state_model_v0` labels.
 
 This command tests Layer 4 setup events, such as compression plus relative strength rising, setup readiness, extension risk, and `trader_score_v0` threshold events. It does not change the default leaderboard ranking.
 

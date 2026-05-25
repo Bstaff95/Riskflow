@@ -16,12 +16,14 @@ from .reports import (
     export_scan_reports,
     export_setup_research_reports,
     export_signal_research_reports,
+    export_state_research_reports,
 )
 from .resample import research_mtf_derivations, resample_universe
 from .signal_research import run_signal_research
 from .setup_quality import calculate_setup_quality
 from .setup_research import run_setup_research
-from .states import classify_states
+from .state_research import run_state_research
+from .states import classify_state_frame
 
 
 LEADERBOARD_COLUMNS = [
@@ -49,6 +51,10 @@ LEADERBOARD_COLUMNS = [
     "trader_score_v0",
     "trader_rank",
     "state",
+    "state_model",
+    "state_confidence",
+    "state_reason",
+    "state_tags",
     "setup_state_v0",
     "setup_tags",
     "opportunity_score",
@@ -87,7 +93,8 @@ def build_analysis_frames(
         )
         compression = calculate_compression_features(raw, settings=universe.compression_settings)
         analysis = indicator.join(compression, how="left")
-        analysis["state"] = classify_states(analysis)
+        state_details = classify_state_frame(analysis)
+        analysis = analysis.join(state_details, how="left")
         setup_quality = calculate_setup_quality(analysis)
         analysis = analysis.join(setup_quality, how="left")
         analysis["opportunity_score"] = analysis["opportunity_score_v0"]
@@ -157,6 +164,10 @@ def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.Da
                 "data_quality_score": latest.get("data_quality_score"),
                 "trader_score_v0": latest.get("trader_score_v0"),
                 "state": latest.get("state"),
+                "state_model": latest.get("state_model"),
+                "state_confidence": latest.get("state_confidence"),
+                "state_reason": latest.get("state_reason"),
+                "state_tags": latest.get("state_tags"),
                 "setup_state_v0": latest.get("setup_state_v0"),
                 "setup_tags": latest.get("setup_tags"),
                 "opportunity_score": latest.get("opportunity_score"),
@@ -298,6 +309,43 @@ def setup_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def state_research_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"State research failed: {exc}")
+        return 1
+
+    summary, records, transition_matrix = run_state_research(
+        analysis_frames,
+        timeframe=args.timeframe,
+        benchmark_name=universe.benchmark.name,
+        min_sample_size=args.min_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+    )
+    paths = export_state_research_reports(
+        summary,
+        records,
+        transition_matrix,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote state research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote state research summary HTML: {paths['summary_html']}")
+    print(f"Wrote state research records CSV: {paths['records_csv']}")
+    print(f"Wrote state transition matrix CSV: {paths['transition_csv']}")
+    print(f"Wrote Obsidian state research report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -393,6 +441,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bars after the setup event before forward-return measurement starts.",
     )
     setup_research.set_defaults(func=setup_research_command)
+
+    state_research = subparsers.add_parser("state-research", help="Run Layer 5 lifecycle-state research.")
+    add_common_arguments(state_research)
+    state_research.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    state_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=5,
+        help="Minimum state observation count before a state result can be classified beyond inconclusive.",
+    )
+    state_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the state observation before forward-return measurement starts.",
+    )
+    state_research.set_defaults(func=state_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

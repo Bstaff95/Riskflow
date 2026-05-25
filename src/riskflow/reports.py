@@ -19,6 +19,11 @@ SIGNAL_RESEARCH_RECORDS_CSV = "signal_research_records.csv"
 SETUP_RESEARCH_SUMMARY_CSV = "setup_research_summary.csv"
 SETUP_RESEARCH_SUMMARY_HTML = "setup_research_summary.html"
 SETUP_RESEARCH_RECORDS_CSV = "setup_research_records.csv"
+STATE_RESEARCH_SUMMARY_CSV = "state_research_summary.csv"
+STATE_RESEARCH_SUMMARY_HTML = "state_research_summary.html"
+STATE_RESEARCH_RECORDS_CSV = "state_research_records.csv"
+STATE_TRANSITION_MATRIX_CSV = "state_transition_matrix.csv"
+OBSIDIAN_STATE_RESEARCH_MD = "latest_state_research.md"
 
 
 def _format_value(value: object) -> str:
@@ -90,6 +95,8 @@ def build_obsidian_scan_report(
         "symbol",
         "name",
         "state",
+        "state_confidence",
+        "state_reason",
         "setup_state_v0",
         "opportunity_score",
         "leader_quality_score",
@@ -103,6 +110,7 @@ def build_obsidian_scan_report(
         "final_signal",
         "relative_component",
         "compression_score",
+        "state_tags",
         "setup_tags",
     ]
     top_opportunities = leaderboard.sort_values("opportunity_score", ascending=False)
@@ -240,4 +248,118 @@ def export_setup_research_reports(
         "summary_csv": summary_csv_path,
         "summary_html": summary_html_path,
         "records_csv": records_csv_path,
+    }
+
+
+def build_obsidian_state_research_report(
+    summary: pd.DataFrame,
+    transition_matrix: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    summary_columns = [
+        "state",
+        "sample_size",
+        "classification",
+        "median_forward_relative_return_14",
+        "median_forward_relative_return_30",
+        "hit_rate_forward_relative_return_14",
+        "median_max_drawdown_30",
+        "avg_state_duration",
+        "most_common_next_state",
+        "transition_to_emerging_leader_rate",
+        "transition_to_breakdown_rate",
+        "notes",
+    ]
+    transition_columns = [
+        "from_state",
+        "to_state",
+        "transition_count",
+        "transition_probability",
+        "median_duration_before_transition",
+    ]
+    useful = summary[summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "median_forward_relative_return_30"],
+        ascending=[True, False],
+    )
+    fragile = summary[summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    active_transitions = transition_matrix[transition_matrix["transition_count"] > 0].sort_values(
+        ["transition_count", "transition_probability"],
+        ascending=[False, False],
+    )
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    return f"""# Latest State Research
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+State Model: state_model_v0
+
+## State Evidence Summary
+{dataframe_to_markdown(summary, columns=summary_columns, max_rows=20)}
+
+## Useful / Watchlist States
+{dataframe_to_markdown(useful, columns=summary_columns, max_rows=20)}
+
+## Fragile / Inconclusive States
+{dataframe_to_markdown(fragile, columns=summary_columns, max_rows=20)}
+
+## Most Common Transitions
+{dataframe_to_markdown(active_transitions, columns=transition_columns, max_rows=20)}
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Relative Accumulation]]
+- [[Emerging Leader]]
+- [[Confirmed Leader]]
+- [[Compression Before Repricing]]
+- [[Capital Flow Graph]]
+- [[Riskflow]]
+"""
+
+
+def export_state_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    transition_matrix: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    summary_csv_path = report_path / STATE_RESEARCH_SUMMARY_CSV
+    summary_html_path = report_path / STATE_RESEARCH_SUMMARY_HTML
+    records_csv_path = report_path / STATE_RESEARCH_RECORDS_CSV
+    transition_csv_path = report_path / STATE_TRANSITION_MATRIX_CSV
+    obsidian_path = obsidian_report_path / OBSIDIAN_STATE_RESEARCH_MD
+
+    summary.to_csv(summary_csv_path, index=False)
+    records.to_csv(records_csv_path, index=False)
+    transition_matrix.to_csv(transition_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 5 State Research Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_state_research_report(summary, transition_matrix, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "summary_csv": summary_csv_path,
+        "summary_html": summary_html_path,
+        "records_csv": records_csv_path,
+        "transition_csv": transition_csv_path,
+        "obsidian": obsidian_path,
     }

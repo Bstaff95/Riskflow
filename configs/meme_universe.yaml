@@ -2,6 +2,8 @@ name: meme_universe_v1
 benchmark:
   type: equal_weight_basket
   name: MEME_BASKET
+  role: opportunity_cost
+  exclude_self: true
 min_active_members: 3
 default_weights:
   price_weight: 1.20
@@ -103,4 +105,3 @@ assets:
     name: Troll
     sector: memes
     subgroup: eth_memes
-

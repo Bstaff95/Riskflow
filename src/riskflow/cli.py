@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .baskets import build_equal_weight_return_index
+from .baskets import build_equal_weight_return_index_frame
 from .compression import calculate_compression_features
 from .config import UniverseConfig, load_universe_config
 from .data_loader import load_universe_ohlcv
@@ -46,6 +46,21 @@ LEADERBOARD_COLUMNS = [
     "final_signal",
     "price_component",
     "relative_component",
+    "benchmark_used",
+    "benchmark_name",
+    "benchmark_role",
+    "benchmark_method",
+    "benchmark_exclude_self",
+    "benchmark_target_excluded",
+    "benchmark_fallback_used",
+    "benchmark_fallback_reason",
+    "benchmark_active_members",
+    "benchmark_missing_members",
+    "benchmark_member_count",
+    "benchmark_min_active_members",
+    "benchmark_passed",
+    "benchmark_confidence",
+    "benchmark_notes",
     "viscosity",
     "above_viscosity",
     "gradient_driver",
@@ -74,17 +89,103 @@ LEADERBOARD_COLUMNS = [
 ]
 
 
+def _benchmark_confidence(
+    diagnostics: pd.DataFrame,
+    *,
+    target_excluded: bool,
+    fallback_used: bool,
+) -> pd.Series:
+    active = pd.to_numeric(diagnostics["benchmark_active_members"], errors="coerce")
+    required = pd.to_numeric(diagnostics["benchmark_min_active_members"], errors="coerce")
+    passed = diagnostics["benchmark_passed"].eq(True)
+    confidence = pd.Series("unavailable", index=diagnostics.index, dtype=object)
+    confidence.loc[passed & (active >= required + 2) & target_excluded & ~fallback_used] = "high"
+    confidence.loc[passed & (confidence == "unavailable")] = "medium"
+    confidence.loc[~passed & diagnostics["basket_index"].notna()] = "low"
+    return confidence
+
+
+def _benchmark_notes(
+    diagnostics: pd.DataFrame,
+    *,
+    benchmark_name: str,
+    target_symbol: str,
+    target_excluded: bool,
+    fallback_used: bool,
+) -> pd.Series:
+    active = pd.to_numeric(diagnostics["benchmark_active_members"], errors="coerce")
+    required = pd.to_numeric(diagnostics["benchmark_min_active_members"], errors="coerce")
+    notes: list[str] = []
+    for date, passed in diagnostics["benchmark_passed"].items():
+        row_notes: list[str] = [f"compared against {benchmark_name}"]
+        row_notes.append(f"target {'excluded' if target_excluded else 'included'}")
+        if fallback_used:
+            row_notes.append(f"fallback to full basket; ex-target {target_symbol} had too few active members")
+        if not bool(passed):
+            active_value = active.loc[date]
+            required_value = required.loc[date]
+            active_text = "unknown" if pd.isna(active_value) else str(int(active_value))
+            required_text = "unknown" if pd.isna(required_value) else str(int(required_value))
+            row_notes.append(f"benchmark below active-member requirement {active_text}/{required_text}")
+        notes.append("; ".join(row_notes))
+    return pd.Series(notes, index=diagnostics.index, dtype=object)
+
+
+def _attach_benchmark_diagnostics(
+    frame: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    *,
+    benchmark_name: str,
+    benchmark_base_name: str,
+    benchmark_role: str,
+    benchmark_exclude_self: bool,
+    target_symbol: str,
+    target_excluded: bool,
+    fallback_used: bool,
+    fallback_reason: str = "",
+) -> pd.DataFrame:
+    aligned = diagnostics.reindex(frame.index)
+    frame["benchmark_used"] = benchmark_name
+    frame["benchmark_name"] = benchmark_name
+    frame["benchmark_base_name"] = benchmark_base_name
+    frame["benchmark_role"] = benchmark_role
+    frame["benchmark_method"] = "equal_weight_return_index"
+    frame["benchmark_exclude_self"] = bool(benchmark_exclude_self)
+    frame["benchmark_target_excluded"] = bool(target_excluded)
+    frame["benchmark_fallback_used"] = bool(fallback_used)
+    frame["benchmark_fallback_reason"] = fallback_reason
+    frame["benchmark_active_members"] = aligned["benchmark_active_members"]
+    frame["benchmark_missing_members"] = aligned["benchmark_missing_members"]
+    frame["benchmark_member_count"] = aligned["benchmark_member_count"]
+    frame["benchmark_min_active_members"] = aligned["benchmark_min_active_members"]
+    frame["benchmark_passed"] = aligned["benchmark_passed"]
+    frame["benchmark_confidence"] = _benchmark_confidence(
+        aligned,
+        target_excluded=target_excluded,
+        fallback_used=fallback_used,
+    )
+    frame["benchmark_notes"] = _benchmark_notes(
+        aligned,
+        benchmark_name=benchmark_name,
+        target_symbol=target_symbol,
+        target_excluded=target_excluded,
+        fallback_used=fallback_used,
+    )
+    return frame
+
+
 def build_analysis_frames(
     universe: UniverseConfig,
     raw_frames: dict[str, pd.DataFrame],
 ) -> tuple[dict[str, pd.DataFrame], pd.Series, list[str]]:
     warnings: list[str] = []
     closes = {symbol: frame["close"] for symbol, frame in raw_frames.items()}
-    basket = build_equal_weight_return_index(
+    basket_frame = build_equal_weight_return_index_frame(
         closes,
         min_active_members=universe.min_active_members,
         name=universe.benchmark.name,
     )
+    basket = basket_frame["basket_index"].rename(universe.benchmark.name)
     if basket.dropna().empty:
         warnings.append(
             f"Benchmark {universe.benchmark.name} has no valid values. "
@@ -96,11 +197,53 @@ def build_analysis_frames(
         raw = raw_frames.get(asset.symbol)
         if raw is None:
             continue
+        ex_target_closes = {symbol: close for symbol, close in closes.items() if symbol != asset.symbol}
+        use_ex_target = universe.benchmark.exclude_self and len(ex_target_closes) >= universe.min_active_members
+        fallback_used = False
+        fallback_reason = ""
+        benchmark_name = universe.benchmark.name
+        benchmark_frame = basket_frame
+        if universe.benchmark.exclude_self and use_ex_target:
+            ex_name = f"{universe.benchmark.name}_EX_{asset.symbol}"
+            ex_frame = build_equal_weight_return_index_frame(
+                ex_target_closes,
+                min_active_members=universe.min_active_members,
+                name=ex_name,
+            )
+            if ex_frame["basket_index"].dropna().empty:
+                fallback_used = True
+                fallback_reason = "ex_target_unavailable"
+                warnings.append(
+                    f"{asset.symbol}: ex-target benchmark {ex_name} unavailable; "
+                    f"falling back to {universe.benchmark.name}."
+                )
+            else:
+                benchmark_name = ex_name
+                benchmark_frame = ex_frame
+        elif universe.benchmark.exclude_self:
+            fallback_used = True
+            fallback_reason = "too_few_members_for_ex_target"
+            warnings.append(
+                f"{asset.symbol}: not enough members to build ex-target benchmark; "
+                f"falling back to {universe.benchmark.name}."
+            )
         indicator = calculate_indicator(
             raw["close"],
-            basket,
+            benchmark_frame["basket_index"].rename(benchmark_name),
             settings=universe.indicator_settings,
             weights=universe.weights,
+        )
+        indicator = _attach_benchmark_diagnostics(
+            indicator,
+            benchmark_frame,
+            benchmark_name=benchmark_name,
+            benchmark_base_name=universe.benchmark.name,
+            benchmark_role=universe.benchmark.role,
+            benchmark_exclude_self=universe.benchmark.exclude_self,
+            target_symbol=asset.symbol,
+            target_excluded=not fallback_used and benchmark_name != universe.benchmark.name,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
         )
         compression = calculate_compression_features(raw, settings=universe.compression_settings)
         analysis = indicator.join(compression, how="left")
@@ -118,6 +261,9 @@ def _latest_notes(row: pd.Series) -> str:
     notes: list[str] = []
     if pd.isna(row.get("benchmark")):
         notes.append("benchmark unavailable")
+    benchmark_notes = row.get("benchmark_notes")
+    if pd.notna(benchmark_notes) and str(benchmark_notes):
+        notes.append(str(benchmark_notes))
     if pd.isna(row.get("relative_component")):
         notes.append("relative unavailable")
     if pd.isna(row.get("compression_score")):
@@ -164,6 +310,21 @@ def build_leaderboard(
             "final_signal": latest.get("final_signal"),
             "price_component": latest.get("price_component"),
             "relative_component": latest.get("relative_component"),
+            "benchmark_used": latest.get("benchmark_used"),
+            "benchmark_name": latest.get("benchmark_name"),
+            "benchmark_role": latest.get("benchmark_role"),
+            "benchmark_method": latest.get("benchmark_method"),
+            "benchmark_exclude_self": latest.get("benchmark_exclude_self"),
+            "benchmark_target_excluded": latest.get("benchmark_target_excluded"),
+            "benchmark_fallback_used": latest.get("benchmark_fallback_used"),
+            "benchmark_fallback_reason": latest.get("benchmark_fallback_reason"),
+            "benchmark_active_members": latest.get("benchmark_active_members"),
+            "benchmark_missing_members": latest.get("benchmark_missing_members"),
+            "benchmark_member_count": latest.get("benchmark_member_count"),
+            "benchmark_min_active_members": latest.get("benchmark_min_active_members"),
+            "benchmark_passed": latest.get("benchmark_passed"),
+            "benchmark_confidence": latest.get("benchmark_confidence"),
+            "benchmark_notes": latest.get("benchmark_notes"),
             "viscosity": latest.get("viscosity"),
             "above_viscosity": bool(latest.get("above_viscosity")) if pd.notna(latest.get("above_viscosity")) else False,
             "gradient_driver": latest.get("gradient_driver"),

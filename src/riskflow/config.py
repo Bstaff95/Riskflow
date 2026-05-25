@@ -19,6 +19,8 @@ class AssetConfig:
 class BenchmarkConfig:
     type: str = "equal_weight_basket"
     name: str = "MEME_BASKET"
+    role: str = "opportunity_cost"
+    exclude_self: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,4 +106,3 @@ def load_universe_config(path: str | Path) -> UniverseConfig:
         indicator_settings=indicator_settings,
         compression_settings=compression_settings,
     )
-

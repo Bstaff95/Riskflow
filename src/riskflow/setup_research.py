@@ -6,6 +6,7 @@ import pandas as pd
 from .research_outcomes import (
     HORIZONS,
     apply_event_cooldown as _apply_event_cooldown,
+    benchmark_label_at,
     event_cluster_id,
     forward_max_drawdown as _forward_max_drawdown,
     forward_relative_return as _future_relative_return,
@@ -170,7 +171,7 @@ def setup_event_records_for_asset(
                 "symbol": symbol,
                 "date": event_date,
                 "timeframe": timeframe,
-                "benchmark": benchmark_name,
+                "benchmark": benchmark_label_at(frame, event_date, benchmark_name),
                 "setup_event": event_name,
                 "setup_value": _event_value(frame, event_name, event_date),
                 "entry_lag_bars": entry_lag_bars,

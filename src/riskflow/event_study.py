@@ -7,6 +7,7 @@ from .event_registry import DEFAULT_EVENT_COOLDOWN_BARS, DEFAULT_EVENT_ENTRY_LAG
 from .research_outcomes import (
     HORIZONS,
     apply_event_cooldown,
+    benchmark_label_at,
     entry_date_at,
     event_cluster_id,
     forward_max_drawdown,
@@ -219,7 +220,7 @@ def event_records_for_asset(
                 "symbol": symbol,
                 "date": event_date,
                 "timeframe": timeframe,
-                "benchmark": benchmark_name,
+                "benchmark": benchmark_label_at(working, event_date, benchmark_name),
                 "event": event_name,
                 "event_id": event_name,
                 "event_family": spec.family,

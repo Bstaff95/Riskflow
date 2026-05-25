@@ -7,6 +7,7 @@ import pandas as pd
 
 from .research_outcomes import (
     HORIZONS,
+    benchmark_label_at,
     event_cluster_id,
     forward_max_drawdown as _forward_max_drawdown,
     forward_relative_return as _future_relative_return,
@@ -204,7 +205,7 @@ def score_records_for_asset(
                     "symbol": symbol,
                     "date": date,
                     "timeframe": timeframe,
-                    "benchmark": benchmark_name,
+                    "benchmark": benchmark_label_at(frame, date, benchmark_name),
                     "score_id": score_id,
                     "score_role": spec.role,
                     "score_direction": spec.direction,

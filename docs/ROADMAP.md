@@ -29,8 +29,8 @@ Next priorities:
 4. Review missing/bad data warnings.
 5. Tighten Pine-to-Python parity where it matters.
 6. Add score component columns to leaderboard.
-7. Add ex-target basket option so each coin can be compared to the basket excluding itself.
-8. Add basket viability diagnostics, benchmark confidence, and benchmark audit notes.
+7. Use ex-target basket diagnostics to audit whether each coin is being compared to a clean peer basket.
+8. Extend benchmark hardening later into subgroup baskets, fallback policies, and basket-as-asset analysis.
 9. Add the Layer 3 challenger-signal research path without changing production leaderboard behavior.
 10. Improve event-study reporting and add Obsidian event-study markdown.
 11. Validate whether compression plus improving relative strength predicts forward relative outperformance.

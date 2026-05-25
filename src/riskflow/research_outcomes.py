@@ -88,6 +88,16 @@ def event_cluster_id(date: object) -> str:
     return pd.Timestamp(date).strftime("%Y-%m")
 
 
+def benchmark_label_at(frame: pd.DataFrame, date: object, default: str) -> str:
+    for column in ("benchmark_used", "benchmark_name"):
+        if column not in frame.columns:
+            continue
+        value = frame[column].loc[date]
+        if pd.notna(value) and str(value):
+            return str(value)
+    return default
+
+
 def mean_or_nan(series: pd.Series) -> float:
     valid = pd.to_numeric(series, errors="coerce").dropna()
     return float(valid.mean()) if not valid.empty else np.nan

@@ -13,6 +13,7 @@ from .flow_graph import (
 )
 from .research_outcomes import (
     HORIZONS,
+    benchmark_label_at,
     entry_date_at,
     event_cluster_id,
     forward_max_drawdown,
@@ -201,7 +202,7 @@ def transition_records_for_asset(
             "symbol": symbol,
             "transition_date": transition_date,
             "timeframe": timeframe,
-            "benchmark": benchmark_name,
+            "benchmark": benchmark_label_at(frame, transition_date, benchmark_name),
             "transition_model": TRANSITION_RESEARCH_V0,
             "state_model": row.get("_state_model", STATE_MODEL_V0),
             "from_state": row.get("_state", "Unknown"),

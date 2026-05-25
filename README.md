@@ -109,6 +109,8 @@ Outputs:
 
 Leaderboard fields include signal, relative component, viscosity, compression score, setup-quality components, lifecycle state, state model/reason/tags, opportunity score, setup tags, and notes about missing data.
 
+Layer 2 benchmark diagnostics are included in the leaderboard. For the meme config, Riskflow uses ex-target baskets when viable, such as `MEME_BASKET_EX_BRETT`, so each coin is compared against peers without including itself. If too few peers are active, it falls back to the configured basket and marks the fallback, confidence, active-member count, and audit notes.
+
 Optional multi-timeframe context:
 
 ```bash

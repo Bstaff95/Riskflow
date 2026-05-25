@@ -31,6 +31,12 @@ Example:
 
 This is the highest-priority Layer 2 improvement because it makes peer outperformance cleaner.
 
+Current implementation:
+
+- `benchmark.exclude_self: true` enables per-asset ex-target baskets such as `MEME_BASKET_EX_BRETT`.
+- If an ex-target basket cannot meet `min_active_members`, Riskflow falls back to the configured full basket and marks the fallback in diagnostics.
+- The selected numeric benchmark remains the analysis frame's `benchmark` column, so downstream relative returns use the cleaner comparison automatically.
+
 ### 2. Basket Viability Diagnostics
 
 Every benchmark basket should report basic health.
@@ -43,6 +49,8 @@ Minimum useful diagnostics:
 - target excluded yes/no
 - fallback used yes/no
 - benchmark confidence
+
+Current scan outputs include benchmark identity, role, method, target-excluded flag, fallback flag/reason, active/missing/member counts, minimum-active requirement, confidence, and audit notes.
 
 Future diagnostics:
 

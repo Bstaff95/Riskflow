@@ -50,6 +50,32 @@ def test_event_study_produces_required_columns():
     assert {"entry_lag_bars", "entry_date", "cooldown_bars", "event_cluster_id"}.issubset(records.columns)
 
 
+def test_event_records_use_row_level_benchmark_label():
+    dates = pd.date_range("2024-01-01", periods=40, freq="D")
+    frame = pd.DataFrame(
+        {
+            "target": pd.Series(100.0 * np.cumprod(np.full(40, 1.01)), index=dates),
+            "benchmark": pd.Series(100.0 * np.cumprod(np.full(40, 1.005)), index=dates),
+            "benchmark_used": "MEME_BASKET_EX_AAA",
+            "final_signal": pd.Series(np.linspace(-2.0, 2.0, 40), index=dates),
+            "viscosity": 0.0,
+            "relative_component": pd.Series(np.linspace(-1.0, 1.0, 40), index=dates),
+            "compression_score": 75.0,
+            "compression_duration": range(40),
+            "setup_readiness_score": pd.Series(np.linspace(0.0, 100.0, 40), index=dates),
+            "relative_accumulation_score": pd.Series(np.linspace(0.0, 100.0, 40), index=dates),
+            "extension_risk_score": 0.0,
+            "state": "Weak",
+        },
+        index=dates,
+    )
+
+    _summary, records = run_event_study({"AAA": frame}, cooldown_bars=0, min_sample_size=1)
+
+    assert not records.empty
+    assert set(records["benchmark"]) == {"MEME_BASKET_EX_AAA"}
+
+
 def test_shared_forward_outcomes_handle_entry_lag_and_relative_return():
     dates = pd.date_range("2024-01-01", periods=5, freq="D")
     target = pd.Series([100.0, 110.0, 121.0, 133.1, 146.41], index=dates)

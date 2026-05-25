@@ -88,6 +88,8 @@ The target direction is a configurable benchmark engine with:
 
 The architecture should keep observations separate from interpretations. Raw features such as signal, relative component, compression score, and active member count should stay distinct from derived labels such as state, tags, confidence, and opportunity score.
 
+Current implementation supports `benchmark.exclude_self` for per-asset ex-target baskets. The selected benchmark is stored in each analysis frame's numeric `benchmark` column, while audit columns such as `benchmark_used`, `benchmark_target_excluded`, `benchmark_fallback_used`, active/missing member counts, and `benchmark_confidence` explain the comparison.
+
 ## Signal Research Direction
 
 Layer 3 is documented in `docs/LAYER_3_SIGNAL_RESEARCH.md`.
@@ -219,6 +221,6 @@ Only `.gitkeep` placeholders should be committed in those directories.
 ## Current Gaps To Remember
 
 - The Python engine is conceptually aligned with the Pine script, but not full one-to-one parity yet.
-- The basket output currently focuses on the basket index; richer active-member diagnostics can be added.
+- Subgroup/sector baskets are still structural placeholders; only the main meme basket and per-asset ex-target variants are implemented.
 - Event-study markdown export is not yet as complete as scan markdown reporting.
 - Real market data is not included in the repo.

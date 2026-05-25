@@ -138,6 +138,7 @@ def _chain_context_for_asset(
     parent_return_20 = _parent_return(frame, lookback=20)
     rows: list[dict[str, object]] = []
     for date, row in frame.iterrows():
+        selected_benchmark = str(row.get("benchmark_used", benchmark_name))
         benchmark_value = row.get("benchmark")
         parent_available = pd.notna(benchmark_value) and pd.notna(parent_return_20.loc[date])
         parent_supportive = bool(parent_return_20.loc[date] > 0.0) if parent_available else False
@@ -198,10 +199,10 @@ def _chain_context_for_asset(
         rows.append(
             {
                 "graph_model": CAPITAL_FLOW_GRAPH_V0,
-                "chain_id": f"chain:{benchmark_name.lower()}->{subgroup.lower()}->{symbol.lower()}",
+                "chain_id": f"chain:{selected_benchmark.lower()}->{subgroup.lower()}->{symbol.lower()}",
                 "date": date,
                 "timeframe": timeframe,
-                "chain_path": f"{benchmark_name} -> {subgroup} -> {symbol}",
+                "chain_path": f"{selected_benchmark} -> {subgroup} -> {symbol}",
                 "asset_symbol": symbol,
                 "parent_node": node_id("subgroup", f"{sector}:{subgroup}"),
                 "grandparent_node": node_id("basket", benchmark_name),
@@ -411,6 +412,9 @@ def build_flow_graph_tables(
         edge_signal = _float(latest.get("relative_component")) if latest is not None else np.nan
         edge_slope = _float(latest.get("signal_slope")) if latest is not None else np.nan
         edge_state = _edge_state(edge_signal, edge_slope)
+        selected_benchmark = latest.get("benchmark_used") if latest is not None and pd.notna(latest.get("benchmark_used")) else universe.benchmark.name
+        benchmark_confidence = latest.get("benchmark_confidence") if latest is not None and pd.notna(latest.get("benchmark_confidence")) else "unknown"
+        benchmark_notes = latest.get("benchmark_notes") if latest is not None and pd.notna(latest.get("benchmark_notes")) else ""
         nodes.append(
             {
                 "graph_model": CAPITAL_FLOW_GRAPH_V0,
@@ -469,13 +473,13 @@ def build_flow_graph_tables(
                 "target_node_id": basket_node,
                 "edge_type": "benchmarked_against",
                 "timeframe": timeframe,
-                "benchmark": universe.benchmark.name,
+                "benchmark": selected_benchmark,
                 "relative_component": edge_signal,
                 "edge_signal": edge_signal,
                 "edge_slope": edge_slope,
                 "edge_state": edge_state,
                 "edge_confidence": "provisional",
-                "evidence_notes": "asset relative to current benchmark basket; ex-target basket deferred",
+                "evidence_notes": f"asset relative to selected benchmark; benchmark_confidence={benchmark_confidence}; {benchmark_notes}",
             }
         )
         edges.append(
@@ -486,13 +490,13 @@ def build_flow_graph_tables(
                 "target_node_id": basket_node,
                 "edge_type": "child_vs_parent",
                 "timeframe": timeframe,
-                "benchmark": universe.benchmark.name,
+                "benchmark": selected_benchmark,
                 "relative_component": edge_signal,
                 "edge_signal": edge_signal,
                 "edge_slope": edge_slope,
                 "edge_state": edge_state,
                 "edge_confidence": "provisional",
-                "evidence_notes": "measurable v0 relationship is asset versus benchmark basket",
+                "evidence_notes": f"measurable v0 relationship is asset versus selected benchmark; benchmark_confidence={benchmark_confidence}",
             }
         )
         if frame is not None and not frame.empty:

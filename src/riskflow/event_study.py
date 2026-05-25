@@ -15,6 +15,14 @@ EVENT_NAMES = (
     "state_becomes_confirmed_leader",
     "signal_crosses_below_viscosity",
     "signal_fails_near_zero",
+    "compression_score_above_80",
+    "compression_duration_above_threshold",
+    "compression_plus_relative_rising",
+    "setup_readiness_score_crosses_threshold",
+    "relative_accumulation_score_crosses_threshold",
+    "compressed_viscosity_reclaim",
+    "compressed_zero_reclaim",
+    "extension_risk_score_crosses_high",
 )
 
 
@@ -49,18 +57,30 @@ def _crosses_below(series: pd.Series, threshold: float) -> pd.Series:
     return (series < threshold) & (series.shift(1) >= threshold)
 
 
+def _optional_numeric(frame: pd.DataFrame, column: str, default: float = np.nan) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(default, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
 def detect_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
     final_signal = frame["final_signal"]
     relative = frame["relative_component"]
     viscosity = frame["viscosity"]
     compression = frame["compression_score"]
+    compression_duration = _optional_numeric(frame, "compression_duration", default=0.0)
+    setup_readiness = _optional_numeric(frame, "setup_readiness_score", default=0.0)
+    relative_accumulation = _optional_numeric(frame, "relative_accumulation_score", default=0.0)
+    extension_risk = _optional_numeric(frame, "extension_risk_score", default=0.0)
     state = frame["state"].astype("string")
     above_viscosity = final_signal > viscosity
     previous_above_viscosity = above_viscosity.shift(1, fill_value=False).astype(bool)
+    viscosity_reclaim = (above_viscosity & ~previous_above_viscosity).fillna(False)
+    zero_reclaim = _crosses_above(final_signal, 0.0).fillna(False)
 
     return {
-        "signal_crosses_above_viscosity": (above_viscosity & ~previous_above_viscosity).fillna(False),
-        "signal_crosses_above_zero": _crosses_above(final_signal, 0.0).fillna(False),
+        "signal_crosses_above_viscosity": viscosity_reclaim,
+        "signal_crosses_above_zero": zero_reclaim,
         "relative_component_crosses_above_zero": _crosses_above(relative, 0.0).fillna(False),
         "final_signal_reclaims_minus_1_5": _crosses_above(final_signal, -1.5).fillna(False),
         "compression_80_relative_rising": ((compression >= 80.0) & (relative.diff() > 0.0)).fillna(False),
@@ -72,6 +92,14 @@ def detect_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
             & final_signal.shift(1).between(-0.25, 0.25)
             & (final_signal.diff() < 0.0)
         ).fillna(False),
+        "compression_score_above_80": _crosses_above(compression, 80.0).fillna(False),
+        "compression_duration_above_threshold": _crosses_above(compression_duration, 5.0).fillna(False),
+        "compression_plus_relative_rising": ((compression >= 70.0) & (relative.diff() > 0.0)).fillna(False),
+        "setup_readiness_score_crosses_threshold": _crosses_above(setup_readiness, 70.0).fillna(False),
+        "relative_accumulation_score_crosses_threshold": _crosses_above(relative_accumulation, 65.0).fillna(False),
+        "compressed_viscosity_reclaim": ((compression >= 70.0) & viscosity_reclaim).fillna(False),
+        "compressed_zero_reclaim": ((compression >= 70.0) & zero_reclaim).fillna(False),
+        "extension_risk_score_crosses_high": _crosses_above(extension_risk, 70.0).fillna(False),
     }
 
 

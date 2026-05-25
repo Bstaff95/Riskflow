@@ -34,6 +34,7 @@ Next priorities:
 9. Add the Layer 3 challenger-signal research path without changing production leaderboard behavior.
 10. Improve event-study reporting and add Obsidian event-study markdown.
 11. Validate whether compression plus improving relative strength predicts forward relative outperformance.
+12. Review Layer 4 setup-quality components and decide when Trader Mode should get a separate ranking.
 
 ## Stage 2: Crypto Sector Engine
 

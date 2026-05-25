@@ -11,10 +11,16 @@ from .config import UniverseConfig, load_universe_config
 from .data_loader import load_universe_ohlcv
 from .event_study import run_event_study
 from .indicator_engine import calculate_indicator
-from .reports import export_event_study_reports, export_scan_reports, export_signal_research_reports
+from .reports import (
+    export_event_study_reports,
+    export_scan_reports,
+    export_setup_research_reports,
+    export_signal_research_reports,
+)
 from .resample import research_mtf_derivations, resample_universe
-from .scoring import score_dataframe
 from .signal_research import run_signal_research
+from .setup_quality import calculate_setup_quality
+from .setup_research import run_setup_research
 from .states import classify_states
 
 
@@ -31,8 +37,22 @@ LEADERBOARD_COLUMNS = [
     "above_viscosity",
     "gradient_driver",
     "compression_score",
+    "compression_score_v0",
+    "compression_duration",
+    "compression_stability",
+    "leader_quality_score",
+    "compression_quality_score",
+    "relative_accumulation_score",
+    "setup_readiness_score",
+    "extension_risk_score",
+    "data_quality_score",
+    "trader_score_v0",
+    "trader_rank",
     "state",
+    "setup_state_v0",
+    "setup_tags",
     "opportunity_score",
+    "opportunity_score_v0",
     "notes",
 ]
 
@@ -66,9 +86,11 @@ def build_analysis_frames(
             weights=universe.weights,
         )
         compression = calculate_compression_features(raw, settings=universe.compression_settings)
-        analysis = indicator.join(compression[["compression_score"]], how="left")
+        analysis = indicator.join(compression, how="left")
         analysis["state"] = classify_states(analysis)
-        analysis["opportunity_score"] = score_dataframe(analysis)
+        setup_quality = calculate_setup_quality(analysis)
+        analysis = analysis.join(setup_quality, how="left")
+        analysis["opportunity_score"] = analysis["opportunity_score_v0"]
         analysis_frames[asset.symbol] = analysis
 
     return analysis_frames, basket, warnings
@@ -82,6 +104,9 @@ def _latest_notes(row: pd.Series) -> str:
         notes.append("relative unavailable")
     if pd.isna(row.get("compression_score")):
         notes.append("compression unavailable")
+    setup_notes = row.get("setup_notes")
+    if pd.notna(setup_notes) and str(setup_notes):
+        notes.append(str(setup_notes))
     if row.get("state") == "Unknown":
         notes.append("insufficient or mixed signal")
     return "; ".join(notes)
@@ -121,8 +146,21 @@ def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.Da
                 "above_viscosity": bool(latest.get("above_viscosity")) if pd.notna(latest.get("above_viscosity")) else False,
                 "gradient_driver": latest.get("gradient_driver"),
                 "compression_score": latest.get("compression_score"),
+                "compression_score_v0": latest.get("compression_score_v0"),
+                "compression_duration": latest.get("compression_duration"),
+                "compression_stability": latest.get("compression_stability"),
+                "leader_quality_score": latest.get("leader_quality_score"),
+                "compression_quality_score": latest.get("compression_quality_score"),
+                "relative_accumulation_score": latest.get("relative_accumulation_score"),
+                "setup_readiness_score": latest.get("setup_readiness_score"),
+                "extension_risk_score": latest.get("extension_risk_score"),
+                "data_quality_score": latest.get("data_quality_score"),
+                "trader_score_v0": latest.get("trader_score_v0"),
                 "state": latest.get("state"),
+                "setup_state_v0": latest.get("setup_state_v0"),
+                "setup_tags": latest.get("setup_tags"),
                 "opportunity_score": latest.get("opportunity_score"),
+                "opportunity_score_v0": latest.get("opportunity_score_v0"),
                 "notes": _latest_notes(latest),
             }
         )
@@ -131,6 +169,12 @@ def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.Da
     for column in LEADERBOARD_COLUMNS:
         if column not in leaderboard.columns:
             leaderboard[column] = pd.NA
+    if "trader_score_v0" in leaderboard.columns:
+        leaderboard["trader_rank"] = leaderboard["trader_score_v0"].rank(
+            ascending=False,
+            method="min",
+            na_option="bottom",
+        )
     leaderboard = leaderboard[LEADERBOARD_COLUMNS]
     return leaderboard.sort_values(["opportunity_score", "final_signal"], ascending=[False, False], na_position="last")
 
@@ -226,6 +270,34 @@ def signal_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def setup_research_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Setup research failed: {exc}")
+        return 1
+
+    summary, records = run_setup_research(
+        analysis_frames,
+        timeframe=args.timeframe,
+        benchmark_name=universe.benchmark.name,
+        min_sample_size=args.min_sample_size,
+        cooldown_bars=args.cooldown_bars,
+        entry_lag_bars=args.entry_lag_bars,
+    )
+    paths = export_setup_research_reports(summary, records, report_dir=args.report_dir)
+    print(f"Wrote setup research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote setup research summary HTML: {paths['summary_html']}")
+    print(f"Wrote setup research event records CSV: {paths['records_csv']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -299,6 +371,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bars after the signal event before forward-return measurement starts.",
     )
     signal_research.set_defaults(func=signal_research_command)
+
+    setup_research = subparsers.add_parser("setup-research", help="Run Layer 4 setup-quality research.")
+    add_common_arguments(setup_research)
+    setup_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=5,
+        help="Minimum event count before a setup result can be classified beyond inconclusive.",
+    )
+    setup_research.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol/setup event can fire again.",
+    )
+    setup_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the setup event before forward-return measurement starts.",
+    )
+    setup_research.set_defaults(func=setup_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

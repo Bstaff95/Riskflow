@@ -16,6 +16,9 @@ EVENT_SUMMARY_HTML = "event_study_summary.html"
 SIGNAL_RESEARCH_SUMMARY_CSV = "signal_research_summary.csv"
 SIGNAL_RESEARCH_SUMMARY_HTML = "signal_research_summary.html"
 SIGNAL_RESEARCH_RECORDS_CSV = "signal_research_records.csv"
+SETUP_RESEARCH_SUMMARY_CSV = "setup_research_summary.csv"
+SETUP_RESEARCH_SUMMARY_HTML = "setup_research_summary.html"
+SETUP_RESEARCH_RECORDS_CSV = "setup_research_records.csv"
 
 
 def _format_value(value: object) -> str:
@@ -83,7 +86,25 @@ def build_obsidian_scan_report(
     warnings: list[str] | None = None,
 ) -> str:
     generated = datetime.now().isoformat(timespec="seconds")
-    columns = ["symbol", "name", "state", "opportunity_score", "final_signal", "relative_component", "compression_score"]
+    columns = [
+        "symbol",
+        "name",
+        "state",
+        "setup_state_v0",
+        "opportunity_score",
+        "leader_quality_score",
+        "compression_quality_score",
+        "relative_accumulation_score",
+        "setup_readiness_score",
+        "extension_risk_score",
+        "data_quality_score",
+        "trader_score_v0",
+        "trader_rank",
+        "final_signal",
+        "relative_component",
+        "compression_score",
+        "setup_tags",
+    ]
     top_opportunities = leaderboard.sort_values("opportunity_score", ascending=False)
     strongest = leaderboard.sort_values("relative_component", ascending=False)
     compressed_emerging = leaderboard[
@@ -193,6 +214,28 @@ def export_signal_research_reports(
     summary.to_csv(summary_csv_path, index=False)
     records.to_csv(records_csv_path, index=False)
     write_html_report(summary, summary_html_path, "Layer 3 Signal Research Summary")
+    return {
+        "summary_csv": summary_csv_path,
+        "summary_html": summary_html_path,
+        "records_csv": records_csv_path,
+    }
+
+
+def export_setup_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    report_dir: str | Path = "reports",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    report_path.mkdir(parents=True, exist_ok=True)
+
+    summary_csv_path = report_path / SETUP_RESEARCH_SUMMARY_CSV
+    summary_html_path = report_path / SETUP_RESEARCH_SUMMARY_HTML
+    records_csv_path = report_path / SETUP_RESEARCH_RECORDS_CSV
+
+    summary.to_csv(summary_csv_path, index=False)
+    records.to_csv(records_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 4 Setup Research Summary")
     return {
         "summary_csv": summary_csv_path,
         "summary_html": summary_html_path,

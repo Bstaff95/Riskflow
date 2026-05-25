@@ -98,6 +98,14 @@ The first challenger families are:
 
 Riskflow should preserve the current oscillator-style user experience while testing whether challenger observations improve forward relative-return evidence.
 
+## Setup Quality Direction
+
+Layer 4 is documented in `docs/LAYER_4_SETUP_QUALITY.md`.
+
+Layer 4 separates leader quality from setup quality. The current implementation keeps stable leaderboard behavior while adding versioned setup-quality columns, setup tags, compression duration, data-quality context, extension risk context, and a non-default `trader_score_v0` for future Trader Mode review.
+
+Setup definitions live in `setup_registry.py`. This prevents silent changes to compression, state, setup-quality, and opportunity-score semantics.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -112,6 +120,8 @@ Riskflow should preserve the current oscillator-style user experience while test
 - `event_study.py`: event detection and forward absolute/relative return summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
+- `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
+- `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
 - `reports.py`: CSV, HTML, and Obsidian markdown export helpers.
 - `cli.py`: command-line entry points.
 
@@ -121,6 +131,7 @@ Riskflow should preserve the current oscillator-style user experience while test
 python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

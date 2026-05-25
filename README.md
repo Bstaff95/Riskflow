@@ -28,7 +28,7 @@ It can:
 - Calculate adaptive viscosity and gradient driver fields.
 - Calculate asset-relative compression features.
 - Classify simple lifecycle states.
-- Score opportunities with transparent rules.
+- Score opportunities with transparent rules and setup-quality components.
 - Export leaderboard CSV, HTML, and Obsidian markdown reports.
 - Run simple event studies focused on forward relative returns.
 - Run a separate Layer 3 signal-research pass for challenger indicators.
@@ -102,7 +102,7 @@ Outputs:
 - `reports/latest_meme_leaderboard.html`
 - `obsidian/reports/latest_meme_scan.md`
 
-Leaderboard fields include signal, relative component, viscosity, compression score, lifecycle state, opportunity score, and notes about missing data.
+Leaderboard fields include signal, relative component, viscosity, compression score, setup-quality components, lifecycle state, opportunity score, setup tags, and notes about missing data.
 
 ## Run Event Study
 
@@ -116,6 +116,20 @@ Outputs:
 - `reports/event_study_summary.html`
 
 The key metric is forward relative return versus the meme basket over 3, 7, 14, and 30 bars.
+
+## Run Setup Research
+
+```bash
+python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/setup_research_summary.csv`
+- `reports/setup_research_summary.html`
+- `reports/setup_research_records.csv`
+
+This command tests Layer 4 setup events, such as compression plus relative strength rising, setup readiness, extension risk, and `trader_score_v0` threshold events. It does not change the default leaderboard ranking.
 
 ## Run Signal Research
 
@@ -156,6 +170,7 @@ Durable project context lives in `docs/`:
 - `docs/ROADMAP.md` explains staged next steps.
 - `docs/WORKFLOW.md` explains the GitHub, Codex, and Obsidian workflow.
 - `docs/LAYER_3_SIGNAL_RESEARCH.md` explains the adversarial signal-research plan.
+- `docs/LAYER_4_SETUP_QUALITY.md` explains setup quality, Trader Mode readiness, and Layer 4 versioning.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.
 
@@ -199,6 +214,22 @@ Each feature is converted to a trailing percentile against its own history. The 
 ```
 
 High score means compressed or coiled. Low score means expanded or high volatility.
+
+Layer 4 adds setup-quality context on top of compression:
+
+- `compression_duration`
+- `compression_stability`
+- `leader_quality_score`
+- `compression_quality_score`
+- `relative_accumulation_score`
+- `setup_readiness_score`
+- `extension_risk_score`
+- `data_quality_score`
+- `trader_score_v0`
+- `trader_rank`
+- `setup_tags`
+
+These are explanatory components. The active leaderboard ranking remains backward-compatible through `opportunity_score`.
 
 ## Research Warning
 

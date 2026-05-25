@@ -18,10 +18,15 @@ def test_event_study_produces_required_columns():
             "viscosity": 0.0,
             "relative_component": relative_component,
             "compression_score": 75.0,
+            "compression_duration": range(60),
+            "setup_readiness_score": final_signal.rank(pct=True) * 100.0,
+            "relative_accumulation_score": relative_component.rank(pct=True) * 100.0,
+            "extension_risk_score": 0.0,
             "state": "Weak",
         },
         index=dates,
     )
+    frame.loc[dates[50:], "extension_risk_score"] = 80.0
     frame.loc[dates[35], "state"] = "Emerging Leader"
     frame.loc[dates[45], "state"] = "Confirmed Leader"
 
@@ -30,3 +35,4 @@ def test_event_study_produces_required_columns():
     assert list(summary.columns) == summary_columns()
     assert set(summary["event"]) == set(EVENT_NAMES)
     assert not records.empty
+    assert "setup_readiness_score_crosses_threshold" in set(records["event"])

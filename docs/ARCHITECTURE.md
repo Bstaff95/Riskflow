@@ -122,6 +122,12 @@ The active leaderboard score remains `opportunity_score_v0`, exposed through the
 
 Score identities live in `score_registry.py`. Future score formulas should be added as versioned candidates, not silent edits to the active leaderboard ranking.
 
+## Evidence Engine Direction
+
+Layer 7 is documented in `docs/LAYER_7_EVIDENCE_ENGINE.md`.
+
+Layer 7 hardens event-study methodology and shared evidence math. It owns forward outcome calculations, event metadata contracts, entry lag, cooldown, concentration diagnostics, classifications, and promotion gates. It does not change signal, setup, state, or score formulas.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -137,6 +143,8 @@ Score identities live in `score_registry.py`. Future score formulas should be ad
 - `scoring.py`: explainable opportunity score.
 - `score_registry.py`: explicit Layer 6 score identities, research targets, roles, and active/candidate contracts.
 - `score_research.py`: Layer 6 ranking validation using buckets, rank IC, forward relative returns, drawdown, and concentration diagnostics.
+- `event_registry.py`: explicit Layer 7 event identities, metadata, defaults, and event-family contracts.
+- `research_outcomes.py`: shared forward returns, relative returns, drawdowns, cooldowns, clustering, and summary helpers.
 - `event_study.py`: event detection and forward absolute/relative return summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.

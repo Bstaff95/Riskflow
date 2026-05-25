@@ -33,6 +33,7 @@ It can:
 - Run simple event studies focused on forward relative returns.
 - Run a separate Layer 3 signal-research pass for challenger indicators.
 - Run Layer 4 setup research, Layer 5 state research, and Layer 6 score research without changing default leaderboard behavior.
+- Use a Layer 7 evidence engine to harden event studies with entry lag, cooldowns, concentration diagnostics, and Obsidian reports.
 
 ## Setup
 
@@ -114,9 +115,19 @@ python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 
 Outputs:
 
 - `reports/event_study_summary.csv`
+- `reports/event_study_records.csv`
 - `reports/event_study_summary.html`
+- `obsidian/reports/latest_event_study.md`
 
-The key metric is forward relative return versus the meme basket over 3, 7, 14, and 30 bars.
+The key metric is forward relative return versus the meme basket over 3, 7, 14, and 30 bars. The command defaults to a one-bar entry lag so outcomes start after the event bar closes.
+
+Useful evidence guardrails:
+
+```bash
+python3 -m riskflow event-study --entry-lag-bars 1 --cooldown-bars 30 --min-sample-size 20
+```
+
+Layer 7 event-study reports include event classifications, concentration diagnostics, first-half/second-half checks, and notes. They are research evidence, not trade instructions.
 
 ## Run Setup Research
 
@@ -207,6 +218,7 @@ Durable project context lives in `docs/`:
 - `docs/LAYER_4_SETUP_QUALITY.md` explains setup quality, Trader Mode readiness, and Layer 4 versioning.
 - `docs/LAYER_5_LIFECYCLE_STATES.md` explains lifecycle state contracts and state research.
 - `docs/LAYER_6_OPPORTUNITY_SCORING.md` explains score validation and promotion gates.
+- `docs/LAYER_7_EVIDENCE_ENGINE.md` explains event-study hardening and evidence promotion gates.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.
 

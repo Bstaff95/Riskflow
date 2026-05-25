@@ -13,6 +13,8 @@ LEADERBOARD_HTML = "latest_meme_leaderboard.html"
 OBSIDIAN_SCAN_MD = "latest_meme_scan.md"
 EVENT_SUMMARY_CSV = "event_study_summary.csv"
 EVENT_SUMMARY_HTML = "event_study_summary.html"
+EVENT_RECORDS_CSV = "event_study_records.csv"
+OBSIDIAN_EVENT_STUDY_MD = "latest_event_study.md"
 SIGNAL_RESEARCH_SUMMARY_CSV = "signal_research_summary.csv"
 SIGNAL_RESEARCH_SUMMARY_HTML = "signal_research_summary.html"
 SIGNAL_RESEARCH_RECORDS_CSV = "signal_research_records.csv"
@@ -200,17 +202,120 @@ def export_scan_reports(
     }
 
 
+def build_obsidian_event_study_report(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    columns = [
+        "event",
+        "classification",
+        "sample_size",
+        "unique_symbols",
+        "unique_event_clusters",
+        "median_forward_relative_return_14",
+        "median_forward_relative_return_30",
+        "hit_rate_forward_relative_return_14",
+        "median_max_drawdown_30",
+        "max_symbol_event_share",
+        "max_cluster_event_share",
+        "notes",
+    ]
+    useful = summary[summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "median_forward_relative_return_30"],
+        ascending=[True, False],
+    )
+    fragile = summary[summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    concentrated = summary[
+        (summary["max_symbol_event_share"] > 0.55)
+        | (summary["max_cluster_event_share"] > 0.60)
+    ].sort_values("sample_size", ascending=False)
+
+    verdict = "No events passed useful/watchlist gates yet."
+    if not useful.empty:
+        verdict = f"{len(useful)} events reached useful/watchlist evidence gates. Treat as research evidence, not trading advice."
+
+    promotion = "No event should be promoted without side-by-side evidence against its incumbent, concentration checks, and a written promotion note."
+    if not summary[summary["classification"] == "useful"].empty:
+        promotion = "Some events are useful candidates, but promotion still requires baseline comparison and reviewer approval."
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    return f"""# Latest Event Study
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+Records: {len(records)}
+
+## Verdict
+{verdict}
+
+## Useful / Watchlist Events
+{dataframe_to_markdown(useful, columns=columns, max_rows=20)}
+
+## Fragile / Inconclusive Events
+{dataframe_to_markdown(fragile, columns=columns, max_rows=20)}
+
+## Concentration Risks
+{dataframe_to_markdown(concentrated, columns=columns, max_rows=20)}
+
+## Promotion Eligibility
+{promotion}
+
+## Next Research Questions
+- Rerun with ex-target baskets once Layer 2 benchmark hardening exists.
+- Compare useful events against simple baselines before promotion.
+- Preserve versioned event ids before changing any trigger threshold.
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Opportunity Score]]
+- [[Relative Accumulation]]
+- [[Compression Before Repricing]]
+- [[Capital Flow Graph]]
+- [[Riskflow]]
+"""
+
+
 def export_event_study_reports(
     summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
     report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
 ) -> dict[str, Path]:
     report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
     report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
     csv_path = report_path / EVENT_SUMMARY_CSV
+    records_path = report_path / EVENT_RECORDS_CSV
     html_path = report_path / EVENT_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_EVENT_STUDY_MD
     summary.to_csv(csv_path, index=False)
-    write_html_report(summary, html_path, "Meme Event Study Summary")
-    return {"csv": csv_path, "html": html_path}
+    records.to_csv(records_path, index=False)
+    write_html_report(summary, html_path, "Meme Event Study Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_event_study_report(summary, records, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "csv": csv_path,
+        "records_csv": records_path,
+        "html": html_path,
+        "obsidian": obsidian_path,
+    }
 
 
 def export_signal_research_reports(

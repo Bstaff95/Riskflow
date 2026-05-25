@@ -5,9 +5,20 @@ import math
 import numpy as np
 import pandas as pd
 
-from .event_study import HORIZONS
+from .research_outcomes import (
+    HORIZONS,
+    event_cluster_id,
+    forward_max_drawdown as _forward_max_drawdown,
+    forward_relative_return as _future_relative_return,
+    hit_rate_or_nan as _hit_rate,
+    max_share as _max_share,
+    mean_or_nan as _mean,
+    median_or_nan as _median,
+    split_half_medians as _split_half_medians,
+    std_or_nan as _std,
+    worst_cluster_median as _worst_cluster_median,
+)
 from .score_registry import EXTENSION_RISK_SCORE, RESEARCH_SCORE_IDS, get_score_spec
-from .signal_research import _forward_max_drawdown, _future_relative_return
 
 
 DEFAULT_BUCKET_COUNT = 10
@@ -115,33 +126,6 @@ SCORE_SUMMARY_COLUMNS = [
 ]
 
 
-def _mean(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.mean()) if not valid.empty else np.nan
-
-
-def _median(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.median()) if not valid.empty else np.nan
-
-
-def _std(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.std(ddof=0)) if not valid.empty else np.nan
-
-
-def _hit_rate(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float((valid > 0.0).mean()) if not valid.empty else np.nan
-
-
-def _max_share(series: pd.Series) -> float:
-    valid = series.dropna()
-    if valid.empty:
-        return np.nan
-    return float(valid.value_counts(normalize=True).iloc[0])
-
-
 def _score_values(frame: pd.DataFrame, score_id: str) -> tuple[pd.Series, pd.Series]:
     spec = get_score_spec(score_id)
     raw = pd.to_numeric(frame.get(spec.source_column), errors="coerce").astype(float)
@@ -233,7 +217,7 @@ def score_records_for_asset(
                     "bucket_fallback": False,
                     "entry_lag_bars": entry_lag_bars,
                     "entry_date": frame.index[entry_position] if entry_position < len(frame.index) else pd.NaT,
-                    "event_cluster_id": pd.Timestamp(date).strftime("%Y-%m"),
+                    "event_cluster_id": event_cluster_id(date),
                     "forward_relative_return_3": metrics.loc[date, "forward_relative_return_3"],
                     "forward_relative_return_7": metrics.loc[date, "forward_relative_return_7"],
                     "forward_relative_return_14": metrics.loc[date, "forward_relative_return_14"],
@@ -269,26 +253,6 @@ def build_score_research_records(
     output = pd.concat(records, ignore_index=True)
     output["requested_bucket_count"] = bucket_count
     return _assign_datewise_buckets(output, bucket_count)
-
-
-def _split_half_medians(records: pd.DataFrame, column: str) -> tuple[float, float]:
-    if records.empty or column not in records.columns:
-        return np.nan, np.nan
-    dates = pd.Series(pd.to_datetime(records["date"].dropna().unique())).sort_values(ignore_index=True)
-    if dates.empty:
-        return np.nan, np.nan
-    midpoint = dates.iloc[len(dates) // 2]
-    first = records[pd.to_datetime(records["date"]) <= midpoint]
-    second = records[pd.to_datetime(records["date"]) > midpoint]
-    return _median(pd.to_numeric(first[column], errors="coerce")), _median(pd.to_numeric(second[column], errors="coerce"))
-
-
-def _worst_cluster_median(records: pd.DataFrame, column: str) -> float:
-    if records.empty or column not in records.columns:
-        return np.nan
-    medians = records.groupby("event_cluster_id")[column].median(numeric_only=True)
-    valid = medians.dropna()
-    return float(valid.min()) if not valid.empty else np.nan
 
 
 def _spread_by_score_bucket(records: pd.DataFrame, score_id: str, horizon: int) -> float:

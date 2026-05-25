@@ -3,11 +3,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .event_study import HORIZONS
-from .signal_research import (
-    _apply_event_cooldown,
-    _forward_max_drawdown,
-    _future_relative_return,
+from .research_outcomes import (
+    HORIZONS,
+    apply_event_cooldown as _apply_event_cooldown,
+    event_cluster_id,
+    forward_max_drawdown as _forward_max_drawdown,
+    forward_relative_return as _future_relative_return,
+    hit_rate_or_nan as _hit_rate,
+    max_share as _max_share,
+    mean_or_nan as _mean,
+    median_or_nan as _median,
 )
 
 
@@ -170,7 +175,7 @@ def setup_event_records_for_asset(
                 "setup_value": _event_value(frame, event_name, event_date),
                 "entry_lag_bars": entry_lag_bars,
                 "entry_date": entry_date,
-                "event_cluster_id": pd.Timestamp(event_date).strftime("%Y-%m"),
+                "event_cluster_id": event_cluster_id(event_date),
             }
             for column in metrics.columns:
                 record[column] = metrics.loc[event_date, column]
@@ -201,28 +206,6 @@ def build_setup_research_records(
     if not records:
         return pd.DataFrame(columns=RECORD_COLUMNS)
     return pd.concat(records, ignore_index=True)
-
-
-def _mean(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.mean()) if not valid.empty else np.nan
-
-
-def _median(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.median()) if not valid.empty else np.nan
-
-
-def _hit_rate(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float((valid > 0.0).mean()) if not valid.empty else np.nan
-
-
-def _max_share(series: pd.Series) -> float:
-    valid = series.dropna()
-    if valid.empty:
-        return np.nan
-    return float(valid.value_counts(normalize=True).iloc[0])
 
 
 def summarize_setup_research_records(

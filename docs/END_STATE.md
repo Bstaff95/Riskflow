@@ -238,6 +238,8 @@ Important metrics:
 
 This layer is where attractive ideas either earn more development time or get demoted.
 
+Layer 7 should act as the evidence engine for the whole project. It should standardize outcome math, event records, entry lag, cooldowns, concentration diagnostics, and promotion gates so future signal, setup, state, and score changes cannot be promoted by vibes or one lucky outlier.
+
 ### Layer 8: Multi-Timeframe Context
 
 Add structure across timeframes only after the single-timeframe engine is understandable.

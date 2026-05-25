@@ -237,7 +237,7 @@ def scan_command(args: argparse.Namespace) -> int:
 
 def event_study_command(args: argparse.Namespace) -> int:
     try:
-        _universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
             args.config,
             data_dir=args.data_dir,
             timeframe=args.timeframe,
@@ -246,10 +246,26 @@ def event_study_command(args: argparse.Namespace) -> int:
         print(f"Event study failed: {exc}")
         return 1
 
-    summary, _records = run_event_study(analysis_frames)
-    paths = export_event_study_reports(summary, report_dir=args.report_dir)
+    summary, records = run_event_study(
+        analysis_frames,
+        timeframe=args.timeframe,
+        benchmark_name=universe.benchmark.name,
+        min_sample_size=args.min_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+        cooldown_bars=args.cooldown_bars,
+    )
+    paths = export_event_study_reports(
+        summary,
+        records,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
     print(f"Wrote event study CSV: {paths['csv']}")
+    print(f"Wrote event study records CSV: {paths['records_csv']}")
     print(f"Wrote event study HTML: {paths['html']}")
+    print(f"Wrote Obsidian event study report: {paths['obsidian']}")
     if warnings:
         print(f"Warnings: {len(warnings)}")
     return 0
@@ -437,8 +453,27 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
     scan.set_defaults(func=scan_command)
 
-    event_study = subparsers.add_parser("event-study", help="Run simple signal event studies.")
+    event_study = subparsers.add_parser("event-study", help="Run Layer 7 event-study evidence reports.")
     add_common_arguments(event_study)
+    event_study.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    event_study.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=20,
+        help="Minimum event count before an event result can be classified beyond inconclusive.",
+    )
+    event_study.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the event before forward-return measurement starts.",
+    )
+    event_study.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol/event can fire again.",
+    )
     event_study.set_defaults(func=event_study_command)
 
     signal_research = subparsers.add_parser("signal-research", help="Run Layer 3 challenger-signal research.")

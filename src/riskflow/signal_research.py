@@ -3,8 +3,18 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .event_study import HORIZONS
 from .features import rolling_percentile_rank
+from .research_outcomes import (
+    HORIZONS,
+    apply_event_cooldown as _apply_event_cooldown,
+    event_cluster_id,
+    forward_max_drawdown as _forward_max_drawdown,
+    forward_relative_return as _future_relative_return,
+    hit_rate_or_nan as _hit_rate,
+    max_share as _max_share,
+    mean_or_nan as _mean,
+    median_or_nan as _median,
+)
 from .signal_registry import (
     CORE_SIGNAL_V0,
     CORE_SIGNAL_V0_FORMULA_VERSION,
@@ -188,57 +198,6 @@ def _crosses_above(series: pd.Series, threshold: float) -> pd.Series:
     return ((series > threshold) & (series.shift(1) <= threshold)).fillna(False)
 
 
-def _apply_event_cooldown(mask: pd.Series, cooldown_bars: int) -> pd.Series:
-    if cooldown_bars < 0:
-        raise ValueError("cooldown_bars must be >= 0")
-    events = mask.fillna(False).astype(bool)
-    if cooldown_bars == 0:
-        return events
-
-    keep = pd.Series(False, index=events.index)
-    last_kept_position: int | None = None
-    for position, has_event in enumerate(events.to_numpy()):
-        if not has_event:
-            continue
-        if last_kept_position is None or position - last_kept_position > cooldown_bars:
-            keep.iloc[position] = True
-            last_kept_position = position
-    return keep
-
-
-def _future_relative_return(
-    target: pd.Series,
-    benchmark: pd.Series,
-    horizon: int,
-    entry_lag_bars: int,
-) -> pd.Series:
-    entry_target = target.shift(-entry_lag_bars)
-    exit_target = target.shift(-(entry_lag_bars + horizon))
-    entry_benchmark = benchmark.shift(-entry_lag_bars)
-    exit_benchmark = benchmark.shift(-(entry_lag_bars + horizon))
-    target_return = exit_target / entry_target - 1.0
-    benchmark_return = exit_benchmark / entry_benchmark - 1.0
-    return ((1.0 + target_return) / (1.0 + benchmark_return)) - 1.0
-
-
-def _forward_max_drawdown(close: pd.Series, horizon: int, entry_lag_bars: int) -> pd.Series:
-    values = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
-    output = np.full(len(values), np.nan, dtype=float)
-    for idx in range(len(values)):
-        entry_position = idx + entry_lag_bars
-        if entry_position >= len(values):
-            continue
-        current = values[entry_position]
-        if np.isnan(current) or current == 0.0:
-            continue
-        future = values[entry_position + 1 : entry_position + horizon + 1]
-        future = future[~np.isnan(future)]
-        if len(future) == 0:
-            continue
-        output[idx] = float(np.min(future / current - 1.0))
-    return pd.Series(output, index=close.index)
-
-
 def research_event_records_for_asset(
     symbol: str,
     frame: pd.DataFrame,
@@ -290,7 +249,7 @@ def research_event_records_for_asset(
                 "event_name": event_name,
                 "entry_lag_bars": entry_lag_bars,
                 "entry_date": entry_date,
-                "event_cluster_id": pd.Timestamp(event_date).strftime("%Y-%m"),
+                "event_cluster_id": event_cluster_id(event_date),
             }
             for column in metric_frame.columns:
                 record[column] = metric_frame.loc[event_date, column]
@@ -330,28 +289,6 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     if frame.empty or column not in frame.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(frame[column], errors="coerce")
-
-
-def _mean(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.mean()) if not valid.empty else np.nan
-
-
-def _median(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.median()) if not valid.empty else np.nan
-
-
-def _hit_rate(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float((valid > 0.0).mean()) if not valid.empty else np.nan
-
-
-def _max_share(series: pd.Series) -> float:
-    valid = series.dropna()
-    if valid.empty:
-        return np.nan
-    return float(valid.value_counts(normalize=True).iloc[0])
 
 
 def _reference_metrics(summary: pd.DataFrame, signal_variant: str) -> dict[str, float] | None:

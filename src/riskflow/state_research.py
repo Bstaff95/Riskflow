@@ -3,8 +3,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .event_study import HORIZONS
-from .signal_research import _forward_max_drawdown, _future_relative_return
+from .research_outcomes import (
+    HORIZONS,
+    event_cluster_id,
+    forward_max_drawdown as _forward_max_drawdown,
+    forward_relative_return as _future_relative_return,
+    hit_rate_or_nan as _hit_rate,
+    max_share as _max_share,
+    mean_or_nan as _mean,
+    median_or_nan as _median,
+)
 from .state_registry import STATE_MODEL_V0, get_state_model_spec
 
 
@@ -147,7 +155,7 @@ def state_records_for_asset(
                 "next_state": next_state.loc[date],
                 "entry_lag_bars": entry_lag_bars,
                 "entry_date": frame.index[entry_position] if entry_position < len(frame.index) else pd.NaT,
-                "event_cluster_id": pd.Timestamp(date).strftime("%Y-%m"),
+                "event_cluster_id": event_cluster_id(date),
                 "forward_relative_return_3": metrics.loc[date, "forward_relative_return_3"],
                 "forward_relative_return_7": metrics.loc[date, "forward_relative_return_7"],
                 "forward_relative_return_14": metrics.loc[date, "forward_relative_return_14"],
@@ -180,28 +188,6 @@ def build_state_research_records(
     if not records:
         return pd.DataFrame(columns=RECORD_COLUMNS)
     return pd.concat(records, ignore_index=True)
-
-
-def _mean(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.mean()) if not valid.empty else np.nan
-
-
-def _median(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float(valid.median()) if not valid.empty else np.nan
-
-
-def _hit_rate(series: pd.Series) -> float:
-    valid = series.dropna()
-    return float((valid > 0.0).mean()) if not valid.empty else np.nan
-
-
-def _max_share(series: pd.Series) -> float:
-    valid = series.dropna()
-    if valid.empty:
-        return np.nan
-    return float(valid.value_counts(normalize=True).iloc[0])
 
 
 def _most_common(series: pd.Series) -> str:

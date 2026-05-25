@@ -3,8 +3,29 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .event_registry import DEFAULT_EVENT_COOLDOWN_BARS, DEFAULT_EVENT_ENTRY_LAG_BARS, EVENT_REGISTRY, get_event_spec
+from .research_outcomes import (
+    HORIZONS,
+    apply_event_cooldown,
+    entry_date_at,
+    event_cluster_id,
+    forward_max_drawdown,
+    forward_relative_return,
+    forward_return,
+    hit_rate_or_nan,
+    max_share,
+    mean_or_nan,
+    median_or_nan,
+    quantile_or_nan,
+    split_half_medians,
+    worst_cluster_median,
+)
 
-HORIZONS = (3, 7, 14, 30)
+
+DEFAULT_MIN_SAMPLE_SIZE = 20
+MAX_SYMBOL_EVENT_SHARE = 0.55
+MAX_CLUSTER_EVENT_SHARE = 0.60
+
 EVENT_NAMES = (
     "signal_crosses_above_viscosity",
     "signal_crosses_above_zero",
@@ -25,6 +46,32 @@ EVENT_NAMES = (
     "extension_risk_score_crosses_high",
 )
 
+RECORD_COLUMNS = [
+    "symbol",
+    "date",
+    "timeframe",
+    "benchmark",
+    "event",
+    "event_id",
+    "event_family",
+    "event_version",
+    "event_value",
+    "entry_lag_bars",
+    "entry_date",
+    "cooldown_bars",
+    "event_cluster_id",
+    "forward_return_3",
+    "forward_relative_return_3",
+    "forward_return_7",
+    "forward_relative_return_7",
+    "forward_return_14",
+    "forward_relative_return_14",
+    "forward_return_30",
+    "forward_relative_return_30",
+    "max_drawdown_14",
+    "max_drawdown_30",
+]
+
 
 def summary_columns() -> list[str]:
     columns = ["event", "sample_size"]
@@ -44,6 +91,30 @@ def summary_columns() -> list[str]:
             "median_max_drawdown_14",
             "avg_max_drawdown_30",
             "median_max_drawdown_30",
+            "event_id",
+            "event_family",
+            "event_version",
+            "unique_symbols",
+            "unique_event_dates",
+            "unique_event_clusters",
+            "max_symbol_event_share",
+            "max_cluster_event_share",
+        ]
+    )
+    for horizon in HORIZONS:
+        columns.extend(
+            [
+                f"p25_forward_relative_return_{horizon}",
+                f"p75_forward_relative_return_{horizon}",
+            ]
+        )
+    columns.extend(
+        [
+            "first_half_median_forward_relative_return_30",
+            "second_half_median_forward_relative_return_30",
+            "worst_cluster_median_forward_relative_return_30",
+            "classification",
+            "notes",
         ]
     )
     return columns
@@ -103,105 +174,174 @@ def detect_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
     }
 
 
-def _future_return(series: pd.Series, horizon: int) -> pd.Series:
-    return series.shift(-horizon) / series - 1.0
+def _event_value(frame: pd.DataFrame, event_name: str, event_date: pd.Timestamp) -> object:
+    spec = get_event_spec(event_name)
+    column = spec.value_column
+    if column is None or column not in frame.columns:
+        return np.nan
+    return frame[column].loc[event_date]
 
 
-def _future_relative_return(target: pd.Series, benchmark: pd.Series, horizon: int) -> pd.Series:
-    target_return = _future_return(target, horizon)
-    benchmark_return = _future_return(benchmark, horizon)
-    return ((1.0 + target_return) / (1.0 + benchmark_return)) - 1.0
-
-
-def _forward_max_drawdown(close: pd.Series, horizon: int) -> pd.Series:
-    values = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
-    output = np.full(len(values), np.nan, dtype=float)
-    for idx, current in enumerate(values):
-        if np.isnan(current) or current == 0.0:
-            continue
-        future = values[idx + 1 : idx + horizon + 1]
-        future = future[~np.isnan(future)]
-        if len(future) == 0:
-            continue
-        output[idx] = float(np.min(future / current - 1.0))
-    return pd.Series(output, index=close.index)
-
-
-def event_records_for_asset(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
+def event_records_for_asset(
+    symbol: str,
+    frame: pd.DataFrame,
+    *,
+    timeframe: str = "1d",
+    benchmark_name: str = "MEME_BASKET",
+    entry_lag_bars: int = DEFAULT_EVENT_ENTRY_LAG_BARS,
+    cooldown_bars: int = DEFAULT_EVENT_COOLDOWN_BARS,
+) -> pd.DataFrame:
     working = frame.copy()
-    target = working["target"]
-    benchmark = working["benchmark"]
+    target = pd.to_numeric(working["target"], errors="coerce").astype(float)
+    benchmark = pd.to_numeric(working["benchmark"], errors="coerce").astype(float)
     masks = detect_events(working)
 
     metric_frame = pd.DataFrame(index=working.index)
     for horizon in HORIZONS:
-        metric_frame[f"forward_return_{horizon}"] = _future_return(target, horizon)
-        metric_frame[f"forward_relative_return_{horizon}"] = _future_relative_return(target, benchmark, horizon)
-    metric_frame["max_drawdown_14"] = _forward_max_drawdown(target, 14)
-    metric_frame["max_drawdown_30"] = _forward_max_drawdown(target, 30)
+        metric_frame[f"forward_return_{horizon}"] = forward_return(target, horizon, entry_lag_bars)
+        metric_frame[f"forward_relative_return_{horizon}"] = forward_relative_return(
+            target,
+            benchmark,
+            horizon,
+            entry_lag_bars,
+        )
+    metric_frame["max_drawdown_14"] = forward_max_drawdown(target, 14, entry_lag_bars)
+    metric_frame["max_drawdown_30"] = forward_max_drawdown(target, 30, entry_lag_bars)
 
     records: list[dict[str, object]] = []
-    for event_name, mask in masks.items():
+    for event_name, raw_mask in masks.items():
+        spec = get_event_spec(event_name)
+        mask = apply_event_cooldown(raw_mask, cooldown_bars)
         event_dates = working.index[mask]
         for event_date in event_dates:
+            event_position = working.index.get_loc(event_date)
             record: dict[str, object] = {
                 "symbol": symbol,
                 "date": event_date,
+                "timeframe": timeframe,
+                "benchmark": benchmark_name,
                 "event": event_name,
+                "event_id": event_name,
+                "event_family": spec.family,
+                "event_version": spec.version,
+                "event_value": _event_value(working, event_name, event_date),
+                "entry_lag_bars": entry_lag_bars,
+                "entry_date": entry_date_at(working.index, event_position, entry_lag_bars),
+                "cooldown_bars": cooldown_bars,
+                "event_cluster_id": event_cluster_id(event_date),
             }
             for column in metric_frame.columns:
                 record[column] = metric_frame.loc[event_date, column]
             records.append(record)
-    return pd.DataFrame.from_records(records)
+    return pd.DataFrame.from_records(records, columns=RECORD_COLUMNS)
 
 
-def summarize_event_records(records: pd.DataFrame) -> pd.DataFrame:
-    def numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
-        if frame.empty or column not in frame.columns:
-            return pd.Series(dtype=float)
-        return pd.to_numeric(frame[column], errors="coerce")
+def _classify_summary_row(row: dict[str, object], spec, *, min_sample_size: int) -> tuple[str, str]:
+    sample_size = int(row["sample_size"])
+    if sample_size < min_sample_size:
+        return "inconclusive", f"sample size below min_sample_size={min_sample_size}"
+    if float(row["max_symbol_event_share"]) > MAX_SYMBOL_EVENT_SHARE:
+        return "fragile", "too many events come from one symbol"
+    if float(row["max_cluster_event_share"]) > MAX_CLUSTER_EVENT_SHARE:
+        return "fragile", "too many events come from one calendar cluster"
 
-    def mean_or_nan(series: pd.Series) -> float:
-        valid = series.dropna()
-        return float(valid.mean()) if not valid.empty else np.nan
+    median_14 = float(row["median_forward_relative_return_14"])
+    median_30 = float(row["median_forward_relative_return_30"])
+    hit_14 = float(row["hit_rate_forward_relative_return_14"])
+    drawdown_30 = float(row["median_max_drawdown_30"])
+    if any(np.isnan(value) for value in (median_14, median_30, hit_14)):
+        return "inconclusive", "insufficient forward-relative-return evidence"
+    acceptable_drawdown = np.isnan(drawdown_30) or drawdown_30 > -0.35
+    if spec.direction == "negative":
+        miss_rate_14 = 1.0 - hit_14
+        if median_14 < 0.0 and median_30 < 0.0 and miss_rate_14 >= 0.55:
+            return "useful", "negative event preceded underperformance with enough consistency"
+        if median_14 < 0.0 or median_30 < 0.0 or miss_rate_14 >= 0.52:
+            return "watchlist", "mixed but potentially useful downside evidence"
+        return "fragile", "negative event did not precede underperformance"
 
-    def median_or_nan(series: pd.Series) -> float:
-        valid = series.dropna()
-        return float(valid.median()) if not valid.empty else np.nan
+    if median_14 > 0.0 and median_30 > 0.0 and hit_14 >= 0.55 and acceptable_drawdown:
+        return "useful", "positive median relative returns, hit rate, and drawdown evidence"
+    if (median_14 > 0.0 or median_30 > 0.0 or hit_14 >= 0.52) and acceptable_drawdown:
+        return "watchlist", "mixed but potentially useful upside evidence"
+    return "fragile", "positive event has weak or negative forward relative-return evidence"
 
-    def hit_rate_or_nan(series: pd.Series) -> float:
-        valid = series.dropna()
-        return float((valid > 0.0).mean()) if not valid.empty else np.nan
 
+def summarize_event_records(
+    records: pd.DataFrame,
+    *,
+    min_sample_size: int = DEFAULT_MIN_SAMPLE_SIZE,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for event_name in EVENT_NAMES:
+        spec = EVENT_REGISTRY[event_name]
         event_records = records[records["event"] == event_name] if not records.empty else pd.DataFrame()
         row: dict[str, object] = {
             "event": event_name,
             "sample_size": int(len(event_records)),
         }
         for horizon in HORIZONS:
-            forward_return = numeric_column(event_records, f"forward_return_{horizon}")
-            relative_return = numeric_column(event_records, f"forward_relative_return_{horizon}")
-            row[f"avg_forward_return_{horizon}"] = mean_or_nan(forward_return)
-            row[f"median_forward_return_{horizon}"] = median_or_nan(forward_return)
-            row[f"avg_forward_relative_return_{horizon}"] = mean_or_nan(relative_return)
-            row[f"median_forward_relative_return_{horizon}"] = median_or_nan(relative_return)
-            row[f"hit_rate_forward_relative_return_{horizon}"] = hit_rate_or_nan(relative_return)
+            forward = event_records.get(f"forward_return_{horizon}", pd.Series(dtype=float))
+            relative = event_records.get(f"forward_relative_return_{horizon}", pd.Series(dtype=float))
+            row[f"avg_forward_return_{horizon}"] = mean_or_nan(forward)
+            row[f"median_forward_return_{horizon}"] = median_or_nan(forward)
+            row[f"avg_forward_relative_return_{horizon}"] = mean_or_nan(relative)
+            row[f"median_forward_relative_return_{horizon}"] = median_or_nan(relative)
+            row[f"hit_rate_forward_relative_return_{horizon}"] = hit_rate_or_nan(relative)
         for horizon in (14, 30):
-            drawdown = numeric_column(event_records, f"max_drawdown_{horizon}")
+            drawdown = event_records.get(f"max_drawdown_{horizon}", pd.Series(dtype=float))
             row[f"avg_max_drawdown_{horizon}"] = mean_or_nan(drawdown)
             row[f"median_max_drawdown_{horizon}"] = median_or_nan(drawdown)
+
+        row.update(
+            {
+                "event_id": event_name,
+                "event_family": spec.family,
+                "event_version": spec.version,
+                "unique_symbols": int(event_records["symbol"].nunique()) if not event_records.empty else 0,
+                "unique_event_dates": int(event_records["date"].nunique()) if not event_records.empty else 0,
+                "unique_event_clusters": int(event_records["event_cluster_id"].nunique()) if not event_records.empty else 0,
+                "max_symbol_event_share": max_share(event_records["symbol"]) if not event_records.empty else np.nan,
+                "max_cluster_event_share": max_share(event_records["event_cluster_id"]) if not event_records.empty else np.nan,
+            }
+        )
+        for horizon in HORIZONS:
+            relative = event_records.get(f"forward_relative_return_{horizon}", pd.Series(dtype=float))
+            row[f"p25_forward_relative_return_{horizon}"] = quantile_or_nan(relative, 0.25)
+            row[f"p75_forward_relative_return_{horizon}"] = quantile_or_nan(relative, 0.75)
+        first_half, second_half = split_half_medians(event_records, "forward_relative_return_30")
+        row["first_half_median_forward_relative_return_30"] = first_half
+        row["second_half_median_forward_relative_return_30"] = second_half
+        row["worst_cluster_median_forward_relative_return_30"] = worst_cluster_median(
+            event_records,
+            "forward_relative_return_30",
+        )
+        row["classification"], row["notes"] = _classify_summary_row(row, spec, min_sample_size=min_sample_size)
         rows.append(row)
 
     return pd.DataFrame(rows, columns=summary_columns())
 
 
-def run_event_study(analysis_frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_event_study(
+    analysis_frames: dict[str, pd.DataFrame],
+    *,
+    timeframe: str = "1d",
+    benchmark_name: str = "MEME_BASKET",
+    min_sample_size: int = DEFAULT_MIN_SAMPLE_SIZE,
+    entry_lag_bars: int = DEFAULT_EVENT_ENTRY_LAG_BARS,
+    cooldown_bars: int = DEFAULT_EVENT_COOLDOWN_BARS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     records = [
-        event_records_for_asset(symbol, frame)
+        event_records_for_asset(
+            symbol,
+            frame,
+            timeframe=timeframe,
+            benchmark_name=benchmark_name,
+            entry_lag_bars=entry_lag_bars,
+            cooldown_bars=cooldown_bars,
+        )
         for symbol, frame in analysis_frames.items()
         if not frame.empty
     ]
-    event_records = pd.concat(records, ignore_index=True) if records else pd.DataFrame()
-    return summarize_event_records(event_records), event_records
+    event_records = pd.concat(records, ignore_index=True) if records else pd.DataFrame(columns=RECORD_COLUMNS)
+    return summarize_event_records(event_records, min_sample_size=min_sample_size), event_records

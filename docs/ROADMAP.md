@@ -39,6 +39,8 @@ Next priorities:
 14. Use `state-research` to decide whether `state_model_v1_candidate` should be built as an evidence-weighted challenger.
 15. Use `score-research` to validate whether `opportunity_score_v0`, `trader_score_v0`, and setup component scores actually rank future relative outperformance.
 16. Do not build `opportunity_score_v1_candidate` until score research shows what v0 gets wrong.
+17. Harden Layer 7 evidence outputs before adding multi-timeframe logic so future complexity has a reliable referee.
+18. Use event-study records and Obsidian reports to decide which L3/L4/L5/L6 candidates deserve promotion notes.
 
 ## Stage 2: Crypto Sector Engine
 

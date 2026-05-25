@@ -13,12 +13,15 @@ from .event_study import run_event_study
 from .indicator_engine import calculate_indicator
 from .reports import (
     export_event_study_reports,
+    export_mtf_research_reports,
     export_scan_reports,
     export_score_research_reports,
     export_setup_research_reports,
     export_signal_research_reports,
     export_state_research_reports,
 )
+from .mtf import MTF_LEADERBOARD_COLUMNS, RESEARCH_MTF_PRESET, append_mtf_context, normalize_timeframe
+from .mtf_research import run_mtf_research
 from .resample import research_mtf_derivations, resample_universe
 from .score_research import run_score_research
 from .signal_research import run_signal_research
@@ -121,7 +124,12 @@ def _latest_notes(row: pd.Series) -> str:
     return "; ".join(notes)
 
 
-def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def build_leaderboard(
+    universe: UniverseConfig,
+    analysis_frames: dict[str, pd.DataFrame],
+    *,
+    include_mtf: bool = False,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     assets = universe.asset_by_symbol
 
@@ -141,45 +149,48 @@ def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.Da
             continue
 
         latest = analysis.loc[latest_index]
-        rows.append(
-            {
-                "symbol": symbol,
-                "name": asset.name,
-                "sector": asset.sector,
-                "subgroup": asset.subgroup,
-                "latest_close": latest.get("target"),
-                "final_signal": latest.get("final_signal"),
-                "price_component": latest.get("price_component"),
-                "relative_component": latest.get("relative_component"),
-                "viscosity": latest.get("viscosity"),
-                "above_viscosity": bool(latest.get("above_viscosity")) if pd.notna(latest.get("above_viscosity")) else False,
-                "gradient_driver": latest.get("gradient_driver"),
-                "compression_score": latest.get("compression_score"),
-                "compression_score_v0": latest.get("compression_score_v0"),
-                "compression_duration": latest.get("compression_duration"),
-                "compression_stability": latest.get("compression_stability"),
-                "leader_quality_score": latest.get("leader_quality_score"),
-                "compression_quality_score": latest.get("compression_quality_score"),
-                "relative_accumulation_score": latest.get("relative_accumulation_score"),
-                "setup_readiness_score": latest.get("setup_readiness_score"),
-                "extension_risk_score": latest.get("extension_risk_score"),
-                "data_quality_score": latest.get("data_quality_score"),
-                "trader_score_v0": latest.get("trader_score_v0"),
-                "state": latest.get("state"),
-                "state_model": latest.get("state_model"),
-                "state_confidence": latest.get("state_confidence"),
-                "state_reason": latest.get("state_reason"),
-                "state_tags": latest.get("state_tags"),
-                "setup_state_v0": latest.get("setup_state_v0"),
-                "setup_tags": latest.get("setup_tags"),
-                "opportunity_score": latest.get("opportunity_score"),
-                "opportunity_score_v0": latest.get("opportunity_score_v0"),
-                "notes": _latest_notes(latest),
-            }
-        )
+        row = {
+            "symbol": symbol,
+            "name": asset.name,
+            "sector": asset.sector,
+            "subgroup": asset.subgroup,
+            "latest_close": latest.get("target"),
+            "final_signal": latest.get("final_signal"),
+            "price_component": latest.get("price_component"),
+            "relative_component": latest.get("relative_component"),
+            "viscosity": latest.get("viscosity"),
+            "above_viscosity": bool(latest.get("above_viscosity")) if pd.notna(latest.get("above_viscosity")) else False,
+            "gradient_driver": latest.get("gradient_driver"),
+            "compression_score": latest.get("compression_score"),
+            "compression_score_v0": latest.get("compression_score_v0"),
+            "compression_duration": latest.get("compression_duration"),
+            "compression_stability": latest.get("compression_stability"),
+            "leader_quality_score": latest.get("leader_quality_score"),
+            "compression_quality_score": latest.get("compression_quality_score"),
+            "relative_accumulation_score": latest.get("relative_accumulation_score"),
+            "setup_readiness_score": latest.get("setup_readiness_score"),
+            "extension_risk_score": latest.get("extension_risk_score"),
+            "data_quality_score": latest.get("data_quality_score"),
+            "trader_score_v0": latest.get("trader_score_v0"),
+            "state": latest.get("state"),
+            "state_model": latest.get("state_model"),
+            "state_confidence": latest.get("state_confidence"),
+            "state_reason": latest.get("state_reason"),
+            "state_tags": latest.get("state_tags"),
+            "setup_state_v0": latest.get("setup_state_v0"),
+            "setup_tags": latest.get("setup_tags"),
+            "opportunity_score": latest.get("opportunity_score"),
+            "opportunity_score_v0": latest.get("opportunity_score_v0"),
+            "notes": _latest_notes(latest),
+        }
+        if include_mtf:
+            for column in MTF_LEADERBOARD_COLUMNS:
+                row[column] = latest.get(column)
+        rows.append(row)
 
     leaderboard = pd.DataFrame(rows)
-    for column in LEADERBOARD_COLUMNS:
+    columns = [*LEADERBOARD_COLUMNS, *MTF_LEADERBOARD_COLUMNS] if include_mtf else LEADERBOARD_COLUMNS
+    for column in columns:
         if column not in leaderboard.columns:
             leaderboard[column] = pd.NA
     if "trader_score_v0" in leaderboard.columns:
@@ -188,7 +199,7 @@ def build_leaderboard(universe: UniverseConfig, analysis_frames: dict[str, pd.Da
             method="min",
             na_option="bottom",
         )
-    leaderboard = leaderboard[LEADERBOARD_COLUMNS]
+    leaderboard = leaderboard[columns]
     return leaderboard.sort_values(["opportunity_score", "final_signal"], ascending=[False, False], na_position="last")
 
 
@@ -209,13 +220,74 @@ def load_and_analyze(
     return universe, leaderboard, analysis_frames, [*load_warnings, *analysis_warnings]
 
 
+def resolve_context_timeframes(args: argparse.Namespace) -> list[str]:
+    if getattr(args, "mtf_preset", None) == "research-mtf":
+        return list(RESEARCH_MTF_PRESET)
+    return [normalize_timeframe(timeframe) for timeframe in getattr(args, "context_timeframes", [])]
+
+
+def load_context_analysis_frames(
+    universe: UniverseConfig,
+    *,
+    data_dir: str | Path,
+    context_timeframes: list[str],
+) -> tuple[dict[str, dict[str, pd.DataFrame]], list[str]]:
+    context_by_timeframe: dict[str, dict[str, pd.DataFrame]] = {}
+    warnings: list[str] = []
+    for timeframe in context_timeframes:
+        raw_frames, load_warnings = load_universe_ohlcv(universe, data_dir=data_dir, timeframe=timeframe)
+        warnings.extend(f"{timeframe}: {warning}" for warning in load_warnings)
+        if not raw_frames:
+            context_by_timeframe[timeframe] = {}
+            continue
+        analysis_frames, _basket, analysis_warnings = build_analysis_frames(universe, raw_frames)
+        warnings.extend(f"{timeframe}: {warning}" for warning in analysis_warnings)
+        context_by_timeframe[timeframe] = analysis_frames
+    return context_by_timeframe, warnings
+
+
+def load_and_analyze_with_mtf(
+    config_path: str | Path,
+    data_dir: str | Path,
+    primary_timeframe: str,
+    context_timeframes: list[str],
+) -> tuple[UniverseConfig, pd.DataFrame, dict[str, pd.DataFrame], list[str]]:
+    universe, _leaderboard, primary_frames, warnings = load_and_analyze(
+        config_path,
+        data_dir=data_dir,
+        timeframe=primary_timeframe,
+    )
+    context_by_timeframe, context_warnings = load_context_analysis_frames(
+        universe,
+        data_dir=data_dir,
+        context_timeframes=context_timeframes,
+    )
+    enriched_frames = append_mtf_context(
+        primary_frames,
+        context_by_timeframe,
+        primary_timeframe=primary_timeframe,
+        context_timeframes=context_timeframes,
+    )
+    leaderboard = build_leaderboard(universe, enriched_frames, include_mtf=True)
+    return universe, leaderboard, enriched_frames, [*warnings, *context_warnings]
+
+
 def scan_command(args: argparse.Namespace) -> int:
     try:
-        universe, leaderboard, _analysis_frames, warnings = load_and_analyze(
-            args.config,
-            data_dir=args.data_dir,
-            timeframe=args.timeframe,
-        )
+        context_timeframes = resolve_context_timeframes(args)
+        if context_timeframes:
+            universe, leaderboard, _analysis_frames, warnings = load_and_analyze_with_mtf(
+                args.config,
+                data_dir=args.data_dir,
+                primary_timeframe=args.timeframe,
+                context_timeframes=context_timeframes,
+            )
+        else:
+            universe, leaderboard, _analysis_frames, warnings = load_and_analyze(
+                args.config,
+                data_dir=args.data_dir,
+                timeframe=args.timeframe,
+            )
     except Exception as exc:
         print(f"Scan failed: {exc}")
         return 1
@@ -230,6 +302,44 @@ def scan_command(args: argparse.Namespace) -> int:
     print(f"Wrote leaderboard CSV: {paths['csv']}")
     print(f"Wrote leaderboard HTML: {paths['html']}")
     print(f"Wrote Obsidian report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def mtf_research_command(args: argparse.Namespace) -> int:
+    try:
+        context_timeframes = [normalize_timeframe(timeframe) for timeframe in args.context_timeframes]
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze_with_mtf(
+            args.config,
+            data_dir=args.data_dir,
+            primary_timeframe=args.primary_timeframe,
+            context_timeframes=context_timeframes,
+        )
+    except Exception as exc:
+        print(f"MTF research failed: {exc}")
+        return 1
+
+    summary, records = run_mtf_research(
+        analysis_frames,
+        timeframe=args.primary_timeframe,
+        benchmark_name=universe.benchmark.name,
+        min_sample_size=args.min_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+        cooldown_bars=args.cooldown_bars,
+    )
+    paths = export_mtf_research_reports(
+        summary,
+        records,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote MTF research records CSV: {paths['records_csv']}")
+    print(f"Wrote MTF research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote MTF research HTML: {paths['summary_html']}")
+    print(f"Wrote Obsidian MTF research report: {paths['obsidian']}")
     if warnings:
         print(f"Warnings: {len(warnings)}")
     return 0
@@ -451,6 +561,18 @@ def build_parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan", help="Build the latest meme leaderboard.")
     add_common_arguments(scan)
     scan.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    scan.add_argument(
+        "--context-timeframes",
+        nargs="+",
+        default=[],
+        help="Optional MTF sidecar timeframes to append, such as 1w 3d 12h 4h.",
+    )
+    scan.add_argument(
+        "--mtf-preset",
+        choices=["none", "research-mtf"],
+        default="none",
+        help="Use research-mtf to append 1w/3d/12h/4h context columns.",
+    )
     scan.set_defaults(func=scan_command)
 
     event_study = subparsers.add_parser("event-study", help="Run Layer 7 event-study evidence reports.")
@@ -565,6 +687,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bars after the score observation before forward-return measurement starts.",
     )
     score_research.set_defaults(func=score_research_command)
+
+    mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
+    mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    mtf_research.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    mtf_research.add_argument("--report-dir", default="reports", help="Directory for CSV and HTML reports.")
+    mtf_research.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    mtf_research.add_argument(
+        "--primary-timeframe",
+        default="1d",
+        help="Primary timeframe suffix for the event side of MTF research.",
+    )
+    mtf_research.add_argument(
+        "--context-timeframes",
+        nargs="+",
+        default=list(RESEARCH_MTF_PRESET),
+        help="Completed context timeframes to join as a sidecar.",
+    )
+    mtf_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=20,
+        help="Minimum aligned and non-aligned sample size before classification can move beyond inconclusive.",
+    )
+    mtf_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the primary event before forward-return measurement starts.",
+    )
+    mtf_research.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol/MTF event can fire again.",
+    )
+    mtf_research.set_defaults(func=mtf_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

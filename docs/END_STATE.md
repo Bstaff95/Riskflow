@@ -255,6 +255,16 @@ Possible roles:
 
 The open question is whether multi-timeframe logic improves decision quality enough to justify the added complexity.
 
+Current version:
+
+- `mtf_context_v0` is an optional sidecar.
+- Default scans remain single-timeframe unless MTF is explicitly requested.
+- Completed-candle `available_at` joins prevent lookahead from weekly/3D/12H/4H bars.
+- Leader context and trader context labels describe support, conflict, reset, and chase risk.
+- `mtf-research` compares aligned versus non-aligned primary events using forward relative returns.
+
+Layer 8 should not become a hidden voting engine. It earns promotion only if it improves outcomes versus matching single-timeframe baselines.
+
 ### Layer 9: Capital-Flow Graph
 
 Represent markets as nodes and relationships.

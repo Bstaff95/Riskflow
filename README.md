@@ -34,6 +34,7 @@ It can:
 - Run a separate Layer 3 signal-research pass for challenger indicators.
 - Run Layer 4 setup research, Layer 5 state research, and Layer 6 score research without changing default leaderboard behavior.
 - Use a Layer 7 evidence engine to harden event studies with entry lag, cooldowns, concentration diagnostics, and Obsidian reports.
+- Add optional Layer 8 multi-timeframe context sidecars without changing default ranking or scan schema.
 
 ## Setup
 
@@ -106,6 +107,15 @@ Outputs:
 
 Leaderboard fields include signal, relative component, viscosity, compression score, setup-quality components, lifecycle state, state model/reason/tags, opportunity score, setup tags, and notes about missing data.
 
+Optional multi-timeframe context:
+
+```bash
+python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d --context-timeframes 1w 3d 12h 4h
+python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d --mtf-preset research-mtf
+```
+
+When MTF is requested, Riskflow appends `mtf_context_v0` columns such as leader context, trader context, alignment tags, conflict tags, and selected 1W/3D/12H/4H signal fields. Without those flags, scan output columns remain unchanged.
+
 ## Run Event Study
 
 ```bash
@@ -176,6 +186,21 @@ Outputs:
 
 Score research tests whether high `opportunity_score_v0`, `trader_score_v0`, and setup component scores actually rank future relative outperformance. It uses date-wise buckets, top-minus-bottom spreads, rank IC, drawdown, and concentration diagnostics. It does not retune scores or change default leaderboard sorting.
 
+## Run Multi-Timeframe Research
+
+```bash
+python3 -m riskflow mtf-research --config configs/meme_universe.yaml --primary-timeframe 1d --context-timeframes 1w 3d 12h 4h
+```
+
+Outputs:
+
+- `reports/mtf_research_records.csv`
+- `reports/mtf_research_summary.csv`
+- `reports/mtf_research_summary.html`
+- `obsidian/reports/latest_mtf_research.md`
+
+MTF research compares primary-timeframe events with and without completed higher/lower timeframe support. It is evidence for future context badges, not permission to change the default leaderboard ranking.
+
 ## Run Signal Research
 
 ```bash
@@ -218,6 +243,8 @@ Durable project context lives in `docs/`:
 - `docs/LAYER_4_SETUP_QUALITY.md` explains setup quality, Trader Mode readiness, and Layer 4 versioning.
 - `docs/LAYER_5_LIFECYCLE_STATES.md` explains lifecycle state contracts and state research.
 - `docs/LAYER_6_OPPORTUNITY_SCORING.md` explains score validation and promotion gates.
+- `docs/LAYER_7_EVIDENCE_ENGINE.md` explains shared evidence methodology and promotion gates.
+- `docs/LAYER_8_MULTI_TIMEFRAME_CONTEXT.md` explains optional MTF context, completed-candle joins, and MTF research.
 - `docs/LAYER_7_EVIDENCE_ENGINE.md` explains event-study hardening and evidence promotion gates.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.

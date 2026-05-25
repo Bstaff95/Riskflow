@@ -45,6 +45,9 @@ states.py classifies lifecycle state
 scoring.py calculates opportunity score
         |
         v
+mtf.py optionally appends completed multi-timeframe context
+        |
+        v
 reports.py exports CSV/HTML/Obsidian markdown
 ```
 
@@ -128,6 +131,12 @@ Layer 7 is documented in `docs/LAYER_7_EVIDENCE_ENGINE.md`.
 
 Layer 7 hardens event-study methodology and shared evidence math. It owns forward outcome calculations, event metadata contracts, entry lag, cooldown, concentration diagnostics, classifications, and promotion gates. It does not change signal, setup, state, or score formulas.
 
+## Multi-Timeframe Context Direction
+
+Layer 8 is documented in `docs/LAYER_8_MULTI_TIMEFRAME_CONTEXT.md`.
+
+Layer 8 adds optional `mtf_context_v0` sidecar fields. It uses completed-candle `available_at` timestamps and as-of joins so higher-timeframe context is never visible before the bar closes. MTF context is research and interpretation support only; it does not change default scan schemas, scores, states, or leaderboard ranking unless explicitly requested and later promoted with Layer 7 evidence.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -146,6 +155,8 @@ Layer 7 hardens event-study methodology and shared evidence math. It owns forwar
 - `event_registry.py`: explicit Layer 7 event identities, metadata, defaults, and event-family contracts.
 - `research_outcomes.py`: shared forward returns, relative returns, drawdowns, cooldowns, clustering, and summary helpers.
 - `event_study.py`: event detection and forward absolute/relative return summaries.
+- `mtf.py`: Layer 8 completed-candle multi-timeframe context joins and deterministic context labels.
+- `mtf_research.py`: Layer 8 aligned versus non-aligned MTF evidence reports.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
@@ -162,7 +173,14 @@ python3 -m riskflow signal-research --config configs/meme_universe.yaml --timefr
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow mtf-research --config configs/meme_universe.yaml --primary-timeframe 1d --context-timeframes 1w 3d 12h 4h
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
+```
+
+Optional scan MTF sidecar:
+
+```bash
+python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d --mtf-preset research-mtf
 ```
 
 ## Generated Files

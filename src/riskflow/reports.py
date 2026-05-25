@@ -32,6 +32,10 @@ SCORE_RESEARCH_IC_SUMMARY_CSV = "score_research_ic_summary.csv"
 SCORE_RESEARCH_SCORE_SUMMARY_CSV = "score_research_score_summary.csv"
 SCORE_RESEARCH_SUMMARY_HTML = "score_research_summary.html"
 OBSIDIAN_SCORE_RESEARCH_MD = "latest_score_research.md"
+MTF_RESEARCH_RECORDS_CSV = "mtf_research_records.csv"
+MTF_RESEARCH_SUMMARY_CSV = "mtf_research_summary.csv"
+MTF_RESEARCH_SUMMARY_HTML = "mtf_research_summary.html"
+OBSIDIAN_MTF_RESEARCH_MD = "latest_mtf_research.md"
 
 
 def _format_value(value: object) -> str:
@@ -121,6 +125,20 @@ def build_obsidian_scan_report(
         "state_tags",
         "setup_tags",
     ]
+    mtf_columns = [
+        "mtf_leader_context",
+        "mtf_trader_context",
+        "mtf_notes",
+        "mtf_conflict_tags",
+    ]
+    columns.extend([column for column in mtf_columns if column in leaderboard.columns])
+    obsidian_names = {
+        "mtf_leader_context": "Leader Context",
+        "mtf_trader_context": "Trader Context",
+        "mtf_notes": "MTF Note",
+        "mtf_conflict_tags": "Conflict Tags",
+    }
+    markdown_columns = [obsidian_names.get(column, column) for column in columns]
     top_opportunities = leaderboard.sort_values("opportunity_score", ascending=False)
     strongest = leaderboard.sort_values("relative_component", ascending=False)
     compressed_emerging = leaderboard[
@@ -153,19 +171,19 @@ Universe: {universe.name}
 Benchmark: {universe.benchmark.name}
 
 ## Top Opportunities
-{dataframe_to_markdown(top_opportunities, columns=columns, max_rows=10)}
+{dataframe_to_markdown(top_opportunities.rename(columns=obsidian_names), columns=markdown_columns, max_rows=10)}
 
 ## Strongest Relative Leaders
-{dataframe_to_markdown(strongest, columns=columns, max_rows=10)}
+{dataframe_to_markdown(strongest.rename(columns=obsidian_names), columns=markdown_columns, max_rows=10)}
 
 ## Compressed Emerging Leaders
-{dataframe_to_markdown(compressed_emerging, columns=columns, max_rows=10)}
+{dataframe_to_markdown(compressed_emerging.rename(columns=obsidian_names), columns=markdown_columns, max_rows=10)}
 
 ## Overheated Leaders
-{dataframe_to_markdown(overheated, columns=columns, max_rows=10)}
+{dataframe_to_markdown(overheated.rename(columns=obsidian_names), columns=markdown_columns, max_rows=10)}
 
 ## Laggards
-{dataframe_to_markdown(laggards, columns=columns, max_rows=10)}
+{dataframe_to_markdown(laggards.rename(columns=obsidian_names), columns=markdown_columns, max_rows=10)}
 
 ## Warnings
 {warning_section}
@@ -602,6 +620,118 @@ def export_score_research_reports(
         "bucket_summary_csv": bucket_csv_path,
         "ic_summary_csv": ic_csv_path,
         "score_summary_csv": score_csv_path,
+        "summary_html": summary_html_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_mtf_research_report(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    columns = [
+        "mtf_event",
+        "classification",
+        "aligned_sample_size",
+        "non_aligned_sample_size",
+        "aligned_minus_non_aligned_spread_14",
+        "aligned_minus_non_aligned_spread_30",
+        "aligned_hit_rate_forward_relative_return_14",
+        "non_aligned_hit_rate_forward_relative_return_14",
+        "aligned_median_max_drawdown_30",
+        "non_aligned_median_max_drawdown_30",
+        "notes",
+    ]
+    useful = summary[summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "aligned_minus_non_aligned_spread_30"],
+        ascending=[True, False],
+    )
+    fragile = summary[summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    concentrated = summary[
+        (summary["max_symbol_share"] > 0.55)
+        | (summary["max_cluster_share"] > 0.60)
+    ].sort_values("sample_size", ascending=False)
+
+    verdict = "No MTF context event has enough useful/watchlist evidence yet."
+    if not useful.empty:
+        verdict = f"{len(useful)} MTF comparisons reached useful/watchlist evidence gates. Treat as context evidence, not a ranking change."
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    return f"""# Latest Multi-Timeframe Research
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+Records: {len(records)}
+
+## Verdict
+{verdict}
+
+## Useful / Watchlist MTF Comparisons
+{dataframe_to_markdown(useful, columns=columns, max_rows=20)}
+
+## Fragile / Inconclusive MTF Comparisons
+{dataframe_to_markdown(fragile, columns=columns, max_rows=20)}
+
+## Concentration Risks
+{dataframe_to_markdown(concentrated, columns=columns, max_rows=20)}
+
+## Promotion Eligibility
+MTF context cannot change production ranking until aligned groups beat matching non-aligned baselines on forward relative return, hit rate, drawdown, and concentration checks.
+
+## Next Research Questions
+- Rerun after ex-target baskets exist.
+- Compare daily setup events with and without completed 3D/1W support.
+- Check whether 4H reset context improves Trader Mode timing without worsening drawdown.
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Multi-Timeframe Context]]
+- [[Event Studies]]
+- [[Opportunity Score]]
+- [[Riskflow]]
+"""
+
+
+def export_mtf_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    records_csv_path = report_path / MTF_RESEARCH_RECORDS_CSV
+    summary_csv_path = report_path / MTF_RESEARCH_SUMMARY_CSV
+    summary_html_path = report_path / MTF_RESEARCH_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_MTF_RESEARCH_MD
+
+    records.to_csv(records_csv_path, index=False)
+    summary.to_csv(summary_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 8 Multi-Timeframe Research Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_mtf_research_report(summary, records, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "records_csv": records_csv_path,
+        "summary_csv": summary_csv_path,
         "summary_html": summary_html_path,
         "obsidian": obsidian_path,
     }

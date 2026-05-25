@@ -41,6 +41,8 @@ Next priorities:
 16. Do not build `opportunity_score_v1_candidate` until score research shows what v0 gets wrong.
 17. Harden Layer 7 evidence outputs before adding multi-timeframe logic so future complexity has a reliable referee.
 18. Use event-study records and Obsidian reports to decide which L3/L4/L5/L6 candidates deserve promotion notes.
+19. Use Layer 8 MTF context as an optional sidecar only, with completed-candle joins and no default ranking changes.
+20. Run `mtf-research` to test whether 3D/1W support and 12H/4H reset context improve primary daily outcomes.
 
 ## Stage 2: Crypto Sector Engine
 
@@ -84,6 +86,13 @@ Potential labels:
 - overheated
 - failed reclaim
 - compressed gem
+
+Current Layer 8 implementation is intentionally conservative:
+
+- `mtf_context_v0` appends optional context columns only when requested.
+- Higher-timeframe joins use completed-candle `available_at` timestamps.
+- `mtf-research` compares aligned versus non-aligned primary events.
+- No MTF voting score, probability label, alerting layer, or leaderboard promotion exists yet.
 
 ## Stage 4: Probabilistic Transitions
 

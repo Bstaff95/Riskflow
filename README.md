@@ -36,6 +36,7 @@ It can:
 - Use a Layer 7 evidence engine to harden event studies with entry lag, cooldowns, concentration diagnostics, and Obsidian reports.
 - Add optional Layer 8 multi-timeframe context sidecars without changing default ranking or scan schema.
 - Export Layer 9 capital-flow graph tables and graph evidence without changing default ranking.
+- Run Layer 10 transition evidence reports without turning observed rates into forecasts.
 
 ## Setup
 
@@ -231,6 +232,29 @@ Outputs:
 - `obsidian/reports/latest_flow_graph.md`
 
 Flow research tests whether primary asset events work better when chain context is supportive. It does not change default scan ranking.
+
+## Run Transition Research
+
+```bash
+python3 -m riskflow transition-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/transition_research_records.csv`
+- `reports/transition_research_summary.csv`
+- `reports/transition_matrix_unconditional.csv`
+- `reports/transition_matrix_conditioned.csv`
+- `reports/transition_research_summary.html`
+- `obsidian/reports/latest_transition_research.md`
+
+Transition research studies completed lifecycle-state changes, such as `Compression -> Relative Accumulation`, then reports observed historical transition rates, Wilson uncertainty intervals, forward relative returns, drawdowns, and concentration diagnostics. These are research tendencies, not predictions.
+
+Optional MTF conditioning:
+
+```bash
+python3 -m riskflow transition-research --config configs/meme_universe.yaml --timeframe 1d --mtf-preset research-mtf
+```
 
 ## Run Signal Research
 

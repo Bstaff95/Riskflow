@@ -45,6 +45,7 @@ Next priorities:
 20. Run `mtf-research` to test whether 3D/1W support and 12H/4H reset context improve primary daily outcomes.
 21. Use Layer 9 flow-graph tables to represent asset -> subgroup -> sector -> basket relationships without claiming literal fund flows.
 22. Run `flow-research` to test whether supportive chain context improves primary asset events before any graph-based ranking promotion.
+23. Use Layer 10 `transition-research` to study completed state transitions as observed historical tendencies, not forecasts.
 
 ## Stage 2: Crypto Sector Engine
 
@@ -98,13 +99,20 @@ Current Layer 8 implementation is intentionally conservative:
 
 ## Stage 4: Probabilistic Transitions
 
-After lifecycle states are validated:
+After lifecycle states are validated and L10 evidence is strong enough:
 
 - transition matrices
 - conditional transitions by parent state
 - expansion/chop/failure probabilities
 
-Do not build this before states and event studies have enough evidence.
+Current Layer 10 implementation is intentionally conservative:
+
+- `transition_research_v0` studies completed state-run transitions.
+- Outputs use observed transition rates plus Wilson uncertainty intervals.
+- Chain and MTF context are optional conditioning fields.
+- No Markov engine, calibrated probability label, TradingView badge, or ranking change exists yet.
+
+Do not promote transition evidence into product probability language before states, chain context, and real data have enough evidence.
 
 ## Stage 5: Historical Analog Search
 

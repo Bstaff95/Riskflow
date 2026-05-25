@@ -307,7 +307,15 @@ Potential questions:
 - Does Emerging Leader work better when parent sector support is strong?
 - Does Breakdown matter more when the parent is weakening?
 
-This is future work. Building it too early would give false precision.
+Current version:
+
+- `transition_research_v0` is a research-only transition evidence layer.
+- It studies completed state-run changes, not every bar of state occupancy.
+- It reports observed historical transition rates with Wilson uncertainty intervals.
+- It conditions evidence by chain support and optional MTF context.
+- It uses forward relative returns, hit rates, drawdown, sample size, and concentration diagnostics.
+
+Layer 10 should not become production probability language until the evidence is strong enough. For now, say “observed transition rate” or “historical transition tendency,” not “chance,” “prediction,” or “odds.”
 
 ### Layer 11: Historical Analog Search
 

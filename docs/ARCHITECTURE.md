@@ -146,6 +146,12 @@ Layer 9 is documented in `docs/LAYER_9_CAPITAL_FLOW_GRAPH.md`.
 
 Layer 9 adds optional `capital_flow_graph_v0` table outputs for nodes, edges, and chains. It treats capital flow as inferred relative leadership context, not literal fund-flow proof. Current subgroup and sector graph nodes are structural placeholders until Layer 2 adds independent subgroup/sector baskets and benchmark confidence.
 
+## Transition Evidence Direction
+
+Layer 10 is documented in `docs/LAYER_10_TRANSITION_EVIDENCE.md`.
+
+Layer 10 adds `transition_research_v0`, a research-only layer for completed lifecycle-state transitions. It reports observed historical transition rates, Wilson uncertainty intervals, forward relative-return outcomes, concentration diagnostics, and optional chain/MTF conditioning. It does not add production Markov logic, probability labels, ranking changes, or TradingView odds.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -168,6 +174,8 @@ Layer 9 adds optional `capital_flow_graph_v0` table outputs for nodes, edges, an
 - `mtf_research.py`: Layer 8 aligned versus non-aligned MTF evidence reports.
 - `flow_graph.py`: Layer 9 table-based capital-flow graph nodes, edges, and chain context.
 - `flow_research.py`: Layer 9 supportive-chain versus non-supportive-chain evidence reports.
+- `transition_registry.py`: explicit Layer 10 transition research identity and language contract.
+- `transition_research.py`: Layer 10 completed state-run transition evidence, observed rates, and conditioned summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
@@ -187,6 +195,7 @@ python3 -m riskflow score-research --config configs/meme_universe.yaml --timefra
 python3 -m riskflow mtf-research --config configs/meme_universe.yaml --primary-timeframe 1d --context-timeframes 1w 3d 12h 4h
 python3 -m riskflow flow-graph --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow flow-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow transition-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

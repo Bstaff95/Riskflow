@@ -23,6 +23,7 @@ from .reports import (
     export_setup_research_reports,
     export_signal_research_reports,
     export_state_research_reports,
+    export_transition_research_reports,
 )
 from .mtf import MTF_LEADERBOARD_COLUMNS, RESEARCH_MTF_PRESET, append_mtf_context, normalize_timeframe
 from .mtf_research import run_mtf_research
@@ -33,6 +34,7 @@ from .setup_quality import calculate_setup_quality
 from .setup_research import run_setup_research
 from .state_research import run_state_research
 from .states import classify_state_frame
+from .transition_research import run_transition_research
 
 
 LEADERBOARD_COLUMNS = [
@@ -414,6 +416,54 @@ def flow_research_command(args: argparse.Namespace) -> int:
     print(f"Wrote flow research summary CSV: {paths['summary_csv']}")
     print(f"Wrote flow research HTML: {paths['summary_html']}")
     print(f"Wrote Obsidian flow research report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def transition_research_command(args: argparse.Namespace) -> int:
+    try:
+        context_timeframes = resolve_context_timeframes(args)
+        if context_timeframes:
+            universe, _leaderboard, analysis_frames, warnings = load_and_analyze_with_mtf(
+                args.config,
+                data_dir=args.data_dir,
+                primary_timeframe=args.timeframe,
+                context_timeframes=context_timeframes,
+            )
+        else:
+            universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+                args.config,
+                data_dir=args.data_dir,
+                timeframe=args.timeframe,
+            )
+    except Exception as exc:
+        print(f"Transition research failed: {exc}")
+        return 1
+
+    summary, records, unconditional, conditioned = run_transition_research(
+        universe,
+        analysis_frames,
+        timeframe=args.timeframe,
+        min_sample_size=args.min_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+    )
+    paths = export_transition_research_reports(
+        summary,
+        records,
+        unconditional,
+        conditioned,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote transition research records CSV: {paths['records_csv']}")
+    print(f"Wrote transition research summary CSV: {paths['summary_csv']}")
+    print(f"Wrote unconditional transition matrix CSV: {paths['unconditional_csv']}")
+    print(f"Wrote conditioned transition matrix CSV: {paths['conditioned_csv']}")
+    print(f"Wrote transition research HTML: {paths['summary_html']}")
+    print(f"Wrote Obsidian transition research report: {paths['obsidian']}")
     if warnings:
         print(f"Warnings: {len(warnings)}")
     return 0
@@ -825,6 +875,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum bars before the same symbol/flow event can fire again.",
     )
     flow_research.set_defaults(func=flow_research_command)
+
+    transition_research = subparsers.add_parser("transition-research", help="Run Layer 10 transition evidence reports.")
+    add_common_arguments(transition_research)
+    transition_research.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    transition_research.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=5,
+        help="Minimum transition-pair sample size before classification can move beyond inconclusive.",
+    )
+    transition_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the transition event before forward-return measurement starts.",
+    )
+    transition_research.add_argument(
+        "--context-timeframes",
+        nargs="+",
+        default=[],
+        help="Optional MTF sidecar timeframes to condition transition evidence, such as 1w 3d 12h 4h.",
+    )
+    transition_research.add_argument(
+        "--mtf-preset",
+        choices=["none", "research-mtf"],
+        default="none",
+        help="Use research-mtf to condition transitions on 1w/3d/12h/4h context.",
+    )
+    transition_research.set_defaults(func=transition_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

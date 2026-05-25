@@ -43,6 +43,12 @@ FLOW_RESEARCH_RECORDS_CSV = "flow_research_records.csv"
 FLOW_RESEARCH_SUMMARY_CSV = "flow_research_summary.csv"
 FLOW_RESEARCH_SUMMARY_HTML = "flow_research_summary.html"
 OBSIDIAN_FLOW_GRAPH_MD = "latest_flow_graph.md"
+TRANSITION_RESEARCH_RECORDS_CSV = "transition_research_records.csv"
+TRANSITION_RESEARCH_SUMMARY_CSV = "transition_research_summary.csv"
+TRANSITION_MATRIX_UNCONDITIONAL_CSV = "transition_matrix_unconditional.csv"
+TRANSITION_MATRIX_CONDITIONED_CSV = "transition_matrix_conditioned.csv"
+TRANSITION_RESEARCH_SUMMARY_HTML = "transition_research_summary.html"
+OBSIDIAN_TRANSITION_RESEARCH_MD = "latest_transition_research.md"
 
 
 def _format_value(value: object) -> str:
@@ -935,6 +941,149 @@ def export_flow_research_reports(
     return {
         "records_csv": records_csv_path,
         "summary_csv": summary_csv_path,
+        "summary_html": summary_html_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_transition_research_report(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    unconditional: pd.DataFrame,
+    conditioned: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    columns = [
+        "from_state",
+        "to_state",
+        "classification",
+        "sample_size",
+        "observed_transition_rate",
+        "wilson_80_lower",
+        "wilson_80_upper",
+        "median_duration_before_transition",
+        "median_forward_relative_return_14",
+        "median_forward_relative_return_30",
+        "hit_rate_forward_relative_return_14",
+        "median_max_drawdown_30",
+        "notes",
+    ]
+    conditioned_columns = [
+        "condition_type",
+        "condition_group",
+        "from_state",
+        "to_state",
+        "sample_size",
+        "observed_transition_rate",
+        "median_forward_relative_return_30",
+        "classification",
+        "notes",
+    ]
+    useful = summary[summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "median_forward_relative_return_30"],
+        ascending=[True, False],
+    )
+    fragile = summary[summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    concentrated = summary[
+        (summary["max_symbol_transition_share"] > 0.55)
+        | (summary["max_cluster_transition_share"] > 0.60)
+    ].sort_values("sample_size", ascending=False)
+    top_conditioned = conditioned[conditioned["sample_size"] > 0].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+
+    verdict = "No transition pair has enough useful/watchlist evidence yet."
+    if not useful.empty:
+        verdict = f"{len(useful)} transition pairs reached useful/watchlist evidence gates. Treat as observed historical tendencies, not forecasts."
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    return f"""# Latest Transition Research
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+Transition Model: transition_research_v0
+Records: {len(records)}
+
+## Verdict
+{verdict}
+
+## Useful / Watchlist Transitions
+{dataframe_to_markdown(useful, columns=columns, max_rows=30)}
+
+## Fragile / Inconclusive Transitions
+{dataframe_to_markdown(fragile, columns=columns, max_rows=30)}
+
+## Concentration Risks
+{dataframe_to_markdown(concentrated, columns=columns, max_rows=20)}
+
+## Conditioned Transition Evidence
+{dataframe_to_markdown(top_conditioned, columns=conditioned_columns, max_rows=30)}
+
+## Promotion Eligibility
+Transition evidence cannot become product probability language until it survives sample-size, uncertainty, concentration, and out-of-sample stability checks.
+
+## Warnings
+{warning_section}
+
+## Notes
+- Observed transition rates are historical frequencies, not true probabilities or forecasts.
+- Same-state persistence is handled as duration evidence, not as a state transition.
+- Chain and MTF context are sidecar conditions only.
+
+## Concept Links
+- [[Lifecycle States]]
+- [[Capital Flow Graph]]
+- [[Event Studies]]
+- [[Riskflow]]
+"""
+
+
+def export_transition_research_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    unconditional: pd.DataFrame,
+    conditioned: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    records_csv_path = report_path / TRANSITION_RESEARCH_RECORDS_CSV
+    summary_csv_path = report_path / TRANSITION_RESEARCH_SUMMARY_CSV
+    unconditional_csv_path = report_path / TRANSITION_MATRIX_UNCONDITIONAL_CSV
+    conditioned_csv_path = report_path / TRANSITION_MATRIX_CONDITIONED_CSV
+    summary_html_path = report_path / TRANSITION_RESEARCH_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_TRANSITION_RESEARCH_MD
+
+    records.to_csv(records_csv_path, index=False)
+    summary.to_csv(summary_csv_path, index=False)
+    unconditional.to_csv(unconditional_csv_path, index=False)
+    conditioned.to_csv(conditioned_csv_path, index=False)
+    write_html_report(summary, summary_html_path, "Layer 10 Transition Research Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_transition_research_report(summary, records, unconditional, conditioned, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "records_csv": records_csv_path,
+        "summary_csv": summary_csv_path,
+        "unconditional_csv": unconditional_csv_path,
+        "conditioned_csv": conditioned_csv_path,
         "summary_html": summary_html_path,
         "obsidian": obsidian_path,
     }

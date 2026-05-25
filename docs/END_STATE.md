@@ -217,6 +217,8 @@ Current idea:
 
 The score should remain explainable. If a score cannot be decomposed into understandable parts, it is probably too clever for this phase.
 
+Layer 6 should also validate ranking behavior. High scores should be treated as attention priorities, not probabilities. The score earns trust only if top buckets beat lower buckets on forward relative returns, hit rates, drawdown, and concentration diagnostics. Future score candidates should run side by side against `opportunity_score_v0` before any default leaderboard change.
+
 ### Layer 7: Event Studies
 
 Test whether the signals matter.

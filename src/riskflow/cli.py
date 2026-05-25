@@ -14,11 +14,13 @@ from .indicator_engine import calculate_indicator
 from .reports import (
     export_event_study_reports,
     export_scan_reports,
+    export_score_research_reports,
     export_setup_research_reports,
     export_signal_research_reports,
     export_state_research_reports,
 )
 from .resample import research_mtf_derivations, resample_universe
+from .score_research import run_score_research
 from .signal_research import run_signal_research
 from .setup_quality import calculate_setup_quality
 from .setup_research import run_setup_research
@@ -346,6 +348,47 @@ def state_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def score_research_command(args: argparse.Namespace) -> int:
+    try:
+        universe, _leaderboard, analysis_frames, warnings = load_and_analyze(
+            args.config,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+    except Exception as exc:
+        print(f"Score research failed: {exc}")
+        return 1
+
+    score_summary, bucket_summary, ic_summary, records = run_score_research(
+        analysis_frames,
+        timeframe=args.timeframe,
+        benchmark_name=universe.benchmark.name,
+        bucket_count=args.bucket_count,
+        min_symbols_per_date=args.min_symbols_per_date,
+        min_bucket_sample_size=args.min_bucket_sample_size,
+        entry_lag_bars=args.entry_lag_bars,
+    )
+    paths = export_score_research_reports(
+        score_summary,
+        bucket_summary,
+        ic_summary,
+        records,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote score research records CSV: {paths['records_csv']}")
+    print(f"Wrote score bucket summary CSV: {paths['bucket_summary_csv']}")
+    print(f"Wrote score IC summary CSV: {paths['ic_summary_csv']}")
+    print(f"Wrote score summary CSV: {paths['score_summary_csv']}")
+    print(f"Wrote score research HTML: {paths['summary_html']}")
+    print(f"Wrote Obsidian score research report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -458,6 +501,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bars after the state observation before forward-return measurement starts.",
     )
     state_research.set_defaults(func=state_research_command)
+
+    score_research = subparsers.add_parser("score-research", help="Run Layer 6 score ranking research.")
+    add_common_arguments(score_research)
+    score_research.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    score_research.add_argument(
+        "--bucket-count",
+        type=int,
+        default=10,
+        help="Requested date-wise score bucket count.",
+    )
+    score_research.add_argument(
+        "--min-symbols-per-date",
+        type=int,
+        default=5,
+        help="Minimum valid symbols on a date before calculating rank IC.",
+    )
+    score_research.add_argument(
+        "--min-bucket-sample-size",
+        type=int,
+        default=20,
+        help="Minimum bucket observation count before a bucket result can be classified beyond inconclusive.",
+    )
+    score_research.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the score observation before forward-return measurement starts.",
+    )
+    score_research.set_defaults(func=score_research_command)
 
     resample = subparsers.add_parser("resample", help="Derive higher-timeframe OHLCV CSVs from lower-timeframe files.")
     resample.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

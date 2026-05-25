@@ -114,6 +114,14 @@ The active deterministic state model is `state_model_v0`. The state layer keeps 
 
 State research evaluates whether state labels preserve useful future information. The `state-research` command exports state-level forward relative returns, duration diagnostics, concentration checks, and transition matrices without changing production scan behavior.
 
+## Opportunity Score Direction
+
+Layer 6 is documented in `docs/LAYER_6_OPPORTUNITY_SCORING.md`.
+
+The active leaderboard score remains `opportunity_score_v0`, exposed through the backward-compatible `opportunity_score` column. Layer 6 validates whether high-scored assets actually deserve attention by studying date-wise buckets, top-minus-bottom spreads, rank IC, forward relative returns, drawdowns, and concentration risk.
+
+Score identities live in `score_registry.py`. Future score formulas should be added as versioned candidates, not silent edits to the active leaderboard ranking.
+
 ## Package Modules
 
 - `config.py`: YAML loading into dataclasses.
@@ -127,6 +135,8 @@ State research evaluates whether state labels preserve useful future information
 - `states.py`: deterministic lifecycle state classification plus reasons, confidence, and state tags.
 - `state_research.py`: Layer 5 state outcome research, duration diagnostics, and transition matrices.
 - `scoring.py`: explainable opportunity score.
+- `score_registry.py`: explicit Layer 6 score identities, research targets, roles, and active/candidate contracts.
+- `score_research.py`: Layer 6 ranking validation using buckets, rank IC, forward relative returns, drawdown, and concentration diagnostics.
 - `event_study.py`: event detection and forward absolute/relative return summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
@@ -143,6 +153,7 @@ python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
 

@@ -32,6 +32,7 @@ It can:
 - Export leaderboard CSV, HTML, and Obsidian markdown reports.
 - Run simple event studies focused on forward relative returns.
 - Run a separate Layer 3 signal-research pass for challenger indicators.
+- Run Layer 4 setup research, Layer 5 state research, and Layer 6 score research without changing default leaderboard behavior.
 
 ## Setup
 
@@ -129,6 +130,8 @@ Outputs:
 - `reports/setup_research_summary.html`
 - `reports/setup_research_records.csv`
 
+This command tests Layer 4 setup events, such as compression plus relative strength rising, setup readiness, extension risk, and `trader_score_v0` threshold events. It does not change the default leaderboard ranking.
+
 ## Run State Research
 
 ```bash
@@ -145,7 +148,22 @@ Outputs:
 
 State research evaluates whether lifecycle labels have historically separated future relative returns, drawdowns, duration, and next-state transitions. It does not replace the active `state_model_v0` labels.
 
-This command tests Layer 4 setup events, such as compression plus relative strength rising, setup readiness, extension risk, and `trader_score_v0` threshold events. It does not change the default leaderboard ranking.
+## Run Score Research
+
+```bash
+python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/score_research_records.csv`
+- `reports/score_research_bucket_summary.csv`
+- `reports/score_research_ic_summary.csv`
+- `reports/score_research_score_summary.csv`
+- `reports/score_research_summary.html`
+- `obsidian/reports/latest_score_research.md`
+
+Score research tests whether high `opportunity_score_v0`, `trader_score_v0`, and setup component scores actually rank future relative outperformance. It uses date-wise buckets, top-minus-bottom spreads, rank IC, drawdown, and concentration diagnostics. It does not retune scores or change default leaderboard sorting.
 
 ## Run Signal Research
 
@@ -187,6 +205,8 @@ Durable project context lives in `docs/`:
 - `docs/WORKFLOW.md` explains the GitHub, Codex, and Obsidian workflow.
 - `docs/LAYER_3_SIGNAL_RESEARCH.md` explains the adversarial signal-research plan.
 - `docs/LAYER_4_SETUP_QUALITY.md` explains setup quality, Trader Mode readiness, and Layer 4 versioning.
+- `docs/LAYER_5_LIFECYCLE_STATES.md` explains lifecycle state contracts and state research.
+- `docs/LAYER_6_OPPORTUNITY_SCORING.md` explains score validation and promotion gates.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.
 

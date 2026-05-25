@@ -37,6 +37,8 @@ Next priorities:
 12. Review Layer 4 setup-quality components and decide when Trader Mode should get a separate ranking.
 13. Validate `state_model_v0` with state-level event studies before adding transition probabilities.
 14. Use `state-research` to decide whether `state_model_v1_candidate` should be built as an evidence-weighted challenger.
+15. Use `score-research` to validate whether `opportunity_score_v0`, `trader_score_v0`, and setup component scores actually rank future relative outperformance.
+16. Do not build `opportunity_score_v1_candidate` until score research shows what v0 gets wrong.
 
 ## Stage 2: Crypto Sector Engine
 

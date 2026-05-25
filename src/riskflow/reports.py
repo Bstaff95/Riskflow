@@ -24,6 +24,12 @@ STATE_RESEARCH_SUMMARY_HTML = "state_research_summary.html"
 STATE_RESEARCH_RECORDS_CSV = "state_research_records.csv"
 STATE_TRANSITION_MATRIX_CSV = "state_transition_matrix.csv"
 OBSIDIAN_STATE_RESEARCH_MD = "latest_state_research.md"
+SCORE_RESEARCH_RECORDS_CSV = "score_research_records.csv"
+SCORE_RESEARCH_BUCKET_SUMMARY_CSV = "score_research_bucket_summary.csv"
+SCORE_RESEARCH_IC_SUMMARY_CSV = "score_research_ic_summary.csv"
+SCORE_RESEARCH_SCORE_SUMMARY_CSV = "score_research_score_summary.csv"
+SCORE_RESEARCH_SUMMARY_HTML = "score_research_summary.html"
+OBSIDIAN_SCORE_RESEARCH_MD = "latest_score_research.md"
 
 
 def _format_value(value: object) -> str:
@@ -361,5 +367,136 @@ def export_state_research_reports(
         "summary_html": summary_html_path,
         "records_csv": records_csv_path,
         "transition_csv": transition_csv_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_score_research_report(
+    score_summary: pd.DataFrame,
+    bucket_summary: pd.DataFrame,
+    ic_summary: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    score_columns = [
+        "score_id",
+        "classification",
+        "top_bucket",
+        "top_bucket_sample_size",
+        "top_bucket_median_forward_relative_return_14",
+        "top_bucket_median_forward_relative_return_30",
+        "top_minus_bottom_spread_14",
+        "top_minus_bottom_spread_30",
+        "mean_rank_ic_14",
+        "positive_rank_ic_share_14",
+        "notes",
+    ]
+    bucket_columns = [
+        "score_id",
+        "bucket",
+        "sample_size",
+        "classification",
+        "median_forward_relative_return_14",
+        "median_forward_relative_return_30",
+        "hit_rate_forward_relative_return_14",
+        "top_minus_bottom_spread_30",
+        "median_max_drawdown_30",
+        "notes",
+    ]
+    ic_columns = [
+        "score_id",
+        "horizon",
+        "valid_dates",
+        "mean_rank_ic",
+        "median_rank_ic",
+        "positive_rank_ic_share",
+        "icir",
+        "classification",
+    ]
+    useful_scores = score_summary[score_summary["classification"].isin(["useful", "watchlist"])].sort_values(
+        ["classification", "top_minus_bottom_spread_30"],
+        ascending=[True, False],
+    )
+    fragile_scores = score_summary[score_summary["classification"].isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "top_bucket_sample_size"],
+        ascending=[True, False],
+    )
+    top_buckets = bucket_summary.sort_values(["score_id", "bucket"], ascending=[True, False]).groupby("score_id").head(1)
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    return f"""# Latest Score Research
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+
+## Score Evidence Summary
+{dataframe_to_markdown(score_summary, columns=score_columns, max_rows=20)}
+
+## Useful / Watchlist Scores
+{dataframe_to_markdown(useful_scores, columns=score_columns, max_rows=20)}
+
+## Fragile / Inconclusive Scores
+{dataframe_to_markdown(fragile_scores, columns=score_columns, max_rows=20)}
+
+## Top Buckets
+{dataframe_to_markdown(top_buckets, columns=bucket_columns, max_rows=20)}
+
+## Rank IC
+{dataframe_to_markdown(ic_summary, columns=ic_columns, max_rows=40)}
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Opportunity Score]]
+- [[Relative Accumulation]]
+- [[Compression Before Repricing]]
+- [[Emerging Leader]]
+- [[Riskflow]]
+"""
+
+
+def export_score_research_reports(
+    score_summary: pd.DataFrame,
+    bucket_summary: pd.DataFrame,
+    ic_summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str],
+    report_dir: str | Path = "reports",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    records_csv_path = report_path / SCORE_RESEARCH_RECORDS_CSV
+    bucket_csv_path = report_path / SCORE_RESEARCH_BUCKET_SUMMARY_CSV
+    ic_csv_path = report_path / SCORE_RESEARCH_IC_SUMMARY_CSV
+    score_csv_path = report_path / SCORE_RESEARCH_SCORE_SUMMARY_CSV
+    summary_html_path = report_path / SCORE_RESEARCH_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_SCORE_RESEARCH_MD
+
+    records.to_csv(records_csv_path, index=False)
+    bucket_summary.to_csv(bucket_csv_path, index=False)
+    ic_summary.to_csv(ic_csv_path, index=False)
+    score_summary.to_csv(score_csv_path, index=False)
+    write_html_report(score_summary, summary_html_path, "Layer 6 Score Research Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_score_research_report(score_summary, bucket_summary, ic_summary, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "records_csv": records_csv_path,
+        "bucket_summary_csv": bucket_csv_path,
+        "ic_summary_csv": ic_csv_path,
+        "score_summary_csv": score_csv_path,
+        "summary_html": summary_html_path,
         "obsidian": obsidian_path,
     }

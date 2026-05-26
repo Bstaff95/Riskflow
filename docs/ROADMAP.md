@@ -46,6 +46,19 @@ Next priorities:
 21. Use Layer 9 flow-graph tables to represent asset -> subgroup -> sector -> basket relationships without claiming literal fund flows.
 22. Run `flow-research` to test whether supportive chain context improves primary asset events before any graph-based ranking promotion.
 23. Use Layer 10 `transition-research` to study completed state transitions as observed historical tendencies, not forecasts.
+24. Use `visual-review` to turn strong forward relative breakouts into chart galleries, then translate recurring visual patterns into testable event definitions before changing any indicator formula.
+25. Research a future `confluence_wave_v0_candidate`: a MACD-like momentum wave around zero that measures acceleration across signal slope, distance from viscosity, relative improvement, compression release, level reclaims, and gradient behavior. Keep it out of production until observation-library cases and Layer 7 evidence show it improves readability and outcomes.
+
+Near-term research factory loop:
+
+1. Find historical forward relative breakouts.
+2. Review the chart snapshots visually.
+3. Name candidate patterns in plain English.
+4. Convert only recurring patterns into explicit test events.
+5. Use Layer 7 evidence before promoting any formula, state, or score change.
+6. Use the observation library as the calibration set before tuning z-score lookback, viscosity behavior, gradient sensitivity, weights, or any future confluence wave.
+
+See `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` for the detailed chart-to-evidence workflow.
 
 ## Stage 2: Crypto Sector Engine
 

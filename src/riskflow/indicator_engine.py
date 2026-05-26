@@ -32,6 +32,8 @@ def adaptive_viscosity(
     lookback: int = 20,
     fast: int = 2,
     slow: int = 34,
+    impulse_boost: float = 0.65,
+    zero_zone_boost: float = 0.35,
 ) -> pd.Series:
     if lookback < 1:
         raise ValueError("lookback must be >= 1")
@@ -43,6 +45,8 @@ def adaptive_viscosity(
     fast_sc = 2.0 / (fast + 1.0)
     slow_sc = 2.0 / (slow + 1.0)
     previous = np.nan
+    step_ema = np.nan
+    step_alpha = 2.0 / (lookback + 1.0)
 
     for idx in range(len(source)):
         value = source.iloc[idx]
@@ -53,20 +57,36 @@ def adaptive_viscosity(
             output.iloc[idx] = previous
             continue
 
-        start = max(0, idx - lookback)
-        window = source.iloc[start : idx + 1].dropna()
-        if len(window) >= 2:
-            change = abs(float(window.iloc[-1] - window.iloc[0]))
-            volatility = float(window.diff().abs().sum())
+        previous_source = source.iloc[idx - 1] if idx > 0 else value
+        step = float(value - previous_source) if pd.notna(previous_source) else 0.0
+        abs_step = abs(step)
+        step_ema = abs_step if pd.isna(step_ema) else step_alpha * abs_step + (1.0 - step_alpha) * step_ema
+
+        if idx >= lookback and pd.notna(source.iloc[idx - lookback]):
+            change = abs(float(value - source.iloc[idx - lookback]))
+            delta_window = source.diff().abs().iloc[max(0, idx - lookback + 1) : idx + 1]
+            volatility = float(delta_window.sum())
             efficiency_ratio = change / volatility if volatility > 0.0 else 0.0
         else:
             efficiency_ratio = 0.0
 
-        adaptive_sc = (efficiency_ratio * (fast_sc - slow_sc) + slow_sc) ** 2
+        base_sc = (efficiency_ratio * (fast_sc - slow_sc) + slow_sc) ** 2
+        step_impulse = min(max(abs_step / step_ema if step_ema and step_ema > 0.0 else 0.0, 0.0), 3.0) / 3.0
+        zero_proximity = 1.0 - min(max(abs(float(value)) / 2.0, 0.0), 1.0)
+        adaptive_sc = base_sc * (1.0 + impulse_boost * step_impulse + zero_zone_boost * zero_proximity * step_impulse)
+        adaptive_sc = min(max(adaptive_sc, 0.001), 1.0)
         previous = previous + adaptive_sc * (float(value) - previous)
         output.iloc[idx] = previous
 
     return output
+
+
+def _rolling_vol_normalized(series: pd.Series, lookback: int, clamp: float = 2.0) -> pd.Series:
+    source = pd.to_numeric(series, errors="coerce").astype(float)
+    vol = source.rolling(window=max(2, lookback), min_periods=2).std(ddof=1)
+    normalized = source / vol.replace(0.0, np.nan)
+    normalized = normalized.where(source.notna(), np.nan).fillna(0.0)
+    return normalized.clip(lower=-clamp, upper=clamp)
 
 
 def _weighted_fusion(components: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
@@ -151,13 +171,15 @@ def calculate_core_signal_v0(
         lookback=settings.viscosity_lookback,
         fast=settings.viscosity_fast,
         slow=settings.viscosity_slow,
+        impulse_boost=settings.viscosity_impulse_boost,
+        zero_zone_boost=settings.viscosity_zero_zone_boost,
     )
     frame["above_viscosity"] = frame["final_signal"] > frame["viscosity"]
     frame["signal_slope"] = frame["final_signal"].diff()
     frame["signal_accel"] = frame["signal_slope"].diff()
 
-    slope_component = rolling_zscore(frame["signal_slope"], max(2, settings.viscosity_lookback))
-    accel_component = rolling_zscore(frame["signal_accel"], max(2, settings.viscosity_lookback))
+    slope_component = _rolling_vol_normalized(frame["signal_slope"], max(2, settings.viscosity_lookback))
+    accel_component = _rolling_vol_normalized(frame["signal_accel"], max(2, settings.viscosity_lookback))
     gradient_raw = (
         frame["final_signal"]
         + settings.velocity_weight * (frame["final_signal"] - frame["viscosity"])

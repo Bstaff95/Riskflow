@@ -15,8 +15,19 @@ data/processed/*
 !data/processed/.gitkeep
 reports/*
 !reports/.gitkeep
+research/observations/*
+!research/observations/.gitkeep
 obsidian/reports/*
 !obsidian/reports/.gitkeep
+obsidian/wiki/cases/*
+!obsidian/wiki/cases/.gitkeep
+obsidian/wiki/patterns/*
+!obsidian/wiki/patterns/.gitkeep
+obsidian/wiki/concepts/*
+!obsidian/wiki/concepts/.gitkeep
+obsidian/wiki/maps/*
+!obsidian/wiki/maps/.gitkeep
+obsidian/wiki/Indicator Observation Library.md
 
 .DS_Store
 .idea/

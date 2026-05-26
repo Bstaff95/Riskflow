@@ -1,0 +1,11 @@
+candidate_version,case_id,symbol,timeframe,focus_date,screenshot_path,visual_clarity_200,leading_usefulness_200,false_positive_control_200,confluence_readability_150,visual_polish_150,cross_chart_robustness_100,total_1000,human_read,what_improved,what_got_worse,next_iteration
+V9,WAVE-001,TROLL,4H,2026-04,reports/tradingview_review/wave_tests/v9/WAVE-001_TROLL_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-002,SPX6900,4H,2026-04-05,reports/tradingview_review/wave_tests/v9/WAVE-002_SPX6900_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-003,TURBO,4H,2026-03,reports/tradingview_review/wave_tests/v9/WAVE-003_TURBO_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-004,MOG,4H,2026-04,reports/tradingview_review/wave_tests/v9/WAVE-004_MOG_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-005,TOSHI3,1D,2024-09-25,reports/tradingview_review/wave_tests/v9/WAVE-005_TOSHI3_1D.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-006,TRUMP,4H,2026-04-12,reports/tradingview_review/wave_tests/v9/WAVE-006_TRUMP_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-007,GIGA,4H,2026-05,reports/tradingview_review/wave_tests/v9/WAVE-007_GIGA_4H.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-008,SHIB,1D,2025-08,reports/tradingview_review/wave_tests/v9/WAVE-008_SHIB_1D.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-009,PEPE,1D,2023-11-09,reports/tradingview_review/wave_tests/v9/WAVE-009_PEPE_1D.png,,,,,,,,,"Pending full review.","","",""
+V9,WAVE-010,BONK,4H,2026-03,reports/tradingview_review/wave_tests/v9/WAVE-010_BONK_4H.png,,,,,,,,,"Pending full review.","","",""

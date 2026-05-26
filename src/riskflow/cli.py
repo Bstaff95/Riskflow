@@ -25,8 +25,10 @@ from .reports import (
     export_state_research_reports,
     export_transition_research_reports,
 )
+from .research_outcomes import HORIZONS
 from .mtf import MTF_LEADERBOARD_COLUMNS, RESEARCH_MTF_PRESET, append_mtf_context, normalize_timeframe
 from .mtf_research import run_mtf_research
+from .observation_library import export_observation_library
 from .resample import research_mtf_derivations, resample_universe
 from .score_research import run_score_research
 from .signal_research import run_signal_research
@@ -35,6 +37,7 @@ from .setup_research import run_setup_research
 from .state_research import run_state_research
 from .states import classify_state_frame
 from .transition_research import run_transition_research
+from .visual_review import VisualReviewSettings, run_visual_review
 
 
 LEADERBOARD_COLUMNS = [
@@ -800,6 +803,74 @@ def score_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def visual_review_command(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe_config(args.config)
+        raw_frames, load_warnings = load_universe_ohlcv(
+            universe,
+            data_dir=args.data_dir,
+            timeframe=args.timeframe,
+        )
+        if not raw_frames:
+            raise RuntimeError(
+                f"No usable CSV files found in {Path(args.data_dir)}. "
+                "Expected files like DOGE.csv or DOGE_1d.csv with date, open, high, low, close, volume."
+            )
+        analysis_frames, _basket, analysis_warnings = build_analysis_frames(universe, raw_frames)
+        settings = VisualReviewSettings(
+            event_mode=args.event_mode,
+            timeframe=args.timeframe,
+            horizon=args.horizon,
+            min_forward_relative_return=args.min_forward_relative_return,
+            entry_lag_bars=args.entry_lag_bars,
+            cooldown_bars=args.cooldown_bars,
+            min_history_bars=args.min_history_bars,
+            min_signal_std=args.min_signal_std,
+            lookback_bars=args.lookback_bars,
+            forward_bars=args.forward_bars,
+            max_events=args.max_events,
+            max_events_per_symbol=args.max_events_per_symbol,
+        )
+        _records, paths = run_visual_review(
+            universe,
+            raw_frames,
+            analysis_frames,
+            report_dir=args.report_dir,
+            settings=settings,
+        )
+        warnings = [*load_warnings, *analysis_warnings]
+    except Exception as exc:
+        print(f"Visual review failed: {exc}")
+        return 1
+
+    print(f"Wrote visual review events CSV: {paths['events_csv']}")
+    print(f"Wrote visual review gallery: {paths['gallery_md']}")
+    print(f"Wrote visual review images directory: {paths['image_dir']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def observation_library_command(args: argparse.Namespace) -> int:
+    try:
+        paths = export_observation_library(
+            args.events_csv,
+            output_dir=args.output_dir,
+            obsidian_dir=args.obsidian_dir,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print(f"Observation library export failed: {exc}")
+        return 1
+
+    print(f"Wrote observation records JSONL: {paths.records_jsonl}")
+    print(f"Wrote observation records CSV: {paths.records_csv}")
+    print(f"Wrote observation schema: {paths.schema_yaml}")
+    print(f"Wrote Obsidian index: {paths.index_md}")
+    print(f"Wrote Obsidian cases directory: {paths.cases_dir}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -972,6 +1043,107 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bars after the score observation before forward-return measurement starts.",
     )
     score_research.set_defaults(func=score_research_command)
+
+    visual_review = subparsers.add_parser(
+        "visual-review",
+        help="Generate chart snapshots for strong forward relative breakout events.",
+    )
+    add_common_arguments(visual_review)
+    visual_review.add_argument(
+        "--event-mode",
+        choices=["breakout", "impulse-retest", "coil-reclaim"],
+        default="breakout",
+        help="Use breakout for hindsight winners, impulse-retest for late confirmation, or coil-reclaim for early lower-zone reclaim setups.",
+    )
+    visual_review.add_argument(
+        "--horizon",
+        type=int,
+        choices=list(HORIZONS),
+        default=30,
+        help="Forward relative-return horizon used to select visual review events.",
+    )
+    visual_review.add_argument(
+        "--min-forward-relative-return",
+        type=float,
+        default=0.30,
+        help="Minimum forward relative return required for a visual review event.",
+    )
+    visual_review.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the candidate date before forward-return measurement starts.",
+    )
+    visual_review.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=30,
+        help="Minimum bars before the same symbol can produce another visual review event. For 4H archeology, 12 can reveal nearby setup/follow-through cases.",
+    )
+    visual_review.add_argument(
+        "--min-history-bars",
+        type=int,
+        default=40,
+        help="Minimum prior bars required before a visual review event can be selected.",
+    )
+    visual_review.add_argument(
+        "--min-signal-std",
+        type=float,
+        default=0.02,
+        help="Minimum recent signal standard deviation required to avoid flat bootstrap artifacts.",
+    )
+    visual_review.add_argument(
+        "--lookback-bars",
+        type=int,
+        default=80,
+        help="Bars to show before the event in each snapshot.",
+    )
+    visual_review.add_argument(
+        "--forward-bars",
+        type=int,
+        default=30,
+        help="Bars to show after the event in each snapshot.",
+    )
+    visual_review.add_argument(
+        "--max-events",
+        type=int,
+        default=40,
+        help="Maximum total snapshots to render.",
+    )
+    visual_review.add_argument(
+        "--max-events-per-symbol",
+        type=int,
+        default=3,
+        help="Maximum snapshots to render per symbol.",
+    )
+    visual_review.set_defaults(func=visual_review_command)
+
+    observation_library = subparsers.add_parser(
+        "observation-library",
+        help="Export visual-review events into structured observation records and Obsidian wiki notes.",
+    )
+    observation_library.add_argument(
+        "--events-csv",
+        default="reports/visual_review/events.csv",
+        help="Visual-review events CSV to convert into observation records.",
+    )
+    observation_library.add_argument(
+        "--output-dir",
+        default="research/observations",
+        help="Directory for machine-readable observation records and schema.",
+    )
+    observation_library.add_argument(
+        "--obsidian-dir",
+        default="obsidian",
+        help="Existing Obsidian vault directory to receive wiki notes.",
+    )
+    observation_library.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional maximum number of visual-review rows to export.",
+    )
+    observation_library.set_defaults(func=observation_library_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

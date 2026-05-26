@@ -46,7 +46,7 @@ source .venv/bin/activate
 python3 -m pip install -e ".[dev]"
 ```
 
-The package uses `pandas`, `numpy`, `PyYAML`, and `pytest`.
+The package uses `pandas`, `numpy`, `PyYAML`, `matplotlib`, and `pytest`.
 
 ## Data Format
 
@@ -280,6 +280,41 @@ python3 -m riskflow signal-research --cooldown-bars 30 --entry-lag-bars 1
 
 The cooldown avoids counting overlapping events from the same symbol as independent evidence. The entry lag starts forward-return measurement after the signal bar closes.
 
+## Run Visual Review
+
+```bash
+python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
+```
+
+Outputs:
+
+- `reports/visual_review/events.csv`
+- `reports/visual_review/gallery.md`
+- `reports/visual_review/images/*.png`
+
+Visual review bridges numeric research and chart intuition. It finds historical strong forward relative breakouts, renders local chart snapshots from the Python engine, and tags what the indicator looked like before the move: signal zone, viscosity reclaim, relative component, compression, and state. It does not change the indicator, scores, states, or leaderboard ranking.
+
+Useful controls:
+
+```bash
+python3 -m riskflow visual-review --min-forward-relative-return 0.30 --min-history-bars 40 --lookback-bars 80 --forward-bars 30
+```
+
+The observation library exports visual-review rows into machine-readable records and Obsidian wiki notes. This is the Karpathy-style research-memory layer: structured records remain the evidence source, while Obsidian connects cases, patterns, concepts, and principles.
+
+```bash
+python3 -m riskflow observation-library --events-csv reports/visual_review/events.csv --obsidian-dir obsidian
+```
+
+Outputs include:
+
+- `research/observations/observation_records.jsonl`
+- `research/observations/observation_schema.yaml`
+- `obsidian/wiki/Indicator Observation Library.md`
+- `obsidian/wiki/cases/*.md`
+- `obsidian/wiki/patterns/*.md`
+- `obsidian/wiki/concepts/*.md`
+
 ## Run Tests
 
 ```bash
@@ -304,6 +339,7 @@ Durable project context lives in `docs/`:
 - `docs/LAYER_8_MULTI_TIMEFRAME_CONTEXT.md` explains optional MTF context, completed-candle joins, and MTF research.
 - `docs/LAYER_9_CAPITAL_FLOW_GRAPH.md` explains capital-flow graph tables, chain context, and graph evidence.
 - `docs/LAYER_7_EVIDENCE_ENGINE.md` explains event-study hardening and evidence promotion gates.
+- `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` explains how to turn chart intuition into testable Riskflow hypotheses.
 
 Agent behavior and repo guardrails live in `AGENTS.md`.
 
@@ -317,6 +353,14 @@ The default active v1 weights are:
 - relative: `0.65`
 - risk: configured but disabled by default
 
+The current default indicator settings are aligned to the active TradingView research setup:
+
+- component z-score lookback: `200`
+- component clamp: `3.5`
+- risk environment: `off`
+- viscosity lookback / fast / slow: `20 / 2 / 34`
+- viscosity impulse / zero-zone boosts: `0.65 / 0.35`
+
 ## Indicator Summary
 
 For each asset:
@@ -326,7 +370,7 @@ For each asset:
 3. Convert price and relative logs to bootstrap rolling z-scores.
 4. Clamp components to `+/- component_z_clamp`.
 5. Fuse available components by weighted sum divided by root-sum-square active weights.
-6. Smooth the final signal with an adaptive KAMA-like viscosity line.
+6. Smooth the final signal with an adaptive KAMA-like viscosity line, including impulse and zero-zone boosts.
 7. Build a gradient driver from signal level, distance from viscosity, slope, and acceleration.
 
 The signal exists as soon as valid target price exists. Flat or too-short z-score windows return `0` instead of `NaN` when the source is valid.

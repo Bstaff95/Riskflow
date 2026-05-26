@@ -52,6 +52,9 @@ flow_graph.py optionally builds graph nodes/edges/chains
         |
         v
 reports.py exports CSV/HTML/Obsidian markdown
+        |
+        v
+visual_review.py optionally renders chart snapshots for human pattern review
 ```
 
 ## Universe Model Direction
@@ -105,6 +108,12 @@ The first challenger families are:
 - cross-sectional relative rank
 
 Riskflow should preserve the current oscillator-style user experience while testing whether challenger observations improve forward relative-return evidence.
+
+Visual review is the human-in-the-loop bridge for this layer. The `visual-review` command finds historical strong forward relative breakouts, renders local chart snapshots from the Python engine, and tags visual clues such as negative signal chop, viscosity reclaim, relative component, compression, and state. It is a review surface only; it does not promote formulas or mutate production frames.
+
+The working research method is documented in `docs/VISUAL_INDICATOR_LEARNING_LOOP.md`. This loop treats visual chart examples, missed breakouts, false positives, and setting mismatches as first-class research artifacts.
+
+The observation library is the Karpathy-style LLM wiki layer for this loop. Machine-readable records live under `research/observations/`; Obsidian synthesis pages live under `obsidian/wiki/`. Python remains the evidence engine, while Obsidian stores connected cases, pattern pages, concepts, and human notes.
 
 ## Setup Quality Direction
 
@@ -182,6 +191,8 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
+- `visual_review.py`: local chart-snapshot generation for visual breakout archeology.
+- `observation_library.py`: structured observation records and Obsidian wiki export for indicator-learning cases.
 - `reports.py`: CSV, HTML, and Obsidian markdown export helpers.
 - `cli.py`: command-line entry points.
 
@@ -191,6 +202,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d
@@ -220,7 +232,7 @@ Only `.gitkeep` placeholders should be committed in those directories.
 
 ## Current Gaps To Remember
 
-- The Python engine is conceptually aligned with the Pine script, but not full one-to-one parity yet.
+- The Python engine is closer to the active Pine settings after aligning the default 200-bar component lookback, risk-off setting, viscosity parameters, and gradient normalization style. It is still not full one-to-one visual parity because TradingView rendering, feed behavior, security calls, and overlay candle coloring are outside the Python engine.
 - Subgroup/sector baskets are still structural placeholders; only the main meme basket and per-asset ex-target variants are implemented.
 - Event-study markdown export is not yet as complete as scan markdown reporting.
 - Real market data is not included in the repo.

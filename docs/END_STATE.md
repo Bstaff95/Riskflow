@@ -170,6 +170,10 @@ Current version:
 
 Future work should tighten Pine-to-Python parity only where it improves research validity. Exact visual parity is less important than stable, testable behavior.
 
+The visual review loop belongs here as a bridge between the user-facing oscillator feel and numeric evidence. Riskflow should use local chart galleries to inspect what the signal, viscosity, relative component, compression, and state looked like before historical relative breakouts. Recurring visual patterns can become testable events, but no formula should change because one chart looked persuasive.
+
+A future candidate is a MACD-like `confluence_wave_v0_candidate`: a secondary momentum wave around zero that measures whether internal confluence is accelerating or deteriorating. Potential inputs include signal slope/acceleration, distance from viscosity, relative component improvement, compression release, level reclaims, and gradient behavior. It should remain a research candidate until it proves that it improves both visual readability and forward evidence without merely duplicating the main oscillator.
+
 ### Layer 4: Compression And Setup Quality
 
 Separate leader quality from entry quality.

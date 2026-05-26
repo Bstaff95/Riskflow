@@ -32,12 +32,14 @@ class WeightSettings:
 
 @dataclass(frozen=True)
 class IndicatorSettings:
-    z_len: int = 100
+    z_len: int = 200
     component_z_clamp: float = 3.5
     use_risk: bool = False
     viscosity_lookback: int = 20
     viscosity_fast: int = 2
     viscosity_slow: int = 34
+    viscosity_impulse_boost: float = 0.65
+    viscosity_zero_zone_boost: float = 0.35
     velocity_weight: float = 0.55
     slope_weight: float = 0.25
     accel_weight: float = 0.08

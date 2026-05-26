@@ -1,0 +1,661 @@
+//@version=5
+indicator("V8 Riskflow Signal + Leading Pressure Wave [Experimental]", overlay=false, dynamic_requests=true)
+
+// 01. MODE / DROPDOWNS - TOP OF SETTINGS PANEL
+grpTop = "01. Mode / Dropdowns"
+
+marketMode = input.string("Crypto", "Market Mode", options=["Crypto", "Equities / Stocks"], group=grpTop)
+analysisTarget = input.string("Current Chart Asset", "Analysis Target", options=["Current Chart Asset", "Selected Basket Index"], group=grpTop)
+priceSourceMode = input.string("Close", "Price Source", options=["Close", "HLC3", "OHLC4", "HL2"], group=grpTop)
+
+basketSource = input.string("Crypto Meme Broad Basket", "Selected Basket", options=["Crypto Meme Core Basket", "Crypto Meme Broad Basket", "Crypto Meme High-Beta Basket", "Crypto Custom Basket 1", "Crypto Custom Basket 2", "Crypto Custom Basket 3", "Equity Market Basket", "Equity Custom Basket 1", "Equity Custom Basket 2", "Equity Custom Basket 3"], group=grpTop)
+
+relativeBenchmarkMode = input.string("Selected Basket", "Relative Benchmark", options=["Selected Basket", "OTHERS", "TOTALES", "TOTAL2ES", "TOTAL3ES", "BTC", "ETH", "SOL", "TON", "SPY", "QQQ", "IWM", "DIA", "VIX", "Custom Symbol", "Off"], group=grpTop)
+
+riskEnvironmentMode = input.string("Auto", "Risk Environment", options=["Auto", "Crypto Long-Tail Risk", "Equity Risk-On", "Off"], group=grpTop)
+
+weightPreset = input.string("Meme Leadership Default", "Weight Preset", options=["Meme Leadership Default", "Crypto Alt Default", "Equity Stock Picking Default", "Large Cap vs Benchmark", "Pure Ratio Chart", "Custom"], group=grpTop)
+
+finalSignalNormalization = input.string("Weight-Scaled Fusion", "Final Signal Normalization", options=["Weight-Scaled Fusion", "Final Z-Score"], group=grpTop)
+
+displayMode = input.string("Final Signal", "Display Mode", options=["Final Signal", "Price Component", "Relative Component", "Risk Component", "Fusion Before Final Z"], group=grpTop)
+
+candleColorSource = input.string("Gradient Driver", "Candle Color Source", options=["Gradient Driver", "Signal Line"], group=grpTop)
+
+// 02. QUICK CONTROLS
+grpControl = "02. Quick Controls"
+
+customBenchmarkSymbol = input.symbol("AMEX:SPY", "Custom Benchmark Symbol", group=grpControl)
+minActiveBasketMembers = input.int(3, "Minimum Active Basket Members", minval=1, maxval=20, group=grpControl)
+forceFullHistory = input.bool(true, "Force Full Price History", group=grpControl)
+neverBlankSignal = input.bool(true, "Never Blank Signal", group=grpControl)
+
+// 03. WEIGHTS / CLAMP
+grpWeights = "03. Weights / Clamp"
+
+customPriceWeight = input.float(1.20, "Custom: Asset Price Weight", step=0.05, group=grpWeights)
+customRelativeWeight = input.float(0.65, "Custom: Asset vs Benchmark Weight", step=0.05, group=grpWeights)
+customRiskWeight = input.float(0.85, "Custom: Risk Environment Weight", step=0.05, group=grpWeights)
+
+componentZClamp = input.float(3.50, "Component Z Clamp", minval=1.0, maxval=10.0, step=0.25, group=grpWeights)
+
+presetPriceWeight = weightPreset == "Meme Leadership Default" ? 1.20 : weightPreset == "Crypto Alt Default" ? 1.15 : weightPreset == "Equity Stock Picking Default" ? 1.10 : weightPreset == "Large Cap vs Benchmark" ? 1.00 : weightPreset == "Pure Ratio Chart" ? 1.00 : customPriceWeight
+presetRelativeWeight = weightPreset == "Meme Leadership Default" ? 0.65 : weightPreset == "Crypto Alt Default" ? 0.85 : weightPreset == "Equity Stock Picking Default" ? 0.90 : weightPreset == "Large Cap vs Benchmark" ? 1.00 : weightPreset == "Pure Ratio Chart" ? 0.00 : customRelativeWeight
+presetRiskWeight = weightPreset == "Meme Leadership Default" ? 0.85 : weightPreset == "Crypto Alt Default" ? 0.60 : weightPreset == "Equity Stock Picking Default" ? 0.50 : weightPreset == "Large Cap vs Benchmark" ? 0.25 : weightPreset == "Pure Ratio Chart" ? 0.00 : customRiskWeight
+
+// 04. NORMALIZATION
+grpNorm = "04. Normalization"
+
+zLen = input.int(200, "Component Z-Score Lookback", minval=20, group=grpNorm)
+minComponentWarmupBars = input.int(25, "Minimum Component Warmup Bars", minval=2, maxval=300, group=grpNorm)
+smoothLen = input.int(5, "Simple Smooth Length", minval=1, group=grpNorm)
+
+// 05. VISCOSITY BASELINE
+grpVis = "05. Viscosity Baseline"
+
+visLen = input.int(20, "Viscosity Lookback", minval=2, group=grpVis)
+fastLen = input.int(2, "Viscosity Fast Limit", minval=1, group=grpVis)
+slowLen = input.int(34, "Viscosity Slow Limit", minval=2, group=grpVis)
+impulseBoost = input.float(0.65, "Viscosity Impulse Boost", step=0.05, group=grpVis)
+zeroZoneBoost = input.float(0.35, "Viscosity Zero-Zone Boost", step=0.05, group=grpVis)
+
+// 06. GRADIENT / COLOR ENGINE
+grpGrad = "06. Gradient / Color Engine"
+
+velocityWeight = input.float(0.55, "Gradient Velocity Weight", step=0.05, group=grpGrad)
+slopeWeight = input.float(0.25, "Gradient Slope Weight", step=0.05, group=grpGrad)
+accelWeight = input.float(0.08, "Gradient Acceleration Weight", step=0.01, group=grpGrad)
+gradientIntensity = input.float(1.00, "Gradient Intensity", step=0.05, group=grpGrad)
+gradientSmoothLen = input.int(3, "Gradient Smooth Length", minval=1, group=grpGrad)
+gradientSmoothBlend = input.float(0.55, "Gradient Smooth Blend", minval=0.0, maxval=1.0, step=0.05, group=grpGrad)
+colorExtremeLevel = input.float(3.00, "Hydraulic Color Extreme Level", minval=1.0, maxval=6.0, step=0.05, group=grpGrad)
+
+// 06B. PRESSURE WAVE RIBBON
+grpPressure = "06B. Pressure Wave Ribbon"
+
+showPressureWaves = input.bool(true, "V8 Show Pressure Ribbon", group=grpPressure)
+pressureWaveSource = input.string("Engine Signal", "V8 Wave Source", options=["Engine Signal", "Display Signal"], group=grpPressure)
+pressureWaveLen = input.int(11, "V8 Ribbon Smoothness", minval=3, maxval=200, group=grpPressure)
+pressureTriggerLen = input.int(5, "V8 Trigger Smoothness", minval=2, maxval=80, group=grpPressure)
+pressureAreaLen = input.int(34, "V8 Viscosity Area Memory", minval=3, maxval=250, group=grpPressure)
+pressureNormalizeLen = input.int(89, "V8 Normalization Length", minval=10, maxval=500, group=grpPressure)
+pressureDerivativeLen = input.int(21, "V8 Impulse Normalization", minval=5, maxval=200, group=grpPressure)
+pressureDerivativeClamp = input.float(2.00, "V8 Impulse Clamp", minval=0.5, maxval=6.0, step=0.25, group=grpPressure)
+pressureDeadband = input.float(0.05, "V8 Zero Quiet Zone", minval=0.0, maxval=1.0, step=0.01, group=grpPressure)
+pressureDisplayClamp = input.float(1.85, "V8 Display Clamp", minval=0.5, maxval=4.0, step=0.05, group=grpPressure)
+pressureImpulseWeight = input.float(0.50, "V8 Pressure Change Weight", minval=0.0, maxval=2.0, step=0.05, group=grpPressure)
+pressureCurlWeight = input.float(0.50, "V8 Curl Weight", minval=0.0, maxval=2.0, step=0.05, group=grpPressure)
+pressureRelativeWeight = input.float(0.20, "V8 Relative Impulse Weight", minval=0.0, maxval=2.0, step=0.05, group=grpPressure)
+pressureAreaWeight = input.float(0.22, "V8 Area Balance Weight", minval=0.0, maxval=2.0, step=0.05, group=grpPressure)
+pressureLevelWeight = input.float(0.03, "V8 Confirmed Level Weight", minval=0.0, maxval=2.0, step=0.05, group=grpPressure)
+pressureScale = input.float(2.10, "V8 Ribbon Scale", minval=0.25, maxval=6.0, step=0.05, group=grpPressure)
+showPressureTrigger = input.bool(false, "V8 Show Thin Trigger", group=grpPressure)
+showPressureHistogram = input.bool(false, "V8 Show Momentum Columns", group=grpPressure)
+showMutedSignalReference = input.bool(true, "V8 Show Main Signal Reference", group=grpPressure)
+showPressureDebug = input.bool(false, "V8 Show Pressure Internals", group=grpPressure)
+
+// 07. DISPLAY
+grpDisplay = "07. Display"
+
+showViscosityMA = input.bool(true, "Show Viscosity MA", group=grpDisplay)
+showSimpleMA = input.bool(false, "Show Simple Smooth", group=grpDisplay)
+colorCandles = input.bool(true, "Color Main Chart Candles", group=grpDisplay)
+colorWicksBorders = input.bool(true, "Color Wicks / Borders With Overlay Candles", group=grpDisplay)
+showDebug = input.bool(false, "Show Debug Values", group=grpDisplay)
+lineWidth = input.int(2, "Signal Line Width", minval=1, maxval=5, group=grpDisplay)
+
+// COLORS
+cHydraulicGreen = #00FF00
+cHydraulicYellow = #FFFF00
+cHydraulicRed = #FF0000
+cHydraulicOrange = color.orange
+cHydraulicGray = color.gray
+cHydraulicLimeGate = #7FFF00
+cPressureBull = #58E6C2
+cPressureBullFade = #75BFEA
+cPressureBear = #F05A8A
+cPressureBearFade = #A98CFF
+cPressureTrigger = #F4EDFF
+
+// CHART PRICE SOURCE
+chartPriceSource = priceSourceMode == "Close" ? close : priceSourceMode == "HLC3" ? hlc3 : priceSourceMode == "OHLC4" ? ohlc4 : hl2
+
+chartPriceValid = not na(chartPriceSource) and chartPriceSource > 0 ? 1.0 : 0.0
+priceSourceMovement = not na(chartPriceSource) and not na(chartPriceSource[1]) and chartPriceSource[1] != 0 ? math.abs((chartPriceSource / chartPriceSource[1]) - 1.0) : na
+
+// CRYPTO MEME CORE BASKET
+core1 = input.symbol("CRYPTO:DOGEUSD", "Core 1", group="Crypto Meme Core Basket")
+core2 = input.symbol("CRYPTO:SHIBUSD", "Core 2", group="Crypto Meme Core Basket")
+core3 = input.symbol("CRYPTO:PEPEUSD", "Core 3", group="Crypto Meme Core Basket")
+
+// CRYPTO MEME BROAD BASKET
+broad1 = input.symbol("CRYPTO:DOGEUSD", "Broad 1", group="Crypto Meme Broad Basket")
+broad2 = input.symbol("CRYPTO:SHIBUSD", "Broad 2", group="Crypto Meme Broad Basket")
+broad3 = input.symbol("CRYPTOCAP:FLOKI", "Broad 3", group="Crypto Meme Broad Basket")
+broad4 = input.symbol("CRYPTO:PEPEUSD", "Broad 4", group="Crypto Meme Broad Basket")
+broad5 = input.symbol("CRYPTOCAP:BONK", "Broad 5", group="Crypto Meme Broad Basket")
+broad6 = input.symbol("CRYPTO:WIFUSD", "Broad 6", group="Crypto Meme Broad Basket")
+broad7 = input.symbol("BYBIT:BRETTUSDT", "Broad 7", group="Crypto Meme Broad Basket")
+broad8 = input.symbol("CRYPTO:MOGUSD", "Broad 8", group="Crypto Meme Broad Basket")
+broad9 = input.symbol("CRYPTO:POPCAT2USD", "Broad 9", group="Crypto Meme Broad Basket")
+broad10 = input.symbol("CRYPTO:SPX6USD", "Broad 10", group="Crypto Meme Broad Basket")
+broad11 = input.symbol("CRYPTOCAP:FARTCOIN", "Broad 11", group="Crypto Meme Broad Basket")
+broad12 = input.symbol("CRYPTOCAP:TURBO", "Broad 12", group="Crypto Meme Broad Basket")
+broad13 = input.symbol("CRYPTOCAP:GIGACH", "Broad 13", group="Crypto Meme Broad Basket")
+broad14 = input.symbol("CRYPTOCAP:MEW", "Broad 14", group="Crypto Meme Broad Basket")
+broad15 = input.symbol("CRYPTO:TOSHI3USD", "Broad 15", group="Crypto Meme Broad Basket")
+broad16 = input.symbol("CRYPTO:PNUTPUSD", "Broad 16", group="Crypto Meme Broad Basket")
+broad17 = input.symbol("CRYPTO:PENGUPUDUSD", "Broad 17", group="Crypto Meme Broad Basket")
+broad18 = input.symbol("CRYPTO:TRUMPOFUSD", "Broad 18", group="Crypto Meme Broad Basket")
+broad19 = input.symbol("CRYPTO:NEIROFUSD", "Broad 19", group="Crypto Meme Broad Basket")
+broad20 = input.symbol("CRYPTO:TROLLSOUSD", "Broad 20", group="Crypto Meme Broad Basket")
+
+// CRYPTO MEME HIGH-BETA BASKET
+high1 = input.symbol("CRYPTO:WIFUSD", "High-Beta 1", group="Crypto Meme High-Beta Basket")
+high2 = input.symbol("BYBIT:BRETTUSDT", "High-Beta 2", group="Crypto Meme High-Beta Basket")
+high3 = input.symbol("CRYPTO:MOGUSD", "High-Beta 3", group="Crypto Meme High-Beta Basket")
+high4 = input.symbol("CRYPTO:POPCAT2USD", "High-Beta 4", group="Crypto Meme High-Beta Basket")
+high5 = input.symbol("CRYPTO:SPX6USD", "High-Beta 5", group="Crypto Meme High-Beta Basket")
+high6 = input.symbol("CRYPTOCAP:FARTCOIN", "High-Beta 6", group="Crypto Meme High-Beta Basket")
+high7 = input.symbol("CRYPTOCAP:TURBO", "High-Beta 7", group="Crypto Meme High-Beta Basket")
+high8 = input.symbol("CRYPTOCAP:GIGACH", "High-Beta 8", group="Crypto Meme High-Beta Basket")
+high9 = input.symbol("CRYPTOCAP:MEW", "High-Beta 9", group="Crypto Meme High-Beta Basket")
+high10 = input.symbol("CRYPTO:TOSHI3USD", "High-Beta 10", group="Crypto Meme High-Beta Basket")
+high11 = input.symbol("CRYPTO:PNUTPUSD", "High-Beta 11", group="Crypto Meme High-Beta Basket")
+high12 = input.symbol("CRYPTO:PENGUPUDUSD", "High-Beta 12", group="Crypto Meme High-Beta Basket")
+high13 = input.symbol("CRYPTO:TRUMPOFUSD", "High-Beta 13", group="Crypto Meme High-Beta Basket")
+high14 = input.symbol("CRYPTO:NEIROFUSD", "High-Beta 14", group="Crypto Meme High-Beta Basket")
+high15 = input.symbol("CRYPTO:TROLLSOUSD", "High-Beta 15", group="Crypto Meme High-Beta Basket")
+
+// EQUITY MARKET BASKET
+eq1 = input.symbol("AMEX:SPY", "Equity Market 1", group="Equity Market Basket")
+eq2 = input.symbol("NASDAQ:QQQ", "Equity Market 2", group="Equity Market Basket")
+eq3 = input.symbol("AMEX:IWM", "Equity Market 3", group="Equity Market Basket")
+eq4 = input.symbol("AMEX:DIA", "Equity Market 4", group="Equity Market Basket")
+
+// CRYPTO CUSTOM BASKETS
+cc1_1 = input.symbol("", "Crypto Custom 1 - Slot 1", group="Crypto Custom Basket 1")
+cc1_2 = input.symbol("", "Crypto Custom 1 - Slot 2", group="Crypto Custom Basket 1")
+cc1_3 = input.symbol("", "Crypto Custom 1 - Slot 3", group="Crypto Custom Basket 1")
+cc1_4 = input.symbol("", "Crypto Custom 1 - Slot 4", group="Crypto Custom Basket 1")
+cc1_5 = input.symbol("", "Crypto Custom 1 - Slot 5", group="Crypto Custom Basket 1")
+cc1_6 = input.symbol("", "Crypto Custom 1 - Slot 6", group="Crypto Custom Basket 1")
+cc1_7 = input.symbol("", "Crypto Custom 1 - Slot 7", group="Crypto Custom Basket 1")
+cc1_8 = input.symbol("", "Crypto Custom 1 - Slot 8", group="Crypto Custom Basket 1")
+cc1_9 = input.symbol("", "Crypto Custom 1 - Slot 9", group="Crypto Custom Basket 1")
+cc1_10 = input.symbol("", "Crypto Custom 1 - Slot 10", group="Crypto Custom Basket 1")
+
+cc2_1 = input.symbol("", "Crypto Custom 2 - Slot 1", group="Crypto Custom Basket 2")
+cc2_2 = input.symbol("", "Crypto Custom 2 - Slot 2", group="Crypto Custom Basket 2")
+cc2_3 = input.symbol("", "Crypto Custom 2 - Slot 3", group="Crypto Custom Basket 2")
+cc2_4 = input.symbol("", "Crypto Custom 2 - Slot 4", group="Crypto Custom Basket 2")
+cc2_5 = input.symbol("", "Crypto Custom 2 - Slot 5", group="Crypto Custom Basket 2")
+cc2_6 = input.symbol("", "Crypto Custom 2 - Slot 6", group="Crypto Custom Basket 2")
+cc2_7 = input.symbol("", "Crypto Custom 2 - Slot 7", group="Crypto Custom Basket 2")
+cc2_8 = input.symbol("", "Crypto Custom 2 - Slot 8", group="Crypto Custom Basket 2")
+cc2_9 = input.symbol("", "Crypto Custom 2 - Slot 9", group="Crypto Custom Basket 2")
+cc2_10 = input.symbol("", "Crypto Custom 2 - Slot 10", group="Crypto Custom Basket 2")
+
+cc3_1 = input.symbol("", "Crypto Custom 3 - Slot 1", group="Crypto Custom Basket 3")
+cc3_2 = input.symbol("", "Crypto Custom 3 - Slot 2", group="Crypto Custom Basket 3")
+cc3_3 = input.symbol("", "Crypto Custom 3 - Slot 3", group="Crypto Custom Basket 3")
+cc3_4 = input.symbol("", "Crypto Custom 3 - Slot 4", group="Crypto Custom Basket 3")
+cc3_5 = input.symbol("", "Crypto Custom 3 - Slot 5", group="Crypto Custom Basket 3")
+cc3_6 = input.symbol("", "Crypto Custom 3 - Slot 6", group="Crypto Custom Basket 3")
+cc3_7 = input.symbol("", "Crypto Custom 3 - Slot 7", group="Crypto Custom Basket 3")
+cc3_8 = input.symbol("", "Crypto Custom 3 - Slot 8", group="Crypto Custom Basket 3")
+cc3_9 = input.symbol("", "Crypto Custom 3 - Slot 9", group="Crypto Custom Basket 3")
+cc3_10 = input.symbol("", "Crypto Custom 3 - Slot 10", group="Crypto Custom Basket 3")
+
+// EQUITY CUSTOM BASKETS
+ec1_1 = input.symbol("", "Equity Custom 1 - Slot 1", group="Equity Custom Basket 1")
+ec1_2 = input.symbol("", "Equity Custom 1 - Slot 2", group="Equity Custom Basket 1")
+ec1_3 = input.symbol("", "Equity Custom 1 - Slot 3", group="Equity Custom Basket 1")
+ec1_4 = input.symbol("", "Equity Custom 1 - Slot 4", group="Equity Custom Basket 1")
+ec1_5 = input.symbol("", "Equity Custom 1 - Slot 5", group="Equity Custom Basket 1")
+ec1_6 = input.symbol("", "Equity Custom 1 - Slot 6", group="Equity Custom Basket 1")
+ec1_7 = input.symbol("", "Equity Custom 1 - Slot 7", group="Equity Custom Basket 1")
+ec1_8 = input.symbol("", "Equity Custom 1 - Slot 8", group="Equity Custom Basket 1")
+ec1_9 = input.symbol("", "Equity Custom 1 - Slot 9", group="Equity Custom Basket 1")
+ec1_10 = input.symbol("", "Equity Custom 1 - Slot 10", group="Equity Custom Basket 1")
+
+ec2_1 = input.symbol("", "Equity Custom 2 - Slot 1", group="Equity Custom Basket 2")
+ec2_2 = input.symbol("", "Equity Custom 2 - Slot 2", group="Equity Custom Basket 2")
+ec2_3 = input.symbol("", "Equity Custom 2 - Slot 3", group="Equity Custom Basket 2")
+ec2_4 = input.symbol("", "Equity Custom 2 - Slot 4", group="Equity Custom Basket 2")
+ec2_5 = input.symbol("", "Equity Custom 2 - Slot 5", group="Equity Custom Basket 2")
+ec2_6 = input.symbol("", "Equity Custom 2 - Slot 6", group="Equity Custom Basket 2")
+ec2_7 = input.symbol("", "Equity Custom 2 - Slot 7", group="Equity Custom Basket 2")
+ec2_8 = input.symbol("", "Equity Custom 2 - Slot 8", group="Equity Custom Basket 2")
+ec2_9 = input.symbol("", "Equity Custom 2 - Slot 9", group="Equity Custom Basket 2")
+ec2_10 = input.symbol("", "Equity Custom 2 - Slot 10", group="Equity Custom Basket 2")
+
+ec3_1 = input.symbol("", "Equity Custom 3 - Slot 1", group="Equity Custom Basket 3")
+ec3_2 = input.symbol("", "Equity Custom 3 - Slot 2", group="Equity Custom Basket 3")
+ec3_3 = input.symbol("", "Equity Custom 3 - Slot 3", group="Equity Custom Basket 3")
+ec3_4 = input.symbol("", "Equity Custom 3 - Slot 4", group="Equity Custom Basket 3")
+ec3_5 = input.symbol("", "Equity Custom 3 - Slot 5", group="Equity Custom Basket 3")
+ec3_6 = input.symbol("", "Equity Custom 3 - Slot 6", group="Equity Custom Basket 3")
+ec3_7 = input.symbol("", "Equity Custom 3 - Slot 7", group="Equity Custom Basket 3")
+ec3_8 = input.symbol("", "Equity Custom 3 - Slot 8", group="Equity Custom Basket 3")
+ec3_9 = input.symbol("", "Equity Custom 3 - Slot 9", group="Equity Custom Basket 3")
+ec3_10 = input.symbol("", "Equity Custom 3 - Slot 10", group="Equity Custom Basket 3")
+
+// HELPERS
+f_clamp(x, lo, hi) =>
+    math.max(lo, math.min(hi, x))
+
+f_zscore(src, len) =>
+    m = ta.sma(src, len)
+    d = ta.stdev(src, len)
+    z = d != 0 and not na(d) ? (src - m) / d : 0.0
+    not na(src) ? z : na
+
+f_norm_pulse(src, len, cap) =>
+    d = ta.stdev(src, len)
+    raw = d != 0 and not na(d) ? src / d : 0.0
+    f_clamp(raw, -cap, cap)
+
+f_close(sym) =>
+    enabled = str.length(sym) > 0
+    safeSym = enabled ? sym : "CRYPTO:DOGEUSD"
+    request.security(safeSym, timeframe.period, close, ignore_invalid_symbol=true)
+
+f_ret(sym) =>
+    enabled = str.length(sym) > 0
+    safeSym = enabled ? sym : "CRYPTO:DOGEUSD"
+    c = request.security(safeSym, timeframe.period, close, ignore_invalid_symbol=true)
+    r = enabled and not na(c) and not na(c[1]) and c[1] != 0 ? (c / c[1]) - 1 : na
+    active = enabled and not na(r) ? 1 : 0
+    [r, active]
+
+f_hydraulic_color(x) =>
+    extreme = math.max(colorExtremeLevel, 0.1)
+    driver = f_clamp(x, -extreme, extreme)
+    driver >= 0 ? color.from_gradient(driver, 0.0, extreme, cHydraulicYellow, cHydraulicRed) : color.from_gradient(driver, -extreme, 0.0, cHydraulicGreen, cHydraulicYellow)
+
+// SELECT ACTIVE BASKET SYMBOLS
+s1 = basketSource == "Crypto Meme Core Basket" ? core1 : basketSource == "Crypto Meme Broad Basket" ? broad1 : basketSource == "Crypto Meme High-Beta Basket" ? high1 : basketSource == "Crypto Custom Basket 1" ? cc1_1 : basketSource == "Crypto Custom Basket 2" ? cc2_1 : basketSource == "Crypto Custom Basket 3" ? cc3_1 : basketSource == "Equity Market Basket" ? eq1 : basketSource == "Equity Custom Basket 1" ? ec1_1 : basketSource == "Equity Custom Basket 2" ? ec2_1 : ec3_1
+s2 = basketSource == "Crypto Meme Core Basket" ? core2 : basketSource == "Crypto Meme Broad Basket" ? broad2 : basketSource == "Crypto Meme High-Beta Basket" ? high2 : basketSource == "Crypto Custom Basket 1" ? cc1_2 : basketSource == "Crypto Custom Basket 2" ? cc2_2 : basketSource == "Crypto Custom Basket 3" ? cc3_2 : basketSource == "Equity Market Basket" ? eq2 : basketSource == "Equity Custom Basket 1" ? ec1_2 : basketSource == "Equity Custom Basket 2" ? ec2_2 : ec3_2
+s3 = basketSource == "Crypto Meme Core Basket" ? core3 : basketSource == "Crypto Meme Broad Basket" ? broad3 : basketSource == "Crypto Meme High-Beta Basket" ? high3 : basketSource == "Crypto Custom Basket 1" ? cc1_3 : basketSource == "Crypto Custom Basket 2" ? cc2_3 : basketSource == "Crypto Custom Basket 3" ? cc3_3 : basketSource == "Equity Market Basket" ? eq3 : basketSource == "Equity Custom Basket 1" ? ec1_3 : basketSource == "Equity Custom Basket 2" ? ec2_3 : ec3_3
+s4 = basketSource == "Crypto Meme Core Basket" ? "" : basketSource == "Crypto Meme Broad Basket" ? broad4 : basketSource == "Crypto Meme High-Beta Basket" ? high4 : basketSource == "Crypto Custom Basket 1" ? cc1_4 : basketSource == "Crypto Custom Basket 2" ? cc2_4 : basketSource == "Crypto Custom Basket 3" ? cc3_4 : basketSource == "Equity Market Basket" ? eq4 : basketSource == "Equity Custom Basket 1" ? ec1_4 : basketSource == "Equity Custom Basket 2" ? ec2_4 : ec3_4
+s5 = basketSource == "Crypto Meme Broad Basket" ? broad5 : basketSource == "Crypto Meme High-Beta Basket" ? high5 : basketSource == "Crypto Custom Basket 1" ? cc1_5 : basketSource == "Crypto Custom Basket 2" ? cc2_5 : basketSource == "Crypto Custom Basket 3" ? cc3_5 : basketSource == "Equity Custom Basket 1" ? ec1_5 : basketSource == "Equity Custom Basket 2" ? ec2_5 : basketSource == "Equity Custom Basket 3" ? ec3_5 : ""
+s6 = basketSource == "Crypto Meme Broad Basket" ? broad6 : basketSource == "Crypto Meme High-Beta Basket" ? high6 : basketSource == "Crypto Custom Basket 1" ? cc1_6 : basketSource == "Crypto Custom Basket 2" ? cc2_6 : basketSource == "Crypto Custom Basket 3" ? cc3_6 : basketSource == "Equity Custom Basket 1" ? ec1_6 : basketSource == "Equity Custom Basket 2" ? ec2_6 : basketSource == "Equity Custom Basket 3" ? ec3_6 : ""
+s7 = basketSource == "Crypto Meme Broad Basket" ? broad7 : basketSource == "Crypto Meme High-Beta Basket" ? high7 : basketSource == "Crypto Custom Basket 1" ? cc1_7 : basketSource == "Crypto Custom Basket 2" ? cc2_7 : basketSource == "Crypto Custom Basket 3" ? cc3_7 : basketSource == "Equity Custom Basket 1" ? ec1_7 : basketSource == "Equity Custom Basket 2" ? ec2_7 : basketSource == "Equity Custom Basket 3" ? ec3_7 : ""
+s8 = basketSource == "Crypto Meme Broad Basket" ? broad8 : basketSource == "Crypto Meme High-Beta Basket" ? high8 : basketSource == "Crypto Custom Basket 1" ? cc1_8 : basketSource == "Crypto Custom Basket 2" ? cc2_8 : basketSource == "Crypto Custom Basket 3" ? cc3_8 : basketSource == "Equity Custom Basket 1" ? ec1_8 : basketSource == "Equity Custom Basket 2" ? ec2_8 : basketSource == "Equity Custom Basket 3" ? ec3_8 : ""
+s9 = basketSource == "Crypto Meme Broad Basket" ? broad9 : basketSource == "Crypto Meme High-Beta Basket" ? high9 : basketSource == "Crypto Custom Basket 1" ? cc1_9 : basketSource == "Crypto Custom Basket 2" ? cc2_9 : basketSource == "Crypto Custom Basket 3" ? cc3_9 : basketSource == "Equity Custom Basket 1" ? ec1_9 : basketSource == "Equity Custom Basket 2" ? ec2_9 : basketSource == "Equity Custom Basket 3" ? ec3_9 : ""
+s10 = basketSource == "Crypto Meme Broad Basket" ? broad10 : basketSource == "Crypto Meme High-Beta Basket" ? high10 : basketSource == "Crypto Custom Basket 1" ? cc1_10 : basketSource == "Crypto Custom Basket 2" ? cc2_10 : basketSource == "Crypto Custom Basket 3" ? cc3_10 : basketSource == "Equity Custom Basket 1" ? ec1_10 : basketSource == "Equity Custom Basket 2" ? ec2_10 : basketSource == "Equity Custom Basket 3" ? ec3_10 : ""
+s11 = basketSource == "Crypto Meme Broad Basket" ? broad11 : basketSource == "Crypto Meme High-Beta Basket" ? high11 : ""
+s12 = basketSource == "Crypto Meme Broad Basket" ? broad12 : basketSource == "Crypto Meme High-Beta Basket" ? high12 : ""
+s13 = basketSource == "Crypto Meme Broad Basket" ? broad13 : basketSource == "Crypto Meme High-Beta Basket" ? high13 : ""
+s14 = basketSource == "Crypto Meme Broad Basket" ? broad14 : basketSource == "Crypto Meme High-Beta Basket" ? high14 : ""
+s15 = basketSource == "Crypto Meme Broad Basket" ? broad15 : basketSource == "Crypto Meme High-Beta Basket" ? high15 : ""
+s16 = basketSource == "Crypto Meme Broad Basket" ? broad16 : ""
+s17 = basketSource == "Crypto Meme Broad Basket" ? broad17 : ""
+s18 = basketSource == "Crypto Meme Broad Basket" ? broad18 : ""
+s19 = basketSource == "Crypto Meme Broad Basket" ? broad19 : ""
+s20 = basketSource == "Crypto Meme Broad Basket" ? broad20 : ""
+
+// BASKET RETURNS
+[r1, a1] = f_ret(s1)
+[r2, a2] = f_ret(s2)
+[r3, a3] = f_ret(s3)
+[r4, a4] = f_ret(s4)
+[r5, a5] = f_ret(s5)
+[r6, a6] = f_ret(s6)
+[r7, a7] = f_ret(s7)
+[r8, a8] = f_ret(s8)
+[r9, a9] = f_ret(s9)
+[r10, a10] = f_ret(s10)
+[r11, a11] = f_ret(s11)
+[r12, a12] = f_ret(s12)
+[r13, a13] = f_ret(s13)
+[r14, a14] = f_ret(s14)
+[r15, a15] = f_ret(s15)
+[r16, a16] = f_ret(s16)
+[r17, a17] = f_ret(s17)
+[r18, a18] = f_ret(s18)
+[r19, a19] = f_ret(s19)
+[r20, a20] = f_ret(s20)
+
+sumRet = nz(r1) + nz(r2) + nz(r3) + nz(r4) + nz(r5) + nz(r6) + nz(r7) + nz(r8) + nz(r9) + nz(r10) + nz(r11) + nz(r12) + nz(r13) + nz(r14) + nz(r15) + nz(r16) + nz(r17) + nz(r18) + nz(r19) + nz(r20)
+activeCount = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20
+
+basketReady = activeCount >= minActiveBasketMembers
+avgRetRaw = basketReady and activeCount > 0 ? sumRet / activeCount : na
+avgRet = not na(avgRetRaw) ? math.max(avgRetRaw, -0.95) : na
+
+var float basketIndex = na
+if not na(avgRet)
+    basketIndex := na(basketIndex[1]) ? 100 : basketIndex[1] * (1 + avgRet)
+else
+    basketIndex := basketIndex[1]
+
+// MARKET / BENCHMARK COMPONENTS
+others = request.security("CRYPTOCAP:OTHERS", timeframe.period, close, ignore_invalid_symbol=true)
+totales = request.security("CRYPTOCAP:TOTALES", timeframe.period, close, ignore_invalid_symbol=true)
+total2es = request.security("CRYPTOCAP:TOTAL2ES", timeframe.period, close, ignore_invalid_symbol=true)
+total3es = request.security("CRYPTOCAP:TOTAL3ES", timeframe.period, close, ignore_invalid_symbol=true)
+btcMC = request.security("CRYPTOCAP:BTC", timeframe.period, close, ignore_invalid_symbol=true)
+usdtD = request.security("CRYPTOCAP:USDT.D", timeframe.period, close, ignore_invalid_symbol=true)
+
+btcPrice = f_close("CRYPTO:BTCUSD")
+ethPrice = f_close("CRYPTO:ETHUSD")
+solPrice = f_close("CRYPTO:SOLUSD")
+tonPrice = f_close("CRYPTO:TONUSD")
+
+spyPrice = f_close("AMEX:SPY")
+qqqPrice = f_close("NASDAQ:QQQ")
+iwmPrice = f_close("AMEX:IWM")
+diaPrice = f_close("AMEX:DIA")
+vixPrice = f_close("CBOE:VIX")
+
+customBenchmarkClose = f_close(customBenchmarkSymbol)
+
+benchmarkRaw = relativeBenchmarkMode == "Selected Basket" ? basketIndex : relativeBenchmarkMode == "OTHERS" ? others : relativeBenchmarkMode == "TOTALES" ? totales : relativeBenchmarkMode == "TOTAL2ES" ? total2es : relativeBenchmarkMode == "TOTAL3ES" ? total3es : relativeBenchmarkMode == "BTC" ? btcPrice : relativeBenchmarkMode == "ETH" ? ethPrice : relativeBenchmarkMode == "SOL" ? solPrice : relativeBenchmarkMode == "TON" ? tonPrice : relativeBenchmarkMode == "SPY" ? spyPrice : relativeBenchmarkMode == "QQQ" ? qqqPrice : relativeBenchmarkMode == "IWM" ? iwmPrice : relativeBenchmarkMode == "DIA" ? diaPrice : relativeBenchmarkMode == "VIX" ? vixPrice : relativeBenchmarkMode == "Custom Symbol" ? customBenchmarkClose : na
+
+// RISK ENVIRONMENT COMPONENTS
+coreAltBucket = total2es - others
+btcShareNonStable = btcMC / totales
+
+cryptoRiskValid = not na(others) and not na(total2es) and not na(btcMC) and not na(totales) and not na(usdtD) and coreAltBucket > 0 and btcShareNonStable > 0 and usdtD > 0
+cryptoRiskRaw = cryptoRiskValid ? ((others / coreAltBucket) / btcShareNonStable) / usdtD : na
+
+equityRiskValid = not na(iwmPrice) and not na(spyPrice) and not na(qqqPrice) and not na(vixPrice) and iwmPrice > 0 and spyPrice > 0 and qqqPrice > 0 and vixPrice > 0
+equityRiskRaw = equityRiskValid ? (iwmPrice / spyPrice) * (qqqPrice / spyPrice) * (spyPrice / vixPrice) : na
+
+resolvedRiskMode = riskEnvironmentMode == "Auto" and marketMode == "Crypto" ? "Crypto Long-Tail Risk" : riskEnvironmentMode == "Auto" and marketMode == "Equities / Stocks" ? "Equity Risk-On" : riskEnvironmentMode
+riskRaw = resolvedRiskMode == "Crypto Long-Tail Risk" ? cryptoRiskRaw : resolvedRiskMode == "Equity Risk-On" ? equityRiskRaw : na
+
+// TARGET / NORMALIZATION BASES
+targetRaw = analysisTarget == "Current Chart Asset" ? chartPriceSource : basketIndex
+useRelative = relativeBenchmarkMode != "Off" and not (analysisTarget == "Selected Basket Index" and relativeBenchmarkMode == "Selected Basket")
+
+var float targetBase = na
+var float benchmarkBase = na
+
+if na(targetBase) and not na(targetRaw) and targetRaw > 0
+    targetBase := targetRaw
+
+if na(benchmarkBase) and useRelative and not na(benchmarkRaw) and benchmarkRaw > 0
+    benchmarkBase := benchmarkRaw
+
+targetNorm = not na(targetBase) and targetBase > 0 ? targetRaw / targetBase : na
+benchmarkNorm = useRelative and not na(benchmarkBase) and benchmarkBase > 0 ? benchmarkRaw / benchmarkBase : na
+targetVsBenchmark = useRelative and not na(targetNorm) and not na(benchmarkNorm) and benchmarkNorm > 0 ? targetNorm / benchmarkNorm : 1.0
+
+// COMPONENT-NORMALIZED ENGINE WITH FULL-HISTORY BOOTSTRAP
+effectivePriceWeight = presetPriceWeight
+effectiveRelativeWeight = useRelative ? presetRelativeWeight : 0.0
+effectiveRiskWeight = resolvedRiskMode != "Off" ? presetRiskWeight : 0.0
+
+priceLog = not na(targetNorm) and targetNorm > 0 ? math.log(targetNorm) : na
+relativeLog = useRelative and targetVsBenchmark > 0 ? math.log(targetVsBenchmark) : na
+riskLog = resolvedRiskMode != "Off" and not na(riskRaw) and riskRaw > 0 ? math.log(riskRaw) : na
+
+var int priceValidBars = 0
+var int relativeValidBars = 0
+var int riskValidBars = 0
+var int fusionValidBars = 0
+
+priceValidBars := not na(priceLog) ? priceValidBars + 1 : 0
+relativeValidBars := not na(relativeLog) ? relativeValidBars + 1 : 0
+riskValidBars := not na(riskLog) ? riskValidBars + 1 : 0
+
+priceAdaptiveLen = math.max(2, math.min(zLen, priceValidBars))
+relativeAdaptiveLen = math.max(2, math.min(zLen, relativeValidBars))
+riskAdaptiveLen = math.max(2, math.min(zLen, riskValidBars))
+
+priceZUnclamped = forceFullHistory and not na(priceLog) ? f_zscore(priceLog, priceAdaptiveLen) : priceValidBars >= minComponentWarmupBars ? f_zscore(priceLog, priceAdaptiveLen) : na
+relativeZUnclamped = forceFullHistory and useRelative and not na(relativeLog) ? f_zscore(relativeLog, relativeAdaptiveLen) : useRelative and relativeValidBars >= minComponentWarmupBars ? f_zscore(relativeLog, relativeAdaptiveLen) : na
+riskZUnclamped = forceFullHistory and resolvedRiskMode != "Off" and not na(riskLog) ? f_zscore(riskLog, riskAdaptiveLen) : resolvedRiskMode != "Off" and riskValidBars >= minComponentWarmupBars ? f_zscore(riskLog, riskAdaptiveLen) : na
+
+priceComponentZRaw = not na(priceZUnclamped) ? f_clamp(priceZUnclamped, -componentZClamp, componentZClamp) : na
+relativeComponentZRaw = not na(relativeZUnclamped) ? f_clamp(relativeZUnclamped, -componentZClamp, componentZClamp) : na
+riskComponentZRaw = not na(riskZUnclamped) ? f_clamp(riskZUnclamped, -componentZClamp, componentZClamp) : na
+
+priceComponentZ = priceComponentZRaw
+relativeComponentZ = effectiveRelativeWeight == 0.0 ? 0.0 : relativeComponentZRaw
+riskComponentZ = effectiveRiskWeight == 0.0 ? 0.0 : riskComponentZRaw
+
+priceReady = not na(priceComponentZ)
+relativeReady = effectiveRelativeWeight == 0.0 or not na(relativeComponentZ)
+riskReady = effectiveRiskWeight == 0.0 or not na(riskComponentZ)
+
+availablePriceWeight = priceReady ? effectivePriceWeight : 0.0
+availableRelativeWeight = relativeReady and effectiveRelativeWeight != 0.0 ? effectiveRelativeWeight : 0.0
+availableRiskWeight = riskReady and effectiveRiskWeight != 0.0 ? effectiveRiskWeight : 0.0
+
+availableWeightPower = math.sqrt(math.pow(availablePriceWeight, 2) + math.pow(availableRelativeWeight, 2) + math.pow(availableRiskWeight, 2))
+
+fusionWeightedRaw = priceReady ? (availablePriceWeight * nz(priceComponentZ, 0.0)) + (availableRelativeWeight * nz(relativeComponentZ, 0.0)) + (availableRiskWeight * nz(riskComponentZ, 0.0)) : na
+fusionWeightScaled = not na(fusionWeightedRaw) and availableWeightPower > 0 ? fusionWeightedRaw / availableWeightPower : na
+
+fusionValidBars := not na(fusionWeightScaled) ? fusionValidBars + 1 : 0
+fusionAdaptiveLen = math.max(2, math.min(zLen, fusionValidBars))
+
+fusionFinalZ = forceFullHistory and not na(fusionWeightScaled) ? f_zscore(fusionWeightScaled, fusionAdaptiveLen) : fusionValidBars >= minComponentWarmupBars ? f_zscore(fusionWeightScaled, fusionAdaptiveLen) : na
+
+finalSignalRaw = finalSignalNormalization == "Final Z-Score" ? fusionFinalZ : fusionWeightScaled
+
+engineSignal = not na(finalSignalRaw) ? finalSignalRaw : not na(priceComponentZRaw) ? priceComponentZRaw : neverBlankSignal ? 0.0 : na
+
+displayCandidate = displayMode == "Price Component" ? priceComponentZRaw : displayMode == "Relative Component" ? relativeComponentZ : displayMode == "Risk Component" ? riskComponentZ : displayMode == "Fusion Before Final Z" ? fusionWeightScaled : engineSignal
+
+signalLine = neverBlankSignal ? not na(displayCandidate) ? displayCandidate : engineSignal : displayCandidate
+simpleSmooth = ta.ema(signalLine, smoothLen)
+
+priceComponentActive = not na(priceComponentZRaw) ? 1.0 : 0.0
+relativeComponentActive = effectiveRelativeWeight != 0.0 and not na(relativeComponentZRaw) ? 1.0 : 0.0
+riskComponentActive = effectiveRiskWeight != 0.0 and not na(riskComponentZRaw) ? 1.0 : 0.0
+
+fullEngineActive = priceValidBars >= minComponentWarmupBars and (effectiveRelativeWeight == 0.0 or relativeValidBars >= minComponentWarmupBars) and (effectiveRiskWeight == 0.0 or riskValidBars >= minComponentWarmupBars) ? 1.0 : 0.0
+
+// DISPLAY VISCOSITY BASELINE
+zDeltaAbs = not na(signalLine) ? math.abs(signalLine - nz(signalLine[1], signalLine)) : 0.0
+zChange = not na(signalLine[visLen]) and not na(signalLine) ? math.abs(signalLine - signalLine[visLen]) : 0.0
+zVolatility = math.sum(zDeltaAbs, visLen)
+
+er = zVolatility != 0 ? zChange / zVolatility : 0.0
+
+fastSC = 2.0 / (fastLen + 1.0)
+slowSC = 2.0 / (slowLen + 1.0)
+baseSC = math.pow(er * (fastSC - slowSC) + slowSC, 2)
+
+zStep = signalLine - nz(signalLine[1], signalLine)
+stepAvg = ta.ema(math.abs(zStep), visLen)
+stepImpulse = stepAvg != 0 ? f_clamp(math.abs(zStep) / stepAvg, 0.0, 3.0) / 3.0 : 0.0
+
+zeroProximity = 1.0 - f_clamp(math.abs(signalLine) / 2.0, 0.0, 1.0)
+
+adaptiveSC = baseSC * (1.0 + impulseBoost * stepImpulse + zeroZoneBoost * zeroProximity * stepImpulse)
+adaptiveSC := f_clamp(adaptiveSC, 0.001, 1.0)
+
+var float viscosity = na
+viscosity := na(viscosity[1]) or na(signalLine) ? signalLine : viscosity[1] + adaptiveSC * (signalLine - viscosity[1])
+
+// DISPLAY GRADIENT DRIVER
+zSlope = signalLine - nz(signalLine[1], signalLine)
+zAccel = zSlope - nz(zSlope[1], zSlope)
+
+slopeVol = ta.stdev(zSlope, visLen)
+accelVol = ta.stdev(zAccel, visLen)
+
+slopeNorm = slopeVol != 0 and not na(slopeVol) ? f_clamp(zSlope / slopeVol, -2.0, 2.0) : 0.0
+accelNorm = accelVol != 0 and not na(accelVol) ? f_clamp(zAccel / accelVol, -2.0, 2.0) : 0.0
+
+distanceFromViscosity = signalLine - viscosity
+
+fusionDriverRaw = signalLine + (velocityWeight * distanceFromViscosity) + (slopeWeight * slopeNorm) + (accelWeight * accelNorm)
+fusionDriverSmooth = ta.ema(fusionDriverRaw, gradientSmoothLen)
+fusionDriverBlended = (fusionDriverRaw * (1.0 - gradientSmoothBlend)) + (fusionDriverSmooth * gradientSmoothBlend)
+
+gradientDriver = fusionDriverBlended * gradientIntensity
+
+safeGradientForLine = nz(gradientDriver, nz(signalLine, 0.0))
+signalColor = f_hydraulic_color(safeGradientForLine)
+
+// ENGINE VISCOSITY / GRADIENT FOR CANDLE COLORS
+engineSignalSafe = nz(engineSignal, 0.0)
+
+engineDeltaAbs = math.abs(engineSignalSafe - nz(engineSignalSafe[1], engineSignalSafe))
+engineChange = math.abs(engineSignalSafe - nz(engineSignalSafe[visLen], engineSignalSafe))
+engineVolatility = math.sum(engineDeltaAbs, visLen)
+
+engineEr = engineVolatility != 0 ? engineChange / engineVolatility : 0.0
+engineBaseSC = math.pow(engineEr * (fastSC - slowSC) + slowSC, 2)
+
+engineStep = engineSignalSafe - nz(engineSignalSafe[1], engineSignalSafe)
+engineStepAvg = ta.ema(math.abs(engineStep), visLen)
+engineStepImpulse = engineStepAvg != 0 ? f_clamp(math.abs(engineStep) / engineStepAvg, 0.0, 3.0) / 3.0 : 0.0
+
+engineZeroProximity = 1.0 - f_clamp(math.abs(engineSignalSafe) / 2.0, 0.0, 1.0)
+
+engineAdaptiveSC = engineBaseSC * (1.0 + impulseBoost * engineStepImpulse + zeroZoneBoost * engineZeroProximity * engineStepImpulse)
+engineAdaptiveSC := f_clamp(engineAdaptiveSC, 0.001, 1.0)
+
+var float engineViscosity = na
+engineViscosity := na(engineViscosity[1]) ? engineSignalSafe : engineViscosity[1] + engineAdaptiveSC * (engineSignalSafe - engineViscosity[1])
+
+engineSlope = engineSignalSafe - nz(engineSignalSafe[1], engineSignalSafe)
+engineAccel = engineSlope - nz(engineSlope[1], engineSlope)
+
+engineSlopeVol = ta.stdev(engineSlope, visLen)
+engineAccelVol = ta.stdev(engineAccel, visLen)
+
+engineSlopeNorm = engineSlopeVol != 0 and not na(engineSlopeVol) ? f_clamp(engineSlope / engineSlopeVol, -2.0, 2.0) : 0.0
+engineAccelNorm = engineAccelVol != 0 and not na(engineAccelVol) ? f_clamp(engineAccel / engineAccelVol, -2.0, 2.0) : 0.0
+
+engineDistanceFromViscosity = engineSignalSafe - engineViscosity
+
+engineGradientRaw = engineSignalSafe + (velocityWeight * engineDistanceFromViscosity) + (slopeWeight * engineSlopeNorm) + (accelWeight * engineAccelNorm)
+engineGradientSmooth = ta.ema(engineGradientRaw, gradientSmoothLen)
+engineGradientBlended = (engineGradientRaw * (1.0 - gradientSmoothBlend)) + (engineGradientSmooth * gradientSmoothBlend)
+
+engineGradientDriver = engineGradientBlended * gradientIntensity
+
+// LEADING PRESSURE WAVE
+// The original Riskflow signal remains unchanged. This wave is a smooth pressure derivative:
+// below zero and rising = pressure improvement, above zero and falling = pressure cooling.
+pressureSignal = pressureWaveSource == "Display Signal" ? nz(signalLine, 0.0) : engineSignalSafe
+pressureBaseline = pressureWaveSource == "Display Signal" ? nz(viscosity, pressureSignal) : engineViscosity
+pressureDistance = pressureSignal - pressureBaseline
+
+pressurePositive = math.max(pressureDistance, 0.0)
+pressureNegative = math.max(-pressureDistance, 0.0)
+
+pressurePositiveArea = ta.rma(pressurePositive, pressureAreaLen)
+pressureNegativeArea = ta.rma(pressureNegative, pressureAreaLen)
+pressureTotalArea = pressurePositiveArea + pressureNegativeArea
+pressureNetArea = pressurePositiveArea - pressureNegativeArea
+pressurePositiveShare = pressureTotalArea > 0 ? pressurePositiveArea / pressureTotalArea : na
+pressureAreaBalance = pressureTotalArea > 0 ? f_clamp(pressureNetArea / pressureTotalArea, -1.0, 1.0) : 0.0
+
+pressureFastScale = ta.ema(math.abs(pressureDistance), math.max(5, math.round(pressureNormalizeLen / 2)))
+pressureSlowScale = ta.ema(math.abs(pressureDistance), pressureNormalizeLen)
+pressureAdaptiveScale = (0.75 * nz(pressureSlowScale, 0.0)) + (0.25 * nz(pressureFastScale, 0.0))
+pressureLevelPulse = pressureAdaptiveScale > 0 ? f_clamp(pressureDistance / pressureAdaptiveScale, -2.5, 2.5) : 0.0
+
+pressureGapVelocity = ta.ema(pressureDistance - nz(pressureDistance[1], pressureDistance), 2)
+pressureSignalVelocity = ta.ema(pressureSignal - nz(pressureSignal[1], pressureSignal), 2)
+pressureSignalCurl = ta.ema(pressureSignalVelocity - nz(pressureSignalVelocity[1], pressureSignalVelocity), 2)
+pressureGapCurl = ta.ema(pressureGapVelocity - nz(pressureGapVelocity[1], pressureGapVelocity), 2)
+pressureRelativeVelocity = ta.ema(nz(relativeComponentZ, 0.0) - nz(relativeComponentZ[1], nz(relativeComponentZ, 0.0)), 2)
+
+pressureGapPulse = f_norm_pulse(pressureGapVelocity, pressureDerivativeLen, pressureDerivativeClamp)
+pressureSignalPulse = f_norm_pulse(pressureSignalVelocity, pressureDerivativeLen, pressureDerivativeClamp)
+pressureCurlPulse = f_norm_pulse((0.65 * pressureGapCurl) + (0.35 * pressureSignalCurl), pressureDerivativeLen, pressureDerivativeClamp)
+pressureRelativePulse = f_norm_pulse(pressureRelativeVelocity, pressureDerivativeLen, pressureDerivativeClamp)
+pressureCurvePulse = f_clamp(pressureCurlPulse * (1.0 + 0.20 * math.abs(pressureGapPulse)), -2.5, 2.5)
+
+pressureEarlyTurnBoost = pressureDistance < 0 and pressureGapPulse > 0 ? f_clamp(math.abs(pressureLevelPulse) / 2.0, 0.0, 1.0) * pressureGapPulse * 0.20 : 0.0
+pressureEarlyFadeBoost = pressureDistance > 0 and pressureGapPulse < 0 ? f_clamp(math.abs(pressureLevelPulse) / 2.0, 0.0, 1.0) * pressureGapPulse * 0.16 : 0.0
+
+pressureRaw = (pressureImpulseWeight * pressureGapPulse) + (0.08 * pressureSignalPulse) + (pressureCurlWeight * pressureCurvePulse) + (pressureRelativeWeight * pressureRelativePulse) + (pressureAreaWeight * pressureAreaBalance * 2.0) + (pressureLevelWeight * pressureLevelPulse) + pressureEarlyTurnBoost + pressureEarlyFadeBoost
+pressureBounded = (pressureRaw / (1.0 + math.abs(pressureRaw))) * 2.7
+
+pressureWaveSmooth = ta.ema(ta.ema(pressureBounded, 5), 8)
+pressureWave = ta.ema(pressureWaveSmooth, pressureWaveLen) * pressureScale
+pressureTrigger = ta.ema(pressureWave, pressureTriggerLen)
+pressureWaveVisual = ta.ema(pressureWave, 3)
+pressureWaveDisplayRaw = math.abs(pressureWaveVisual) < pressureDeadband ? 0.0 : pressureWaveVisual
+pressureWaveDisplay = f_clamp(pressureWaveDisplayRaw, -pressureDisplayClamp, pressureDisplayClamp)
+pressureWaveMomentum = pressureWaveVisual - nz(pressureWaveVisual[1], pressureWaveVisual)
+
+pressureWaveRising = pressureWaveVisual >= nz(pressureWaveVisual[1], pressureWaveVisual)
+pressureTriggerRising = pressureTrigger >= nz(pressureTrigger[1], pressureTrigger)
+pressureAboveZero = pressureWaveVisual > pressureDeadband
+pressureBelowZero = pressureWaveVisual < -pressureDeadband
+pressureWaveColor = pressureAboveZero ? color.new(cPressureBull, pressureWaveRising ? 78 : 86) : pressureBelowZero ? pressureWaveRising ? color.new(cPressureBearFade, 86) : color.new(cPressureBear, 80) : color.new(color.gray, 100)
+pressureLineColor = pressureAboveZero ? color.new(cPressureBull, pressureWaveRising ? 58 : 72) : pressureBelowZero ? pressureWaveRising ? color.new(cPressureBearFade, 70) : color.new(cPressureBear, 60) : color.new(color.gray, 100)
+pressureTriggerColor = pressureTrigger >= pressureWave ? color.new(cPressureTrigger, pressureTriggerRising ? 36 : 52) : color.new(cPressureBearFade, pressureTriggerRising ? 55 : 46)
+pressureHistColor = pressureWaveMomentum >= 0 ? color.new(cPressureBull, 88) : color.new(cPressureBear, 88)
+
+// PLOTTING
+pressureZeroPlot = plot(showPressureWaves ? 0.0 : na, "Pressure Wave Zero", color=color.new(color.gray, 100))
+pressureWavePlot = plot(showPressureWaves ? pressureWaveDisplay : na, "Riskflow Pressure Ribbon", style=plot.style_area, color=pressureWaveColor)
+pressureLinePlot = plot(showPressureWaves ? pressureWaveDisplay : na, "Pressure Ribbon Edge", color=pressureLineColor, linewidth=1)
+pressureTriggerPlot = plot(showPressureWaves and showPressureTrigger ? pressureTrigger : na, "Pressure Trigger", color=pressureTriggerColor, linewidth=1)
+plot(showPressureWaves and showPressureHistogram ? pressureWaveMomentum : na, "Pressure Wave Momentum Columns", style=plot.style_columns, color=pressureHistColor)
+
+plot(showMutedSignalReference ? signalLine : na, "Signal Line / Display Mode", color=signalColor, linewidth=lineWidth)
+plot(showViscosityMA ? viscosity : na, "Adaptive Viscosity Baseline", color=color.new(color.white, 35), linewidth=1)
+plot(showSimpleMA ? simpleSmooth : na, "Simple Smooth", color=color.new(color.gray, 35), linewidth=1)
+
+hline(2.0, "+2sigma / Overheated", color=cHydraulicRed, linestyle=hline.style_dotted)
+hline(1.5, "+1.5sigma / Upper Gate", color=cHydraulicOrange, linestyle=hline.style_dotted)
+hline(0.0, "0 / Equilibrium", color=cHydraulicGray, linestyle=hline.style_dotted)
+hline(-1.5, "-1.5sigma / Lower Gate", color=cHydraulicLimeGate, linestyle=hline.style_dotted)
+hline(-2.0, "-2sigma / Deep Value", color=cHydraulicGreen, linestyle=hline.style_dotted)
+
+// Candle colors are driven by the real engine signal, not Display Mode.
+// This lets you inspect components without changing main chart candle color logic.
+candleDriver = candleColorSource == "Gradient Driver" ? engineGradientDriver : engineSignalSafe
+candleColor = colorCandles ? f_hydraulic_color(candleDriver) : na
+
+barcolor(candleColor)
+
+overlayCandleColor = colorCandles and colorWicksBorders ? candleColor : na
+plotcandle(open, high, low, close, title="Colored Overlay Candles / Wicks / Borders", color=overlayCandleColor, wickcolor=overlayCandleColor, bordercolor=overlayCandleColor, force_overlay=true)
+
+// DEBUG
+plot(showDebug ? chartPriceValid : na, "Chart Price Valid", color=color.white, display=display.data_window)
+plot(showDebug ? priceSourceMovement : na, "Price Source Movement", color=color.gray, display=display.data_window)
+
+plot(showDebug ? activeCount : na, "Active Basket Count", color=color.blue, display=display.data_window)
+plot(showDebug ? basketIndex : na, "Selected Basket Index", color=color.purple, display=display.data_window)
+plot(showDebug ? targetVsBenchmark : na, "Target vs Benchmark", color=color.orange, display=display.data_window)
+
+plot(showDebug ? cryptoRiskRaw : na, "Crypto Long-Tail Risk Raw", color=color.white, display=display.data_window)
+plot(showDebug ? equityRiskRaw : na, "Equity Risk-On Raw", color=color.aqua, display=display.data_window)
+
+plot(showDebug ? priceComponentZRaw : na, "Price Component Z", color=color.green, display=display.data_window)
+plot(showDebug ? relativeComponentZ : na, "Relative Component Z", color=color.yellow, display=display.data_window)
+plot(showDebug ? riskComponentZ : na, "Risk Component Z", color=color.red, display=display.data_window)
+
+plot(showDebug ? fusionWeightedRaw : na, "Fusion Weighted Raw", color=color.orange, display=display.data_window)
+plot(showDebug ? fusionWeightScaled : na, "Fusion Weight-Scaled", color=color.fuchsia, display=display.data_window)
+plot(showDebug ? fusionFinalZ : na, "Fusion Final Z", color=color.lime, display=display.data_window)
+plot(showDebug ? engineSignal : na, "Engine Signal / Final Fallback", color=color.white, display=display.data_window)
+
+plot(showDebug ? availablePriceWeight : na, "Available Price Weight", color=color.green, display=display.data_window)
+plot(showDebug ? availableRelativeWeight : na, "Available Relative Weight", color=color.yellow, display=display.data_window)
+plot(showDebug ? availableRiskWeight : na, "Available Risk Weight", color=color.red, display=display.data_window)
+
+plot(showDebug ? priceComponentActive : na, "Price Component Active", color=color.green, display=display.data_window)
+plot(showDebug ? relativeComponentActive : na, "Relative Component Active", color=color.yellow, display=display.data_window)
+plot(showDebug ? riskComponentActive : na, "Risk Component Active", color=color.red, display=display.data_window)
+plot(showDebug ? fullEngineActive : na, "Full Engine Active / Mature", color=color.white, display=display.data_window)
+
+plot(showDebug ? gradientDriver : na, "Display Gradient Driver", color=color.fuchsia, display=display.data_window)
+plot(showDebug ? engineGradientDriver : na, "Engine Gradient Driver", color=color.aqua, display=display.data_window)
+
+plot(showPressureDebug ? pressurePositiveArea : na, "Positive Viscosity Area", color=color.red, display=display.data_window)
+plot(showPressureDebug ? pressureNegativeArea : na, "Negative Viscosity Area", color=color.green, display=display.data_window)
+plot(showPressureDebug ? pressureNetArea : na, "Net Viscosity Area", color=color.orange, display=display.data_window)
+plot(showPressureDebug ? pressurePositiveShare : na, "Positive Pressure Share", color=color.white, display=display.data_window)
+plot(showPressureDebug ? pressureWave : na, "Pressure Wave Value", color=color.purple, display=display.data_window)
+plot(showPressureDebug ? pressureTrigger : na, "Pressure Trigger Value", color=color.white, display=display.data_window)
+plot(showPressureDebug ? pressureGapPulse : na, "Pressure Gap Impulse", color=color.aqua, display=display.data_window)
+plot(showPressureDebug ? pressureCurlPulse : na, "Pressure Curl Pulse", color=color.fuchsia, display=display.data_window)
+plot(showPressureDebug ? pressureCurvePulse : na, "Pressure Curve Pulse", color=color.orange, display=display.data_window)

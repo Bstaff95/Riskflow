@@ -2,6 +2,28 @@
 
 For the adaptable long-term product vision, see `docs/END_STATE.md`. The roadmap should stay grounded in what we can test next; the end-state guide should stay flexible and evidence-driven.
 
+## Active Sprint: Signal Grammar Candidate Sprint
+
+The active near-term mission is to convert the human-reviewed oscillator grammar into measurable research sidecars.
+
+Do this before collecting more random winner examples or tuning the core indicator.
+
+First deliverables:
+
+- `pressure_acceptance`: time and signed area above or below viscosity.
+- `zone_reclaim_retest`: reclaim/retest behavior around `-2`, `-1.5`, `0`, `1.5`, and `2`.
+- `failed_weakness`: deep negative weakness that stops accelerating lower.
+- `curvature_intent`: slope, acceleration, and curl toward confirmation.
+- `divergence_quality`: price versus oscillator and gradient divergence candidates.
+- `chop_quality`: clean compression versus chaotic volatility.
+- `reset_quality`: hot-leader cooldown and constructive rebasing.
+
+Guardrails:
+
+- Add these as research sidecar features/events only.
+- Do not change `core_signal_v0`, production states, leaderboard ranking, opportunity scores, or TradingView interpretation by default.
+- Evaluate all candidates with Layer 7-style evidence before promotion.
+
 ## Stage 1: Meme MVP
 
 Goal:

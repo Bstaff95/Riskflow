@@ -39,6 +39,25 @@ That does not mean weights disappear mathematically. It means preset choice beco
 - Treat Obsidian as the synthesis layer and structured records as the evidence layer.
 - Promote no visual layer, formula change, or score change without Layer 7-style evidence.
 
+## Current State
+
+Initial human-reviewed grammar is now sufficient to begin implementation of research sidecars.
+
+The project should not keep collecting random bullish examples as the blocking path. Missing, bearish, and noisy cases are still useful calibration backfill, but the active sprint is to translate the recurring visual reads into measurable candidate features and events.
+
+The next implementation should focus on:
+
+- pressure acceptance around viscosity
+- failed weakness in deep negative zones
+- key-zone reclaim and retest behavior
+- oscillator structure proxies
+- divergence candidates
+- curvature and acceleration intent
+- clean chop versus noisy chop
+- reset quality after overheated moves
+
+These are research candidates only. They should not alter production scan rankings, state labels, scores, or the base TradingView indicator until evidence supports promotion.
+
 ## Research Objects
 
 ### Observations
@@ -132,7 +151,7 @@ The first lab should focus on these families:
 
 ## Example Labeling Targets
 
-Before changing the core formula, collect at least:
+The initial observation library was created to support these targets:
 
 - 15 clean bullish hits
 - 10 bullish false positives
@@ -141,6 +160,8 @@ Before changing the core formula, collect at least:
 - 5 noisy or ambiguous edge cases
 
 Include both `4h` and `1d`. Avoid clustering every case in the same market window.
+
+These targets remain useful for calibration, but they are no longer a reason to delay the first Grammar Candidate Sprint. Treat additional examples as backfill for weak or ambiguous candidates.
 
 ## Promotion Gates
 

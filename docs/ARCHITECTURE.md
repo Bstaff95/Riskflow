@@ -11,9 +11,11 @@ data/processed/       derived data, ignored by git
 docs/                 durable project memory and architecture notes
 notebooks/            starter research notebooks
 obsidian/             research vault and generated markdown reports
+research/             structured observations, grammar registries, and research fixtures
 reports/              generated CSV/HTML reports, ignored by git
 src/riskflow/         Python package
 tests/                pytest test suite
+tradingview/          canonical Pine indicator reference and experimental Pine variants
 AGENTS.md            coding-agent instructions
 README.md            user-facing project overview
 ```

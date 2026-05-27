@@ -8,9 +8,13 @@ Model: `riskflow_signal_grammar_primitives_v0`
 
 The grammar lab is a research queue, not a production signal. The base oscillator should remain frozen until repeated observations and Layer 7 evidence identify which primitives matter.
 
+Current priority: begin the Grammar Candidate Sprint. Additional missing, bearish, and noisy cases are calibration backfill, not the blocking path.
+
 ## Observation Progress
 
 Total structured observations loaded: `30`
+
+This table reflects generated/structured observation coverage. It does not fully capture human-reviewed wiki coverage from the live chart-review loop.
 
 | Scenario | Current | Target | Remaining |
 |---|---:|---:|---:|
@@ -22,6 +26,8 @@ Total structured observations loaded: `30`
 
 ## Primitive Family Coverage
 
+Structured/generated primitive coverage is still incomplete:
+
 - `adaptive_universal_weighting`: 0
 - `curvature_intent`: 0
 - `divergence_quality`: 0
@@ -30,9 +36,18 @@ Total structured observations loaded: `30`
 - `pressure_acceptance`: 0
 - `zone_reclaim_retest`: 0
 
-## Observed Primitives
+## Human-Reviewed Primitive Coverage
 
-_No primitives observed yet._
+Human-reviewed chart work has already produced useful grammar hypotheses:
+
+- `pressure_acceptance`: sustained above-viscosity behavior, time above viscosity, signed area above/below viscosity, flush/reclaim behavior.
+- `failed_weakness`: low-zone rejection where weakness fails to accelerate, rising oscillator lows, tight coil under viscosity.
+- `zone_reclaim_retest`: `-2`, `-1.5`, `0`, `1.5`, and `2` reclaim/retest behavior.
+- `oscillator_structure`: downtrend breaks, descending wedges, ascending wedges, channels, second trendline breaks, failed first breaks.
+- `divergence_quality`: bullish divergence, bearish divergence, hidden bearish divergence, color/gradient divergence.
+- `curvature_intent`: slope turns, acceleration turns, early curl toward zero or away from overheated zones.
+- `chop_quality`: clean sideways compression versus violent unstructured chop.
+- `reset_quality`: hot leader cooloff, break below `1.5`, rebasing after overheated impulse.
 
 ## Missing Primitive Coverage
 
@@ -86,7 +101,7 @@ _No primitives observed yet._
 
 ## Next Review Batch
 
-Prioritize the largest remaining scenario gaps first. Include both `4h` and `1d`, avoid one date cluster, and include failed/bearish examples alongside clean winners.
+Use new review batches only to backfill weak evidence. The next primary task is implementation of measurable sidecar features/events for the strongest human-reviewed primitives.
 
 ## Promotion Reminder
 

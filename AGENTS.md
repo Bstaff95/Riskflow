@@ -11,6 +11,7 @@ These instructions are for Codex or any coding agent working in this repo.
 ## Start Of Session
 
 - Read this file first.
+- Then read `docs/PRIME_COMMAND.md` when starting a fresh Codex session or recovering project context.
 - Then read `docs/PROJECT_CONTEXT.md`.
 - For code work, also read `docs/ARCHITECTURE.md`.
 - For planning work, also read `docs/ROADMAP.md`.

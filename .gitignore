@@ -19,15 +19,22 @@ research/observations/*
 !research/observations/.gitkeep
 obsidian/reports/*
 !obsidian/reports/.gitkeep
-obsidian/wiki/cases/*
-!obsidian/wiki/cases/.gitkeep
-obsidian/wiki/patterns/*
-!obsidian/wiki/patterns/.gitkeep
-obsidian/wiki/concepts/*
-!obsidian/wiki/concepts/.gitkeep
-obsidian/wiki/maps/*
-!obsidian/wiki/maps/.gitkeep
-obsidian/wiki/Indicator Observation Library.md
+obsidian/wiki/cases/*.png
+obsidian/wiki/cases/*.jpg
+obsidian/wiki/cases/*.jpeg
+obsidian/wiki/cases/*.webp
+obsidian/wiki/patterns/*.png
+obsidian/wiki/patterns/*.jpg
+obsidian/wiki/patterns/*.jpeg
+obsidian/wiki/patterns/*.webp
+obsidian/wiki/concepts/*.png
+obsidian/wiki/concepts/*.jpg
+obsidian/wiki/concepts/*.jpeg
+obsidian/wiki/concepts/*.webp
+obsidian/wiki/maps/*.png
+obsidian/wiki/maps/*.jpg
+obsidian/wiki/maps/*.jpeg
+obsidian/wiki/maps/*.webp
 
 .DS_Store
 .idea/

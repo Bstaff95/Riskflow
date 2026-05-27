@@ -5,6 +5,9 @@ Riskflow is a capital-flow and leader-finding research engine.
 ## Start Here
 
 - [[Riskflow]]
+- [[Indicator Observation Library]]
+- [[Signal Grammar Lab]]
+- [[Grammar Map]]
 - [[Meme Sector]]
 - [[Relative Accumulation]]
 - [[Compression Before Repricing]]
@@ -28,4 +31,3 @@ Meme coins only:
 - compression before repricing
 - emerging relative leadership
 - forward relative returns versus the basket
-

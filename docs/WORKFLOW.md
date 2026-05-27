@@ -80,6 +80,14 @@ Python is for calculation:
 
 Do not store heavy data or generated report history in git unless explicitly requested.
 
+Curated Obsidian wiki markdown is tracked in Git so the research memory survives across sessions and machines. Generated reports, screenshots, raw data, processed data, and Obsidian app state remain ignored.
+
+See:
+
+```text
+docs/OBSIDIAN_MEMORY_POLICY.md
+```
+
 ## IDE Note
 
 If the IDE opens `.pytest_cache/README.md`, ignore it.
@@ -95,4 +103,3 @@ The vault home note is:
 ```text
 obsidian/Riskflow Home.md
 ```
-

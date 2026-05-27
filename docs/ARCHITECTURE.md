@@ -115,6 +115,10 @@ The working research method is documented in `docs/VISUAL_INDICATOR_LEARNING_LOO
 
 The observation library is the Karpathy-style LLM wiki layer for this loop. Machine-readable records live under `research/observations/`; Obsidian synthesis pages live under `obsidian/wiki/`. Python remains the evidence engine, while Obsidian stores connected cases, pattern pages, concepts, and human notes.
 
+The next research layer is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`. It keeps the base oscillator frozen while translating human visual reads into grammar primitives such as `pressure_acceptance`, `failed_weakness`, `zone_reclaim_retest`, `oscillator_structure`, `divergence_quality`, and `curvature_intent`. The primitive registry lives in `research/grammar/primitive_registry.yaml`.
+
+Pressure waves are currently an experimental candidate family inside the grammar lab, not the mission itself. Future user-facing visual layers should be chosen only after reviewed observations and Layer 7 evidence show which grammar primitives actually improve timing, false-positive control, and forward relative-return outcomes.
+
 ## Setup Quality Direction
 
 Layer 4 is documented in `docs/LAYER_4_SETUP_QUALITY.md`.

@@ -37,6 +37,7 @@ It can:
 - Add optional Layer 8 multi-timeframe context sidecars without changing default ranking or scan schema.
 - Export Layer 9 capital-flow graph tables and graph evidence without changing default ranking.
 - Run Layer 10 transition evidence reports without turning observed rates into forecasts.
+- Use a Signal Grammar Lab to turn TradingView-style visual reads into structured observations, grammar primitives, and later evidence-tested events.
 
 ## Setup
 
@@ -142,6 +143,22 @@ python3 -m riskflow event-study --entry-lag-bars 1 --cooldown-bars 30 --min-samp
 ```
 
 Layer 7 event-study reports include event classifications, concentration diagnostics, first-half/second-half checks, and notes. They are research evidence, not trade instructions.
+
+## Visual Indicator Learning
+
+Riskflow treats the TradingView-style oscillator as a visual instrument and a research object. The current goal is not to keep adding overlays until something looks impressive. The goal is to learn the oscillator grammar first:
+
+- viscosity acceptance and retests
+- `-2`, `-1.5`, `0`, `1.5`, and `2` level behavior
+- oscillator trendline and wedge breaks
+- failed weakness in deep negative zones
+- bullish and bearish divergences
+- color or gradient weakening
+- time and signed area above or below viscosity
+
+The workflow is documented in `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` and `docs/SIGNAL_GRAMMAR_LAB.md`. Structured observations live in `research/observations/`; grammar primitives live in `research/grammar/primitive_registry.yaml`; Obsidian pages under `obsidian/wiki/` are the human synthesis layer.
+
+Pressure waves are currently experimental. They may become the final extra visual layer, but only if reviewed examples and Layer 7 evidence show they add leading signal, improve false-positive control, and remain readable.
 
 ## Run Setup Research
 

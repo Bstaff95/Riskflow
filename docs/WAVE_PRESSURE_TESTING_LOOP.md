@@ -10,6 +10,12 @@ The goal is not to make a decorative second oscillator. The goal is to create a 
 - Is a bullish-looking setup actually supported by sustained pressure above viscosity?
 - Is a weak or failed setup identifiable before it becomes obvious on price?
 
+## Current Status
+
+Pressure waves are an experimental candidate family inside the broader Signal Grammar Lab. They are not the mission by themselves.
+
+The wave work should pause as a formula-iteration loop until the observation library clarifies which grammar primitives actually matter. The current candidate can still be reviewed, scored, and preserved, but it should not drive core oscillator tuning or product decisions yet.
+
 ## Current Candidate
 
 The active visual candidate is:
@@ -148,3 +154,16 @@ Candidate measurable ideas:
 - bearish fast/slow cross above zero after weaker color push
 
 These should be tested with Layer 7-style evidence before they affect any production score or signal.
+
+## Relationship To Signal Grammar Lab
+
+The wave layer currently maps mostly to the `pressure_acceptance` and `curvature_intent` grammar families.
+
+Known limitations from the first matrix pass:
+
+- It can look too broad or late on some clean reversals.
+- It can become falsely constructive in weak-chop or steep-downtrend failures.
+- It does not explain divergence, trendline breaks, or color weakening by itself.
+- It may be better as one ingredient in a setup-quality visual rather than the entire intelligence layer.
+
+Do not optimize the wave only to TROLL/SPX-style clean winners. A useful wave must also handle TRUMP, SHIB, BONK, PEPE divergence cases, and ambiguous GIGA-style bases.

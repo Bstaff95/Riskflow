@@ -48,6 +48,8 @@ Next priorities:
 23. Use Layer 10 `transition-research` to study completed state transitions as observed historical tendencies, not forecasts.
 24. Use `visual-review` to turn strong forward relative breakouts into chart galleries, then translate recurring visual patterns into testable event definitions before changing any indicator formula.
 25. Research a future `confluence_wave_v0_candidate`: a MACD-like momentum wave around zero that measures acceleration across signal slope, distance from viscosity, relative improvement, compression release, level reclaims, and gradient behavior. Keep it out of production until observation-library cases and Layer 7 evidence show it improves readability and outcomes.
+26. Build the Signal Grammar Lab before further core-indicator tuning. The next intelligence layer should emerge from repeated visual observations, grammar primitives, and evidence, not from one pressure-wave prototype.
+27. Research a future adaptive default that can eventually hide manual weight presets. Fixed meme/crypto/equity/pure-relative presets remain baselines until an adaptive model beats them across memes, broader crypto, and equities.
 
 Near-term research factory loop:
 
@@ -57,8 +59,11 @@ Near-term research factory loop:
 4. Convert only recurring patterns into explicit test events.
 5. Use Layer 7 evidence before promoting any formula, state, or score change.
 6. Use the observation library as the calibration set before tuning z-score lookback, viscosity behavior, gradient sensitivity, weights, or any future confluence wave.
+7. Track pressure waves as one candidate family, not the mission. The mission is the broader oscillator grammar: levels, viscosity behavior, structure, divergence, gradient quality, pressure acceptance, and failed weakness.
+8. Validate any useful primitive outside the meme sandbox before treating it as product material.
 
 See `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` for the detailed chart-to-evidence workflow.
+See `docs/SIGNAL_GRAMMAR_LAB.md` for the grammar-first research plan.
 
 ## Stage 2: Crypto Sector Engine
 

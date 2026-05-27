@@ -243,6 +243,30 @@ PYTHONPATH=src python3 -m riskflow observation-library --events-csv reports/visu
 
 The wiki is the memory and synthesis layer. The structured records are the evidence source. A pattern note can suggest a principle, but only repeated reviewed observations and forward-return evidence can promote it.
 
+## Signal Grammar Lab
+
+The next stage is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`.
+
+This lab reframes the pressure-wave work:
+
+- pressure waves are one candidate family
+- the mission is broader oscillator grammar
+- the base oscillator stays frozen while observations accumulate
+- recurring visual reads become grammar primitives
+- primitives become testable events only after repeated human review
+- product-facing visuals are chosen after evidence, not before
+
+Priority grammar families:
+
+- `pressure_acceptance`: time and signed area above or below viscosity
+- `failed_weakness`: deep negative signal stops accelerating lower
+- `zone_reclaim_retest`: reclaims and retests of `-2`, `-1.5`, `0`, `1.5`, and `2`
+- `oscillator_structure`: trendline breaks, wedges, channels, and coils on the oscillator itself
+- `divergence_quality`: price/signal divergence plus color and gradient divergence
+- `curvature_intent`: slope, acceleration, curvature, and early turning behavior
+
+The first success target is not a better-looking wave. The first success target is a reviewed library of hits, failures, misses, bearish examples, and noisy edge cases that can explain which grammar primitives deserve math.
+
 ## Active Pine-Style Settings To Match First
 
 The current TradingView research setup is the reference for visual review:

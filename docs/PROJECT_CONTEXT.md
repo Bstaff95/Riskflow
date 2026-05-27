@@ -73,6 +73,27 @@ Riskflow should separate:
 
 The system should prefer explainable evidence over impressive labels.
 
+## Current Indicator Research Pivot
+
+The current indicator work should use a Signal Grammar Lab approach.
+
+The base Pine-style oscillator remains the trusted reference for now. Pressure waves, confluence waves, area waves, dots, ribbons, markers, and other visual layers are candidates, not conclusions.
+
+The important discovery is that the oscillator itself appears to be technical-analysis readable. Human-reviewed examples should be logged as observations, tagged with grammar primitives, and later converted into measurable events only when patterns repeat.
+
+Priority grammar ideas:
+
+- viscosity acceptance and retests
+- `-2`, `-1.5`, `0`, `1.5`, and `2` reclaim/retest behavior
+- oscillator trendline, wedge, and channel breaks
+- failed weakness in deep negative zones
+- bullish and bearish divergence
+- color or gradient divergence
+- time and signed area above or below viscosity
+- curvature and acceleration before obvious confirmation
+
+Memes are the discovery sandbox, not the final proof. Any indicator improvement meant for the eventual product should later validate on broader crypto and equities before becoming a universal default.
+
 ## Living End-State Guide
 
 The broad cathedral-scale vision is tracked in `docs/END_STATE.md`.

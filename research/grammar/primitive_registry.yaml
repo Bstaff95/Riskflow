@@ -1,0 +1,122 @@
+model: riskflow_signal_grammar_primitives_v0
+purpose: Candidate oscillator grammar primitives for human review and later evidence testing.
+policy:
+  core_signal_status: frozen_reference
+  production_effect: none
+  promotion_required: layer_7_evidence
+  pressure_waves_status: experimental_candidate_family
+  notes: >
+    These primitives describe what the Riskflow oscillator appears to do visually.
+    They are not trading rules until converted into measurable events and tested.
+
+primitive_families:
+  pressure_acceptance:
+    description: Time, distance, and signed area of the signal above or below viscosity.
+    candidate_primitives:
+      - time_above_viscosity
+      - sustained_above_viscosity
+      - pressure_area_balance
+      - pressure_area_delta
+      - fast_slow_pressure_gap
+      - failed_viscosity_breakdown
+      - reclaim_after_flush
+    first_tests:
+      - Does positive area above viscosity predict forward relative outperformance?
+      - Does negative pressure failing to expand below -1.5 or -2 precede reversals?
+
+  failed_weakness:
+    description: Deep negative signal behavior where weakness stops accelerating.
+    candidate_primitives:
+      - low_zone_viscosity_rejection
+      - coil_under_viscosity
+      - tight_coil_below_viscosity
+      - relative_weakness_fails_to_accelerate
+      - rising_oscillator_lows
+      - weakness_exhaustion
+    first_tests:
+      - Does lower-zone coiling with rising lows identify low-in-before-confirmation setups?
+      - Does failed weakness work better after a long oscillator downtrend break?
+
+  zone_reclaim_retest:
+    description: Reclaims, retests, and failures around normalized oscillator levels.
+    candidate_primitives:
+      - minus_two_reclaim
+      - minus_two_retest_hold
+      - minus_one_point_five_reclaim
+      - minus_one_point_five_retest_hold
+      - zero_reclaim
+      - zero_retest_hold
+      - zero_rejection
+      - upper_band_rejection
+    first_tests:
+      - Which zones matter most before large forward relative breakouts?
+      - Is zero-line confirmation too late for discovery but useful for confirmation?
+
+  oscillator_structure:
+    description: Technical-analysis structures drawn on the oscillator itself.
+    candidate_primitives:
+      - oscillator_trendline_break
+      - oscillator_downtrend_resistance
+      - long_term_signal_downtrend_break
+      - descending_wedge
+      - ascending_wedge
+      - descending_channel
+      - channel_breakout
+      - failed_first_trendline_break
+      - second_trendline_break
+    first_tests:
+      - Do second breaks after a failed first oscillator break outperform first breaks?
+      - Can structure-break proxies find earlier entries than zero-line events?
+
+  divergence_quality:
+    description: Mismatches between price, oscillator level, and gradient/color quality.
+    candidate_primitives:
+      - bullish_divergence
+      - bearish_divergence
+      - hidden_bearish_divergence
+      - bullish_divergence_after_double_bottom
+      - color_divergence
+      - weaker_second_color_push
+      - gradient_momentum_divergence
+    first_tests:
+      - Does weaker second color push identify failing bounces?
+      - Do price double bottoms with oscillator higher lows outperform simple reclaims?
+
+  curvature_intent:
+    description: Slope, acceleration, curvature, and early turning behavior of signal pressure.
+    candidate_primitives:
+      - signal_slope_turn
+      - signal_acceleration_turn
+      - signal_curvature_up
+      - signal_curvature_down
+      - fast_pressure_cross
+      - slow_pressure_turn
+    first_tests:
+      - Can curvature identify a run toward zero before zero is reclaimed?
+      - Does curvature add signal beyond simple viscosity reclaim?
+
+  adaptive_universal_weighting:
+    description: Future research toward hiding manual presets behind an adaptive default.
+    candidate_primitives:
+      - volatility_adaptive_weighting
+      - benchmark_role_adaptive_weighting
+      - component_information_weighting
+      - data_quality_weighting
+    first_tests:
+      - Can adaptive weights beat fixed meme, crypto, equity, and pure-relative presets?
+      - Does adaptive weighting preserve readability across memes, majors, and equities?
+
+review_targets:
+  clean_bullish_hits: 15
+  bullish_false_positives: 10
+  missed_breakouts: 10
+  bearish_or_weakness_examples: 10
+  noisy_or_ambiguous_edge_cases: 5
+  required_timeframes:
+    - 4h
+    - 1d
+  diversity_rules:
+    - avoid_single_date_cluster
+    - include_multiple_symbols
+    - include_failed_setups
+    - include_bearish_examples

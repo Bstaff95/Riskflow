@@ -174,6 +174,10 @@ The visual review loop belongs here as a bridge between the user-facing oscillat
 
 A future candidate is a MACD-like `confluence_wave_v0_candidate`: a secondary momentum wave around zero that measures whether internal confluence is accelerating or deteriorating. Potential inputs include signal slope/acceleration, distance from viscosity, relative component improvement, compression release, level reclaims, and gradient behavior. It should remain a research candidate until it proves that it improves both visual readability and forward evidence without merely duplicating the main oscillator.
 
+The current strategic pivot is the Signal Grammar Lab. Pressure waves are one candidate expression, but the deeper objective is to learn the oscillator's readable grammar: viscosity acceptance, key-level reclaim/retest behavior, failed weakness, oscillator structure breaks, divergence, color/gradient quality, curvature, and pressure area around viscosity. The base oscillator should stay frozen while this grammar is documented and tested.
+
+Long term, Riskflow should aim for a universal adaptive relative indicator. Manual weight presets may remain in Research Mode, but the product default should eventually adapt internally to asset volatility, benchmark role, data quality, and component usefulness if that adaptive model beats the fixed presets across multiple markets.
+
 ### Layer 4: Compression And Setup Quality
 
 Separate leader quality from entry quality.

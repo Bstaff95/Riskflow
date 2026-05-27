@@ -58,6 +58,16 @@ PYTHONPATH=src python3 -m riskflow visual-review --config configs/meme_universe.
 
 The shorter cooldown is useful on 4H because nearby early/failed/retest attempts can occur within a few days. Longer cooldowns are still useful when building cleaner event-study samples.
 
+Grammar-targeted review modes are available when the library needs cases beyond clean bullish winners:
+
+```bash
+PYTHONPATH=src python3 -m riskflow visual-review --timeframe 4h --event-mode missed-breakout --report-dir reports/grammar_review/missed_4h
+PYTHONPATH=src python3 -m riskflow visual-review --timeframe 1d --event-mode bearish-weakness --report-dir reports/grammar_review/bearish_1d
+PYTHONPATH=src python3 -m riskflow visual-review --timeframe 4h --event-mode noisy-false-positive --report-dir reports/grammar_review/noisy_4h
+```
+
+These are review queues, not production signals. Their purpose is to surface charts where the current grammar is weak: price ran without obvious confirmation, the oscillator warned bearishly, or a bullish-looking impulse failed.
+
 The first human review of the TROLL 4H example added more precision:
 
 - the oscillator structure looked like a `descending_wedge`

@@ -172,6 +172,14 @@ Outputs:
 - `reports/grammar_lab/review_plan.md`
 - `obsidian/wiki/maps/Signal Grammar Lab.md`
 
+Generate targeted visual-review batches for the gaps the grammar lab reports:
+
+```bash
+python3 -m riskflow visual-review --timeframe 4h --event-mode missed-breakout --report-dir reports/grammar_review/missed_4h
+python3 -m riskflow visual-review --timeframe 1d --event-mode bearish-weakness --report-dir reports/grammar_review/bearish_1d
+python3 -m riskflow visual-review --timeframe 4h --event-mode noisy-false-positive --report-dir reports/grammar_review/noisy_4h
+```
+
 ## Run Setup Research
 
 ```bash

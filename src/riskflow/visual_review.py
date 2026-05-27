@@ -229,6 +229,63 @@ def _event_candidates_for_symbol(
         event_name = "strong_forward_relative_breakout"
         event_note = "selected because forward relative return exceeded threshold"
         sort_series = pd.to_numeric(metrics[horizon_column], errors="coerce")
+    elif settings.event_mode == "missed-breakout":
+        horizon_return = pd.to_numeric(metrics[horizon_column], errors="coerce")
+        recent_reclaim = _recent_cross_above(final_signal, viscosity, lookback=12)
+        weak_visual_confirmation = (final_signal <= viscosity) | final_signal.lt(0.0)
+        not_obvious_momentum = final_signal.lt(0.85) & relative_component.lt(0.75)
+        mask = (
+            horizon_return.ge(settings.min_forward_relative_return)
+            & weak_visual_confirmation
+            & not_obvious_momentum
+            & ~recent_reclaim
+        )
+        pattern_score = (
+            horizon_return.fillna(0.0) * 100.0
+            + (0.85 - final_signal).clip(lower=0.0, upper=3.0).fillna(0.0) * 8.0
+            + (viscosity - final_signal).clip(lower=0.0, upper=2.0).fillna(0.0) * 8.0
+        )
+        event_name = "missed_breakout_review_v0"
+        event_note = "selected as a strong forward relative winner without obvious signal/viscosity confirmation"
+        sort_series = pattern_score
+    elif settings.event_mode == "bearish-weakness":
+        horizon_return = pd.to_numeric(metrics[horizon_column], errors="coerce")
+        prior_strength = final_signal.rolling(20, min_periods=5).max().shift(1)
+        cross_below_viscosity = (final_signal < viscosity) & (final_signal.shift(1) >= viscosity.shift(1))
+        zero_rejection_zone = prior_strength.gt(-0.20) & final_signal.lt(0.15)
+        weakening_relative = relative_component.lt(0.0) | relative_component.diff(10).lt(-0.35)
+        mask = (
+            horizon_return.le(-0.12)
+            & (cross_below_viscosity | zero_rejection_zone)
+            & final_signal.lt(viscosity)
+            & weakening_relative
+        )
+        pattern_score = (
+            (-horizon_return).clip(lower=0.0, upper=1.5).fillna(0.0) * 70.0
+            + (viscosity - final_signal).clip(lower=0.0, upper=2.5).fillna(0.0) * 10.0
+            + prior_strength.clip(lower=0.0, upper=3.0).fillna(0.0) * 5.0
+        )
+        event_name = "bearish_weakness_review_v0"
+        event_note = "selected as bearish/weakness grammar: loss of viscosity or zero rejection with poor forward relative return"
+        sort_series = pattern_score
+    elif settings.event_mode == "noisy-false-positive":
+        horizon_return = pd.to_numeric(metrics[horizon_column], errors="coerce")
+        signal_std = final_signal.rolling(20, min_periods=5).std()
+        recent_signal_high = final_signal.rolling(20, min_periods=5).max()
+        recent_viscosity_reclaim = _recent_cross_above(final_signal, viscosity, lookback=12)
+        no_followthrough = horizon_return.le(0.08)
+        poor_compression = compression_score.lt(45.0)
+        choppy = signal_std.gt(0.70) & recent_signal_high.gt(0.25)
+        mask = choppy & recent_viscosity_reclaim & no_followthrough & poor_compression
+        pattern_score = (
+            signal_std.clip(lower=0.0, upper=2.5).fillna(0.0) * 25.0
+            + recent_signal_high.clip(lower=0.0, upper=3.0).fillna(0.0) * 10.0
+            + (-horizon_return).clip(lower=0.0, upper=1.0).fillna(0.0) * 35.0
+            + (45.0 - compression_score).clip(lower=0.0, upper=45.0).fillna(0.0)
+        )
+        event_name = "noisy_false_positive_review_v0"
+        event_note = "selected as noisy false-positive grammar: volatile impulse/reclaim behavior without forward follow-through"
+        sort_series = pattern_score
     else:
         raise ValueError(f"Unsupported visual review event mode: {settings.event_mode}")
     mask &= target.notna() & benchmark.notna() & final_signal.notna()

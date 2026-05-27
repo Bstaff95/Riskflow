@@ -1071,9 +1071,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(visual_review)
     visual_review.add_argument(
         "--event-mode",
-        choices=["breakout", "impulse-retest", "coil-reclaim"],
+        choices=[
+            "breakout",
+            "impulse-retest",
+            "coil-reclaim",
+            "missed-breakout",
+            "bearish-weakness",
+            "noisy-false-positive",
+        ],
         default="breakout",
-        help="Use breakout for hindsight winners, impulse-retest for late confirmation, or coil-reclaim for early lower-zone reclaim setups.",
+        help=(
+            "Use breakout for hindsight winners, impulse-retest for late confirmation, coil-reclaim for early lower-zone reclaim setups, "
+            "or grammar-targeted modes for missed, bearish, and noisy review cases."
+        ),
     )
     visual_review.add_argument(
         "--horizon",

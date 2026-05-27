@@ -160,6 +160,18 @@ The workflow is documented in `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` and `docs
 
 Pressure waves are currently experimental. They may become the final extra visual layer, but only if reviewed examples and Layer 7 evidence show they add leading signal, improve false-positive control, and remain readable.
 
+Summarize the current grammar lab coverage:
+
+```bash
+python3 -m riskflow grammar-lab
+```
+
+Outputs:
+
+- `reports/grammar_lab/primitive_summary.csv`
+- `reports/grammar_lab/review_plan.md`
+- `obsidian/wiki/maps/Signal Grammar Lab.md`
+
 ## Run Setup Research
 
 ```bash

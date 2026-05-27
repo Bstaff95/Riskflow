@@ -192,6 +192,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `transition_registry.py`: explicit Layer 10 transition research identity and language contract.
 - `transition_research.py`: Layer 10 completed state-run transition evidence, observed rates, and conditioned summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
+- `signal_grammar.py`: Signal Grammar Lab registry loading, primitive coverage summaries, and review-plan exports.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
@@ -207,6 +208,7 @@ python3 -m riskflow scan --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
+python3 -m riskflow grammar-lab
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d

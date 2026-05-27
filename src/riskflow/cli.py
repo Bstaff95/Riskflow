@@ -31,6 +31,7 @@ from .mtf_research import run_mtf_research
 from .observation_library import export_observation_library
 from .resample import research_mtf_derivations, resample_universe
 from .score_research import run_score_research
+from .signal_grammar import export_grammar_lab
 from .signal_research import run_signal_research
 from .setup_quality import calculate_setup_quality
 from .setup_research import run_setup_research
@@ -871,6 +872,25 @@ def observation_library_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def grammar_lab_command(args: argparse.Namespace) -> int:
+    try:
+        paths = export_grammar_lab(
+            registry_path=args.registry,
+            observations_csv=args.observations_csv,
+            output_dir=args.output_dir,
+            obsidian_dir=args.obsidian_dir,
+        )
+    except Exception as exc:
+        print(f"Grammar lab export failed: {exc}")
+        return 1
+
+    print(f"Wrote grammar primitive summary: {paths.primitive_summary_csv}")
+    print(f"Wrote grammar review plan: {paths.review_plan_md}")
+    if paths.obsidian_note_md is not None:
+        print(f"Wrote Obsidian grammar note: {paths.obsidian_note_md}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -1144,6 +1164,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional maximum number of visual-review rows to export.",
     )
     observation_library.set_defaults(func=observation_library_command)
+
+    grammar_lab = subparsers.add_parser(
+        "grammar-lab",
+        help="Summarize Signal Grammar Lab primitive coverage and next review targets.",
+    )
+    grammar_lab.add_argument(
+        "--registry",
+        default="research/grammar/primitive_registry.yaml",
+        help="Signal grammar primitive registry YAML.",
+    )
+    grammar_lab.add_argument(
+        "--observations-csv",
+        default="research/observations/observation_records.csv",
+        help="Structured observation records CSV to summarize if present.",
+    )
+    grammar_lab.add_argument(
+        "--output-dir",
+        default="reports/grammar_lab",
+        help="Directory for grammar lab summary outputs.",
+    )
+    grammar_lab.add_argument(
+        "--obsidian-dir",
+        default="obsidian",
+        help="Existing Obsidian vault directory to receive the grammar lab map.",
+    )
+    grammar_lab.set_defaults(func=grammar_lab_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

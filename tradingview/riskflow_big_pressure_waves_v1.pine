@@ -1,5 +1,5 @@
 //@version=5
-indicator("V9 Riskflow Big Pressure Waves [Area Gap Prototype]", overlay=false, dynamic_requests=true)
+indicator("V32 Riskflow Big Pressure Waves [Net Area Delta]", overlay=false, dynamic_requests=true)
 
 // 01. MODE / DROPDOWNS - TOP OF SETTINGS PANEL
 grpTop = "01. Mode / Dropdowns"
@@ -84,9 +84,12 @@ pressureDerivativeClamp = input.float(2.00, "Impulse Clamp", minval=0.5, maxval=
 pressureDeadband = input.float(0.05, "Zero Quiet Zone", minval=0.0, maxval=1.0, step=0.01, group=grpPressure)
 pressureDisplayClamp = input.float(2.50, "Display Clamp", minval=0.5, maxval=6.0, step=0.05, group=grpPressure)
 pressureScale = input.float(1.00, "Wave Scale", minval=0.25, maxval=6.0, step=0.05, group=grpPressure)
+pressureContextGateStrength = input.float(0.55, "Context Gate Strength", minval=0.0, maxval=1.0, step=0.05, group=grpPressure)
+pressureStabilityGateStrength = input.float(0.55, "Stability Gate Strength", minval=0.0, maxval=1.0, step=0.05, group=grpPressure)
+pressureEfficiencyWeight = input.float(0.46, "Efficiency Weight", minval=0.0, maxval=1.0, step=0.05, group=grpPressure)
 showPressureTrigger = input.bool(true, "Show Fast Pressure Wave", group=grpPressure)
 showPressureGapFill = input.bool(true, "Fill Between Fast / Slow Waves", group=grpPressure)
-showPressureBody = input.bool(false, "Show Slow Wave Body To Zero", group=grpPressure)
+showPressureBody = input.bool(true, "Show Slow Wave Body To Zero", group=grpPressure)
 showPressureHistogram = input.bool(false, "Show Diagnostic Momentum Columns", group=grpPressure)
 showMutedSignalReference = input.bool(false, "Show Main Signal Reference", group=grpPressure)
 showPressureDebug = input.bool(false, "Show Wave Internals", group=grpPressure)
@@ -253,6 +256,9 @@ f_norm_pulse(src, len, cap) =>
     d = ta.stdev(src, len)
     raw = d != 0 and not na(d) ? src / d : 0.0
     f_clamp(raw, -cap, cap)
+
+f_signed_power(x, p) =>
+    x >= 0 ? math.pow(x, p) : -math.pow(-x, p)
 
 f_close(sym) =>
     enabled = str.length(sym) > 0
@@ -591,12 +597,56 @@ pressureCurlRaw = f_clamp((0.30 * pressureGapPulse) + (0.30 * pressureCurvePulse
 pressureCurlSmooth = ta.ema(ta.ema(pressureCurlRaw, math.max(3, math.round(labFastLen / 2))), 3)
 
 pressureSignalGate = f_clamp((0.55 * signalContext) + (0.25 * f_clamp(pressureSignal / 2.0, -1.0, 1.0)) + (0.20 * f_clamp(signalSlopeForContext * 2.0, -1.0, 1.0)), -1.0, 1.0)
+pressureAreaPersistence = ta.ema(pressureDistance > pressureDeadband ? 1.0 : pressureDistance < -pressureDeadband ? -1.0 : 0.0, math.max(5, math.round(labSlowLen / 2)))
+pressureRelativeContext = f_clamp(nz(relativeComponentZ, 0.0) / 2.0, -1.0, 1.0)
+pressureFastPersistence = ta.ema(pressureDistance > pressureDeadband ? 1.0 : pressureDistance < -pressureDeadband ? -1.0 : 0.0, math.max(3, math.round(labFastLen / 2)))
+pressureSlowPersistence = ta.ema(pressureDistance > pressureDeadband ? 1.0 : pressureDistance < -pressureDeadband ? -1.0 : 0.0, math.max(8, math.round(labSlowLen / 2)))
+pressureDistanceStep = pressureDistance - nz(pressureDistance[1], pressureDistance)
+pressureNoise = ta.stdev(pressureDistanceStep, math.max(5, labFastLen))
+pressureBaseMagnitude = ta.ema(math.abs(pressureDistance), math.max(5, labFastLen))
+pressureStability = pressureBaseMagnitude > 0 and not na(pressureNoise) ? 1.0 - f_clamp(pressureNoise / (pressureBaseMagnitude * 2.0), 0.0, 1.0) : 0.50
+pressureStabilityMultiplier = 1.0 - (pressureStabilityGateStrength * (1.0 - pressureStability) * 0.45)
+pressureFastTravel = math.sum(math.abs(pressureDistanceStep), labFastAreaLen)
+pressureSlowTravel = math.sum(math.abs(pressureDistanceStep), labSlowAreaLen)
+pressureFastEfficiency = pressureFastTravel > 0 ? f_clamp((pressureDistance - nz(pressureDistance[labFastAreaLen], pressureDistance)) / pressureFastTravel, -1.0, 1.0) : 0.0
+pressureSlowEfficiency = pressureSlowTravel > 0 ? f_clamp((pressureDistance - nz(pressureDistance[labSlowAreaLen], pressureDistance)) / pressureSlowTravel, -1.0, 1.0) : 0.0
+pressureFastQuality = f_clamp(0.18 + (0.42 * pressureStability) + (0.40 * math.abs(pressureFastEfficiency)), 0.18, 1.0)
+pressureSlowQuality = f_clamp(0.22 + (0.48 * pressureStability) + (0.30 * math.abs(pressureSlowEfficiency)), 0.20, 1.0)
+pressureFastAcceptance = f_clamp((0.62 * pressureFastEfficiency) + (0.20 * pressureFastPersistence) + (0.18 * f_clamp(pressureCurlSmooth / 2.0, -1.0, 1.0)), -1.0, 1.0)
+pressureSlowAcceptance = f_clamp((0.56 * pressureSlowEfficiency) + (0.29 * pressureSlowPersistence) + (0.15 * labSlowAreaBalance), -1.0, 1.0)
+pressureStructureContext = f_clamp((0.36 * signalContext) + (0.20 * pressureRelativeContext) + (0.25 * pressureSlowPersistence) + (0.19 * f_clamp(labSlowAreaBalance, -1.0, 1.0)), -1.0, 1.0)
+pressureContextMultiplier = 1.0 - (pressureContextGateStrength * 0.25 * math.max(-pressureStructureContext, 0.0))
+pressureWeaknessFailing = pressureSignal < -1.5 and pressureDistance < 0 and pressureFastPersistence > nz(pressureFastPersistence[1], pressureFastPersistence) and pressureCurlPulse > 0
+pressureStrengthFading = pressureSignal > 1.5 and pressureDistance > 0 and pressureFastPersistence < nz(pressureFastPersistence[1], pressureFastPersistence) and pressureCurlPulse < 0
 
-slowWaveRaw = f_clamp((0.98 * pressureMemorySlow) + (0.02 * pressureSignalGate), -2.4, 2.4)
-fastWaveRaw = f_clamp((0.97 * pressureMemoryFast) + (0.03 * pressureCurlSmooth), -2.4, 2.4)
+slowWaveCore = ((1.0 - pressureEfficiencyWeight) * ((0.55 * labSlowAreaBalance) + (0.32 * pressureSlowPersistence) + (0.13 * pressureSignalGate))) + (pressureEfficiencyWeight * pressureSlowAcceptance)
+fastWaveCore = ((1.0 - pressureEfficiencyWeight) * ((0.46 * labFastAreaBalance) + (0.29 * pressureFastPersistence) + (0.17 * f_clamp(pressureCurlSmooth / 2.0, -1.0, 1.0)) + (0.08 * pressureSignalGate))) + (pressureEfficiencyWeight * pressureFastAcceptance)
+pressureAreaContext = 1.0 - (pressureContextGateStrength * 0.12 * math.max(-pressureStructureContext, 0.0))
+pressureAreaStability = 1.0 - (pressureStabilityGateStrength * 0.18 * (1.0 - pressureStability))
+pressureFastDirectionQuality = f_clamp(0.42 + (0.38 * pressureStability) + (0.20 * math.abs(pressureFastEfficiency)), 0.30, 1.0)
+pressureSlowDirectionQuality = f_clamp(0.44 + (0.40 * pressureStability) + (0.16 * math.abs(pressureSlowEfficiency)), 0.32, 1.0)
+pressureConstructiveQuality = labSlowAreaBalance > 0 ? f_clamp(pressureSlowDirectionQuality * (0.82 + 0.18 * math.max(pressureRelativeContext, 0.0)), 0.30, 1.0) : pressureSlowDirectionQuality
+pressureTriggerQuality = labFastAreaBalance > 0 ? f_clamp(pressureFastDirectionQuality * (0.80 + 0.20 * math.max(pressureRelativeContext, 0.0)), 0.30, 1.0) : pressureFastDirectionQuality
+pressureFastAreaSource = f_clamp((0.76 * labFastAreaBalance) + (0.12 * pressureFastAcceptance) + (0.08 * f_clamp(pressureCurlSmooth / 2.0, -1.0, 1.0)) + (0.04 * pressureSignalGate), -1.0, 1.0)
+pressureSlowAreaSource = f_clamp((0.82 * labSlowAreaBalance) + (0.10 * pressureSlowPersistence) + (0.05 * pressureSlowAcceptance) + (0.03 * pressureRelativeContext), -1.0, 1.0)
+pressureFastAreaWave = ta.ema(ta.ema(pressureFastAreaSource, 5), 3)
+pressureSlowAreaWave = ta.ema(ta.ema(pressureSlowAreaSource, 11), 6)
+pressureFastAreaExpanded = f_signed_power(pressureFastAreaWave, 0.70)
+pressureSlowAreaExpanded = f_signed_power(pressureSlowAreaWave, 0.76)
+pressureAreaVol = ta.stdev(pressureDistance, pressureNormalizeLen)
+pressureAreaUnit = pressureAreaVol != 0 and not na(pressureAreaVol) ? f_clamp(pressureDistance / pressureAreaVol, -2.5, 2.5) : 0.0
+pressureFastDeltaLen = math.max(2, math.round(labFastLen / 4))
+pressureSlowIntegral = f_clamp(math.sum(pressureAreaUnit, labSlowAreaLen) / math.sqrt(labSlowAreaLen), -2.5, 2.5)
+pressureFastIntegral = f_clamp(math.sum(pressureAreaUnit, labFastAreaLen) / math.sqrt(labFastAreaLen), -2.5, 2.5)
+pressureFastIntegralDelta = f_clamp(pressureFastIntegral - nz(pressureFastIntegral[pressureFastDeltaLen], pressureFastIntegral), -2.2, 2.2)
+pressureSlowIntegralWave = ta.ema(ta.ema(pressureSlowIntegral, 8), 4)
+pressureFastDeltaWave = ta.ema(ta.ema((0.62 * pressureFastIntegralDelta) + (0.24 * f_clamp(pressureFastAcceptance, -1.0, 1.0)) + (0.14 * f_clamp(pressureCurlSmooth / 2.0, -1.0, 1.0)), 4), 2)
+pressureLeadDelta = f_clamp((0.40 * (pressureMemoryFast - pressureMemorySlow)) + (0.45 * pressureFastDeltaWave) + (0.15 * pressureFastAcceptance), -1.15, 1.15)
+slowWaveRaw = f_clamp(((0.70 * pressureSlowIntegralWave) + (0.26 * pressureMemorySlow) + (0.04 * pressureSignalGate)) * pressureAreaContext * pressureAreaStability, -2.4, 2.4)
+fastWaveRaw = f_clamp(slowWaveRaw + (0.74 * ta.ema(pressureLeadDelta, 3)), -2.4, 2.4)
 
-pressureWave = f_clamp(ta.ema(ta.ema(slowWaveRaw * pressureScale, 8), 5), -pressureDisplayClamp, pressureDisplayClamp)
-pressureTrigger = f_clamp(ta.ema(ta.ema(fastWaveRaw * pressureScale, 5), 3), -pressureDisplayClamp, pressureDisplayClamp)
+pressureWave = f_clamp(ta.ema(ta.ema(slowWaveRaw * pressureScale * 1.55, 8), 3), -pressureDisplayClamp, pressureDisplayClamp)
+pressureTrigger = f_clamp(ta.ema(ta.ema(fastWaveRaw * pressureScale * 1.55, 5), 2), -pressureDisplayClamp, pressureDisplayClamp)
 pressureWaveDisplayRaw = math.abs(pressureWave) < pressureDeadband ? 0.0 : pressureWave
 pressureWaveDisplay = f_clamp(pressureWaveDisplayRaw, -pressureDisplayClamp, pressureDisplayClamp)
 pressureTriggerDisplayRaw = math.abs(pressureTrigger) < pressureDeadband ? 0.0 : pressureTrigger
@@ -617,21 +667,41 @@ pressureAboveZero = pressureWaveDisplay > pressureDeadband
 pressureBelowZero = pressureWaveDisplay < -pressureDeadband
 pressureBothAboveZero = pressureTriggerDisplay > pressureDeadband and pressureWaveDisplay > pressureDeadband
 pressureBothBelowZero = pressureTriggerDisplay < -pressureDeadband and pressureWaveDisplay < -pressureDeadband
-pressureSignalSupportive = signalContext >= 0.25
-pressureSignalWeak = signalContext <= -0.25
+pressureBaseConfirmedUp = pressureSignal > 0 and pressureSignal > pressureBaseline
+pressureBaseEarlyUp = pressureSignal > pressureBaseline and pressureSignal > -1.5
+pressureBaseConfirmedDown = pressureSignal < 0 and pressureSignal < pressureBaseline
+pressureBaseEarlyDown = pressureSignal < pressureBaseline and pressureSignal < 1.5
+pressureSignalSupportive = pressureBaseConfirmedUp or (signalContext >= 0.25 and pressureStructureContext >= 0.20)
+pressureSignalWeak = pressureBaseConfirmedDown or (signalContext <= -0.25 and pressureStructureContext <= -0.10)
+pressureAcceptedUp = pressureFastAcceptance > 0.05 or pressureFastEfficiency > 0.05
+pressureAcceptedDown = pressureFastAcceptance < -0.05 or pressureFastEfficiency < -0.05
+pressureCanShowBull = pressureBaseEarlyUp or pressureWeaknessFailing or (pressureFastSlope > 0 and pressureAcceptedUp and pressureAreaPersistence > -0.10 and pressureRelativeContext > -0.20)
+pressureCanShowBear = pressureBaseEarlyDown or pressureStrengthFading or (pressureFastSlope < 0 and pressureAcceptedDown and pressureAreaPersistence < 0.10)
 pressureBullImpulse = pressureFastLeading and pressureBothRising
-pressureBullConfirmed = pressureBothAboveZero and pressureBullImpulse and pressureSignalSupportive
-pressureBullReclaim = pressureBothBelowZero and pressureFastLeading and pressureFastSlope > 0
-pressureBullEarlyCurl = pressureWaveDisplay < 0 and pressureFastLeading and pressureFastSlope > 0 and pressureSlowSlope >= -0.02
+pressureBullConfirmed = pressureBothAboveZero and pressureBullImpulse and pressureBaseConfirmedUp
+pressureBullReclaim = pressureBothBelowZero and pressureFastLeading and pressureFastSlope > 0 and (pressureBaseEarlyUp or pressureWeaknessFailing)
+pressureBullEarlyCurl = pressureWaveDisplay < 0 and pressureFastLeading and pressureFastSlope > 0 and pressureSlowSlope >= -0.02 and (pressureBaseEarlyUp or pressureWeaknessFailing)
 pressureBearImpulse = pressureFastLagging and pressureBothFalling
-pressureBearConfirmed = pressureBothBelowZero and pressureBearImpulse and pressureSignalWeak
-pressureBearEarlyCurl = pressureWaveDisplay > 0 and pressureFastLagging and pressureFastSlope < 0 and pressureSlowSlope <= 0.02
-pressureCooling = pressureBothAboveZero and pressureFastLagging and pressureFastSlope < 0
+pressureBearConfirmed = pressureBothBelowZero and pressureBearImpulse and pressureBaseConfirmedDown
+pressureBearEarlyCurl = pressureWaveDisplay > 0 and pressureFastLagging and pressureFastSlope < 0 and pressureSlowSlope <= 0.02 and (pressureBaseEarlyDown or pressureStrengthFading)
+pressureCooling = pressureBothAboveZero and pressureFastLagging and pressureFastSlope < 0 and (pressureBaseEarlyDown or pressureStrengthFading)
 pressureMixed = not pressureBullImpulse and not pressureBearImpulse
-pressureWaveColor = pressureBullConfirmed ? color.new(cPressureBull, 91) : pressureBullReclaim or pressureBullEarlyCurl ? color.new(cPressureBullFade, 94) : pressureBearConfirmed ? color.new(cPressureBear, 91) : pressureCooling or pressureBearEarlyCurl ? color.new(cHydraulicOrange, 94) : pressureBelowZero ? color.new(cPressureBearFade, 97) : pressureAboveZero ? color.new(cPressureBull, 96) : color.new(cPressureNeutral, 98)
-pressureLineColor = pressureBullConfirmed ? color.new(cPressureBull, 12) : pressureBullReclaim or pressureBullEarlyCurl ? color.new(cPressureBullFade, 18) : pressureBearConfirmed ? color.new(cPressureBear, 14) : pressureCooling or pressureBearEarlyCurl ? color.new(cHydraulicOrange, 28) : pressureMixed ? color.new(cPressureNeutral, 48) : color.new(cPressureNeutral, 40)
-pressureTriggerColor = pressureBullImpulse or pressureBullEarlyCurl ? color.new(cPressureTrigger, 0) : pressureBullReclaim ? color.new(cPressureBullFade, 2) : pressureBearConfirmed ? color.new(cPressureBear, 2) : pressureBearImpulse or pressureBearEarlyCurl ? color.new(cPressureBearFade, 8) : pressureCooling ? color.new(cHydraulicOrange, 6) : color.new(cPressureTrigger, 24)
-pressureGapFillColor = pressureBullConfirmed ? color.new(cPressureBull, 84) : pressureBullReclaim ? color.new(cPressureBullFade, 87) : pressureBullEarlyCurl ? color.new(cPressureBullFade, 90) : pressureFastLeading ? color.new(cPressureBullFade, 95) : pressureBearConfirmed ? color.new(cPressureBear, 85) : pressureBearImpulse ? color.new(cPressureBearFade, 90) : pressureBearEarlyCurl or pressureCooling ? color.new(cHydraulicOrange, 92) : color.new(cPressureNeutral, 97)
+pressureQualifiedBull = pressureBaseConfirmedUp and pressureFastLeading and pressureBothRising
+pressureEarlyBull = not pressureQualifiedBull and pressureFastLeading and pressureFastSlope > 0 and pressureCanShowBull
+pressureUnqualifiedBull = pressureFastLeading and pressureFastSlope > 0 and not pressureCanShowBull
+pressureQualifiedBear = pressureBaseConfirmedDown and pressureFastLagging and pressureBothFalling
+pressureEarlyBear = not pressureQualifiedBear and pressureFastLagging and pressureFastSlope < 0 and pressureCanShowBear
+pressureUnqualifiedBear = pressureFastLagging and pressureFastSlope < 0 and not pressureCanShowBear
+pressureGapExpanding = math.abs(pressureGap) > math.abs(nz(pressureGap[1], pressureGap))
+pressureTrust = f_clamp((pressureConstructiveQuality + pressureTriggerQuality + pressureStability) / 3.0, 0.0, 1.0)
+pressureLowTrust = pressureTrust < 0.48
+pressureMidTrust = pressureTrust >= 0.48 and pressureTrust < 0.64
+pressureTrustLineFade = pressureLowTrust ? 16 : pressureMidTrust ? 8 : 0
+pressureTrustFillFade = pressureLowTrust ? 8 : pressureMidTrust ? 4 : 0
+pressureWaveColor = pressureQualifiedBull ? color.new(cPressureBull, 84 + pressureTrustFillFade) : pressureEarlyBull or pressureWeaknessFailing ? color.new(cPressureBullFade, 90 + pressureTrustFillFade) : pressureQualifiedBear ? color.new(cPressureBear, 86 + pressureTrustFillFade) : pressureCooling or pressureEarlyBear or pressureStrengthFading ? color.new(cHydraulicOrange, 91 + pressureTrustFillFade) : pressureUnqualifiedBull ? color.new(cPressureTrigger, 96) : pressureUnqualifiedBear ? color.new(cPressureBearFade, 96) : color.new(cPressureNeutral, 98)
+pressureLineColor = pressureQualifiedBull ? color.new(cPressureBull, 4 + pressureTrustLineFade) : pressureEarlyBull or pressureWeaknessFailing ? color.new(cPressureBullFade, 12 + pressureTrustLineFade) : pressureQualifiedBear ? color.new(cPressureBear, 6 + pressureTrustLineFade) : pressureCooling or pressureEarlyBear or pressureStrengthFading ? color.new(cHydraulicOrange, 16 + pressureTrustLineFade) : pressureUnqualifiedBull ? color.new(cPressureTrigger, 32) : pressureUnqualifiedBear ? color.new(cPressureBearFade, 36) : color.new(cPressureNeutral, 55)
+pressureTriggerColor = pressureQualifiedBull or pressureBullReclaim ? color.new(cPressureTrigger, pressureTrustLineFade) : pressureEarlyBull or pressureBullEarlyCurl or pressureWeaknessFailing ? color.new(cPressureTrigger, 7 + pressureTrustLineFade) : pressureQualifiedBear or pressureStrengthFading ? color.new(cPressureBear, 4 + pressureTrustLineFade) : pressureEarlyBear or pressureBearEarlyCurl ? color.new(cPressureBearFade, 11 + pressureTrustLineFade) : pressureCooling ? color.new(cHydraulicOrange, 8 + pressureTrustLineFade) : color.new(cPressureTrigger, 26)
+pressureGapFillColor = pressureQualifiedBull ? color.new(cPressureBull, pressureGapExpanding ? 72 + pressureTrustFillFade : 80 + pressureTrustFillFade) : pressureEarlyBull or pressureWeaknessFailing ? color.new(cPressureBullFade, pressureGapExpanding ? 80 + pressureTrustFillFade : 87 + pressureTrustFillFade) : pressureUnqualifiedBull ? color.new(cPressureTrigger, 92) : pressureQualifiedBear ? color.new(cPressureBear, pressureGapExpanding ? 76 + pressureTrustFillFade : 84 + pressureTrustFillFade) : pressureEarlyBear or pressureStrengthFading ? color.new(cPressureBearFade, pressureGapExpanding ? 83 + pressureTrustFillFade : 89 + pressureTrustFillFade) : pressureCooling ? color.new(cHydraulicOrange, 86 + pressureTrustFillFade) : pressureUnqualifiedBear ? color.new(cPressureBearFade, 92) : color.new(cPressureNeutral, 97)
 pressureHistColor = pressureBullImpulse ? color.new(cPressureBull, 90) : pressureBearImpulse ? color.new(cPressureBear, 90) : color.new(cPressureNeutral, 94)
 
 // PLOTTING
@@ -700,6 +770,13 @@ plot(showPressureDebug ? pressureNetArea : na, "Net Viscosity Area", color=color
 plot(showPressureDebug ? pressurePositiveShare : na, "Positive Pressure Share", color=color.white, display=display.data_window)
 plot(showPressureDebug ? pressureWave : na, "Pressure Wave Value", color=color.purple, display=display.data_window)
 plot(showPressureDebug ? pressureTrigger : na, "Pressure Trigger Value", color=color.white, display=display.data_window)
+plot(showPressureDebug ? pressureStructureContext : na, "Pressure Structure Context", color=color.yellow, display=display.data_window)
 plot(showPressureDebug ? pressureGapPulse : na, "Pressure Gap Impulse", color=color.aqua, display=display.data_window)
 plot(showPressureDebug ? pressureCurlPulse : na, "Pressure Curl Pulse", color=color.fuchsia, display=display.data_window)
 plot(showPressureDebug ? pressureCurvePulse : na, "Pressure Curve Pulse", color=color.orange, display=display.data_window)
+plot(showPressureDebug ? pressureFastEfficiency : na, "Pressure Fast Efficiency", color=color.aqua, display=display.data_window)
+plot(showPressureDebug ? pressureSlowEfficiency : na, "Pressure Slow Efficiency", color=color.blue, display=display.data_window)
+plot(showPressureDebug ? pressureStability : na, "Pressure Stability", color=color.white, display=display.data_window)
+plot(showPressureDebug ? pressureFastAcceptance : na, "Pressure Fast Acceptance", color=color.lime, display=display.data_window)
+plot(showPressureDebug ? pressureFastQuality : na, "Pressure Fast Quality", color=color.green, display=display.data_window)
+plot(showPressureDebug ? pressureSlowQuality : na, "Pressure Slow Quality", color=color.teal, display=display.data_window)

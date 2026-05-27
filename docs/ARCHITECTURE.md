@@ -93,7 +93,7 @@ The target direction is a configurable benchmark engine with:
 
 The architecture should keep observations separate from interpretations. Raw features such as signal, relative component, compression score, and active member count should stay distinct from derived labels such as state, tags, confidence, and opportunity score.
 
-Current implementation supports `benchmark.exclude_self` for per-asset ex-target baskets. The selected benchmark is stored in each analysis frame's numeric `benchmark` column, while audit columns such as `benchmark_used`, `benchmark_target_excluded`, `benchmark_fallback_used`, active/missing member counts, and `benchmark_confidence` explain the comparison.
+Current implementation supports `benchmark.exclude_self` for per-asset ex-target baskets, but the default meme universe keeps `exclude_self: false` to stay aligned with the TradingView selected-basket indicator. The selected benchmark is stored in each analysis frame's numeric `benchmark` column, while audit columns such as `benchmark_used`, `benchmark_target_excluded`, `benchmark_fallback_used`, active/missing member counts, and `benchmark_confidence` explain the comparison.
 
 ## Signal Research Direction
 
@@ -194,7 +194,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `transition_registry.py`: explicit Layer 10 transition research identity and language contract.
 - `transition_research.py`: Layer 10 completed state-run transition evidence, observed rates, and conditioned summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
-- `signal_grammar.py`: Signal Grammar Lab registry loading, primitive coverage summaries, and review-plan exports.
+- `signal_grammar.py`: Signal Grammar Lab registry loading, primitive coverage summaries, review-plan exports, and research-only `signal_grammar_sidecar_v0` feature/event columns.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.

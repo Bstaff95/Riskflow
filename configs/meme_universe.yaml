@@ -3,7 +3,7 @@ benchmark:
   type: equal_weight_basket
   name: MEME_BASKET
   role: opportunity_cost
-  exclude_self: true
+  exclude_self: false
 min_active_members: 3
 default_weights:
   price_weight: 1.20

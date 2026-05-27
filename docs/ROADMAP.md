@@ -8,6 +8,11 @@ The active near-term mission is to convert the human-reviewed oscillator grammar
 
 Do this before collecting more random winner examples or tuning the core indicator.
 
+Current implementation note:
+
+- `signal_grammar_sidecar_v0` now adds first-pass research columns and Layer 7 candidate events for pressure acceptance, failed weakness, zone reclaim/retest, curvature intent, divergence warnings, chop quality, and reset warnings.
+- These columns are visible in scan outputs and evaluated by `event-study`, but they do not change `core_signal_v0`, state labels, setup scores, opportunity ranking, or TradingView defaults.
+
 First deliverables:
 
 - `pressure_acceptance`: time and signed area above or below viscosity.
@@ -51,7 +56,7 @@ Next priorities:
 4. Review missing/bad data warnings.
 5. Tighten Pine-to-Python parity where it matters.
 6. Add score component columns to leaderboard.
-7. Use ex-target basket diagnostics to audit whether each coin is being compared to a clean peer basket.
+7. Keep default runs aligned to the TradingView selected basket for now; use ex-target basket diagnostics only in explicit audit runs.
 8. Extend benchmark hardening later into subgroup baskets, fallback policies, and basket-as-asset analysis.
 9. Add the Layer 3 challenger-signal research path without changing production leaderboard behavior.
 10. Improve event-study reporting and add Obsidian event-study markdown.

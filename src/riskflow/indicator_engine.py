@@ -83,7 +83,7 @@ def adaptive_viscosity(
 
 def _rolling_vol_normalized(series: pd.Series, lookback: int, clamp: float = 2.0) -> pd.Series:
     source = pd.to_numeric(series, errors="coerce").astype(float)
-    vol = source.rolling(window=max(2, lookback), min_periods=2).std(ddof=1)
+    vol = source.rolling(window=max(2, lookback), min_periods=2).std(ddof=0)
     normalized = source / vol.replace(0.0, np.nan)
     normalized = normalized.where(source.notna(), np.nan).fillna(0.0)
     return normalized.clip(lower=-clamp, upper=clamp)

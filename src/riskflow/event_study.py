@@ -21,6 +21,7 @@ from .research_outcomes import (
     split_half_medians,
     worst_cluster_median,
 )
+from .signal_grammar import GRAMMAR_EVENT_NAMES, detect_signal_grammar_events
 
 
 DEFAULT_MIN_SAMPLE_SIZE = 20
@@ -45,6 +46,7 @@ EVENT_NAMES = (
     "compressed_viscosity_reclaim",
     "compressed_zero_reclaim",
     "extension_risk_score_crosses_high",
+    *GRAMMAR_EVENT_NAMES,
 )
 
 RECORD_COLUMNS = [
@@ -150,7 +152,7 @@ def detect_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
     viscosity_reclaim = (above_viscosity & ~previous_above_viscosity).fillna(False)
     zero_reclaim = _crosses_above(final_signal, 0.0).fillna(False)
 
-    return {
+    events = {
         "signal_crosses_above_viscosity": viscosity_reclaim,
         "signal_crosses_above_zero": zero_reclaim,
         "relative_component_crosses_above_zero": _crosses_above(relative, 0.0).fillna(False),
@@ -173,6 +175,8 @@ def detect_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
         "compressed_zero_reclaim": ((compression >= 70.0) & zero_reclaim).fillna(False),
         "extension_risk_score_crosses_high": _crosses_above(extension_risk, 70.0).fillna(False),
     }
+    events.update(detect_signal_grammar_events(frame))
+    return events
 
 
 def _event_value(frame: pd.DataFrame, event_name: str, event_date: pd.Timestamp) -> object:

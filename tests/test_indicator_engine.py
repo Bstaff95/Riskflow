@@ -1,7 +1,12 @@
 import pandas as pd
 
 from riskflow.config import IndicatorSettings
-from riskflow.indicator_engine import INDICATOR_COLUMNS, adaptive_viscosity, calculate_indicator
+from riskflow.indicator_engine import (
+    INDICATOR_COLUMNS,
+    _rolling_vol_normalized,
+    adaptive_viscosity,
+    calculate_indicator,
+)
 
 
 def test_indicator_engine_returns_expected_columns():
@@ -36,6 +41,14 @@ def test_default_indicator_settings_match_current_tradingview_research_setup():
     assert settings.viscosity_slow == 34
     assert settings.viscosity_impulse_boost == 0.65
     assert settings.viscosity_zero_zone_boost == 0.35
+
+
+def test_gradient_volatility_normalization_uses_pine_population_stdev():
+    series = pd.Series([0.0, 2.0])
+
+    result = _rolling_vol_normalized(series, lookback=2, clamp=2.0)
+
+    assert result.iloc[1] == 2.0
 
 
 def test_viscosity_impulse_boost_reacts_faster_near_zero():

@@ -10,6 +10,25 @@ The grammar lab is a research queue, not a production signal. The base oscillato
 
 Current priority: begin the Grammar Candidate Sprint. Additional missing, bearish, and noisy cases are calibration backfill, not the blocking path.
 
+## Evidence Snapshot 2026-05-27
+
+`signal_grammar_sidecar_v0` has now been run through Layer 7 event studies on all configured meme coins for `1d`, `12h`, `4h`, and `1h`.
+
+Report outputs:
+
+- `reports/grammar_lab_1d/event_study_summary.csv`
+- `reports/grammar_lab_12h/event_study_summary.csv`
+- `reports/grammar_lab_4h/event_study_summary.csv`
+- `reports/grammar_lab_1h/event_study_summary.csv`
+
+Current evidence read:
+
+- Bullish grammar v0 events are mostly `fragile`; they are too loose as standalone long triggers.
+- Bearish or avoid grammar is stronger. `grammar_zero_rejection_v0`, `grammar_bearish_divergence_warning_v0`, `grammar_chaotic_chop_warning_v0`, and `grammar_hot_leader_reset_warning_v0` repeatedly classify as `useful` or `watchlist`.
+- `1d` gives the cleanest negative/avoid evidence with broader date-cluster coverage.
+- `12h`, `4h`, and `1h` results are useful but more date-cluster concentrated in the currently available data.
+- Next research should prioritize false-positive reduction before promoting bullish trigger logic.
+
 ## Observation Progress
 
 Total structured observations loaded: `30`

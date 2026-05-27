@@ -31,7 +31,7 @@ from .mtf_research import run_mtf_research
 from .observation_library import export_observation_library
 from .resample import research_mtf_derivations, resample_universe
 from .score_research import run_score_research
-from .signal_grammar import export_grammar_lab
+from .signal_grammar import calculate_signal_grammar_features, export_grammar_lab
 from .signal_research import run_signal_research
 from .setup_quality import calculate_setup_quality
 from .setup_research import run_setup_research
@@ -87,6 +87,20 @@ LEADERBOARD_COLUMNS = [
     "state_tags",
     "setup_state_v0",
     "setup_tags",
+    "grammar_model",
+    "grammar_pressure_area_balance_20",
+    "grammar_pressure_area_delta_5",
+    "grammar_time_above_viscosity_20",
+    "grammar_sustained_above_viscosity_10",
+    "grammar_coil_under_viscosity",
+    "grammar_relative_weakness_fails_to_accelerate",
+    "grammar_minus_1_5_reclaim",
+    "grammar_zero_reclaim",
+    "grammar_bullish_divergence_20",
+    "grammar_bearish_divergence_20",
+    "grammar_clean_chop_quality",
+    "grammar_chaotic_chop_quality",
+    "grammar_reset_quality_watch",
     "opportunity_score",
     "opportunity_score_v0",
     "notes",
@@ -255,6 +269,8 @@ def build_analysis_frames(
         analysis = analysis.join(state_details, how="left")
         setup_quality = calculate_setup_quality(analysis)
         analysis = analysis.join(setup_quality, how="left")
+        grammar_features = calculate_signal_grammar_features(analysis)
+        analysis = analysis.join(grammar_features, how="left")
         analysis["opportunity_score"] = analysis["opportunity_score_v0"]
         analysis_frames[asset.symbol] = analysis
 
@@ -350,6 +366,22 @@ def build_leaderboard(
             "state_tags": latest.get("state_tags"),
             "setup_state_v0": latest.get("setup_state_v0"),
             "setup_tags": latest.get("setup_tags"),
+            "grammar_model": latest.get("grammar_model"),
+            "grammar_pressure_area_balance_20": latest.get("grammar_pressure_area_balance_20"),
+            "grammar_pressure_area_delta_5": latest.get("grammar_pressure_area_delta_5"),
+            "grammar_time_above_viscosity_20": latest.get("grammar_time_above_viscosity_20"),
+            "grammar_sustained_above_viscosity_10": latest.get("grammar_sustained_above_viscosity_10"),
+            "grammar_coil_under_viscosity": latest.get("grammar_coil_under_viscosity"),
+            "grammar_relative_weakness_fails_to_accelerate": latest.get(
+                "grammar_relative_weakness_fails_to_accelerate"
+            ),
+            "grammar_minus_1_5_reclaim": latest.get("grammar_minus_1_5_reclaim"),
+            "grammar_zero_reclaim": latest.get("grammar_zero_reclaim"),
+            "grammar_bullish_divergence_20": latest.get("grammar_bullish_divergence_20"),
+            "grammar_bearish_divergence_20": latest.get("grammar_bearish_divergence_20"),
+            "grammar_clean_chop_quality": latest.get("grammar_clean_chop_quality"),
+            "grammar_chaotic_chop_quality": latest.get("grammar_chaotic_chop_quality"),
+            "grammar_reset_quality_watch": latest.get("grammar_reset_quality_watch"),
             "opportunity_score": latest.get("opportunity_score"),
             "opportunity_score_v0": latest.get("opportunity_score_v0"),
             "notes": _latest_notes(latest),

@@ -8,6 +8,7 @@ SETUP_EVENT = "setup_event"
 STATE_EVENT = "state_event"
 SIGNAL_EVENT = "signal_event"
 SCORE_EVENT = "score_event"
+GRAMMAR_EVENT = "grammar_event"
 
 DEFAULT_EVENT_ENTRY_LAG_BARS = 1
 DEFAULT_EVENT_COOLDOWN_BARS = 30
@@ -199,6 +200,94 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         priority=100,
         value_column="score_value",
         description="Score research observation used for ranking evidence.",
+    ),
+    "grammar_pressure_acceptance_v0": _spec(
+        "grammar_pressure_acceptance_v0",
+        GRAMMAR_EVENT,
+        priority=110,
+        value_column="grammar_pressure_area_balance_20",
+        description="Research sidecar: sustained positive area above viscosity.",
+    ),
+    "grammar_viscosity_acceptance_flush_reclaim_v0": _spec(
+        "grammar_viscosity_acceptance_flush_reclaim_v0",
+        GRAMMAR_EVENT,
+        priority=111,
+        value_column="grammar_pressure_distance",
+        description="Research sidecar: accepted viscosity, flushed below, then reclaimed.",
+    ),
+    "grammar_low_zone_failed_weakness_v0": _spec(
+        "grammar_low_zone_failed_weakness_v0",
+        GRAMMAR_EVENT,
+        priority=112,
+        value_column="grammar_signal_slope_3",
+        description="Research sidecar: deep negative weakness stops accelerating and reclaims a trigger.",
+    ),
+    "grammar_minus_1_5_reclaim_after_coil_v0": _spec(
+        "grammar_minus_1_5_reclaim_after_coil_v0",
+        GRAMMAR_EVENT,
+        priority=113,
+        value_column="final_signal",
+        description="Research sidecar: -1.5 reclaim after lower-zone coil under viscosity.",
+    ),
+    "grammar_zero_reclaim_confirmation_v0": _spec(
+        "grammar_zero_reclaim_confirmation_v0",
+        GRAMMAR_EVENT,
+        priority=114,
+        value_column="final_signal",
+        description="Research sidecar: zero reclaim after prior viscosity acceptance.",
+    ),
+    "grammar_curvature_up_from_low_zone_v0": _spec(
+        "grammar_curvature_up_from_low_zone_v0",
+        GRAMMAR_EVENT,
+        priority=115,
+        value_column="grammar_signal_accel_3",
+        description="Research sidecar: slope and acceleration curl upward from a recent low zone.",
+    ),
+    "grammar_bullish_divergence_reclaim_v0": _spec(
+        "grammar_bullish_divergence_reclaim_v0",
+        GRAMMAR_EVENT,
+        priority=116,
+        value_column="final_signal",
+        description="Research sidecar: price/oscillator bullish divergence with reclaim confirmation.",
+    ),
+    "grammar_clean_chop_reclaim_v0": _spec(
+        "grammar_clean_chop_reclaim_v0",
+        GRAMMAR_EVENT,
+        priority=117,
+        value_column="compression_score",
+        description="Research sidecar: compressed clean oscillator chop plus reclaim.",
+    ),
+    "grammar_zero_rejection_v0": _spec(
+        "grammar_zero_rejection_v0",
+        GRAMMAR_EVENT,
+        priority=130,
+        direction="negative",
+        value_column="final_signal",
+        description="Research sidecar: oscillator rejects near zero and turns down.",
+    ),
+    "grammar_bearish_divergence_warning_v0": _spec(
+        "grammar_bearish_divergence_warning_v0",
+        GRAMMAR_EVENT,
+        priority=131,
+        direction="negative",
+        value_column="gradient_driver",
+        description="Research sidecar: price strength with weaker oscillator or gradient highs.",
+    ),
+    "grammar_chaotic_chop_warning_v0": _spec(
+        "grammar_chaotic_chop_warning_v0",
+        GRAMMAR_EVENT,
+        priority=132,
+        direction="negative",
+        value_column="grammar_viscosity_cross_count_20",
+        description="Research sidecar: violent oscillator chop around viscosity.",
+    ),
+    "grammar_hot_leader_reset_warning_v0": _spec(
+        "grammar_hot_leader_reset_warning_v0",
+        GRAMMAR_EVENT,
+        priority=133,
+        direction="negative",
+        value_column="final_signal",
+        description="Research sidecar: hot leader cooloff or reset warning after +1.5/+2 pressure.",
     ),
 }
 

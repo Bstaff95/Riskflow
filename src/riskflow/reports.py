@@ -141,6 +141,12 @@ def build_obsidian_scan_report(
         "final_signal",
         "relative_component",
         "compression_score",
+        "grammar_pressure_area_balance_20",
+        "grammar_time_above_viscosity_20",
+        "grammar_sustained_above_viscosity_10",
+        "grammar_relative_weakness_fails_to_accelerate",
+        "grammar_clean_chop_quality",
+        "grammar_reset_quality_watch",
         "state_tags",
         "setup_tags",
     ]
@@ -311,6 +317,7 @@ Records: {len(records)}
 - Rerun with ex-target baskets once Layer 2 benchmark hardening exists.
 - Compare useful events against simple baselines before promotion.
 - Preserve versioned event ids before changing any trigger threshold.
+- Treat Signal Grammar Lab events as sidecar candidates until they beat incumbent events.
 
 ## Warnings
 {warning_section}

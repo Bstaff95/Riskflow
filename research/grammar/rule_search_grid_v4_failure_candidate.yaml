@@ -1,0 +1,35 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: zero_rejection_warning
+    direction: negative
+    detector: zero_rejection_warning
+    description: Signal tests the zero/equilibrium area and rolls back below it with fading gradient.
+    parameter_grid:
+      lookback: [3, 5, 8]
+      level: [0.0]
+      tolerance: [0.15, 0.25, 0.40]
+      require_below_viscosity: [true, false]
+      max_compression: [50.0, 75.0]
+
+  - family_id: failed_strength_acceptance
+    direction: negative
+    detector: failed_strength_acceptance
+    description: Signal recently accepted above viscosity or strength levels, then loses structure before relative slope improves.
+    parameter_grid:
+      acceptance_window: [5, 8, 13]
+      min_recent_time_above: [0.4, 0.6]
+      min_prior_signal: [0.5, 1.0, 1.5]
+      trigger: [viscosity_loss, zero_loss, plus_1_5_lost]
+      max_relative_slope: [-0.05, 0.0]
+
+  - family_id: lower_high_rollover
+    direction: negative
+    detector: lower_high_rollover
+    description: Prior signal high is followed by a lower-high structure and current downside turn.
+    parameter_grid:
+      lookback: [13, 20]
+      recent_window: [5, 8]
+      min_prior_high: [1.0, 1.5, 2.0]
+      min_lower_high_gap: [0.25, 0.50]
+      require_below_viscosity: [true, false]
+      max_relative_slope: [-0.05, 0.0]

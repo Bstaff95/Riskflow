@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -15,8 +16,18 @@ from .flow_research import run_flow_research
 from .grammar_search import (
     DEFAULT_GRAMMAR_SEARCH_GRID,
     GRAMMAR_SEARCH_MODEL,
+    chart_review_queue,
+    duplicate_outcome_clusters,
+    family_timeframe_robustness,
     run_grammar_search,
+    strict_baseline_referee,
     timeframe_cooldown,
+    time_split_validation,
+)
+from .indicator_behavior import (
+    DEFAULT_CONCEPT_LIBRARY,
+    DEFAULT_PRIMITIVE_REGISTRY,
+    run_indicator_behavior_search,
 )
 from .indicator_engine import calculate_indicator
 from .reports import (
@@ -272,6 +283,7 @@ def build_analysis_frames(
         )
         compression = calculate_compression_features(raw, settings=universe.compression_settings)
         analysis = indicator.join(compression, how="left")
+        analysis["volume"] = raw["volume"].reindex(analysis.index)
         state_details = classify_state_frame(analysis)
         analysis = analysis.join(state_details, how="left")
         setup_quality = calculate_setup_quality(analysis)
@@ -989,13 +1001,143 @@ def grammar_search_command(args: argparse.Namespace) -> int:
         report_dir=args.report_dir,
         obsidian_dir=args.obsidian_dir,
     )
+    if args.strict_referee:
+        try:
+            strict_referee = strict_baseline_referee(
+                ranked,
+                records,
+                analysis_by_timeframe,
+                entry_lag_bars=args.entry_lag_bars,
+                null_iterations=args.strict_null_iterations,
+                random_seed=args.strict_random_seed,
+            )
+            strict_referee_path = Path(args.report_dir) / "grammar_search_strict_referee.csv"
+            strict_referee.to_csv(strict_referee_path, index=False)
+            paths["strict_referee_csv"] = strict_referee_path
+        except Exception as exc:
+            print(f"Grammar search strict referee failed: {exc}")
+            return 1
     print(f"Wrote grammar search records CSV: {paths['records_csv']}")
     print(f"Wrote grammar search summary CSV: {paths['summary_csv']}")
     print(f"Wrote grammar search ranked CSV: {paths['ranked_csv']}")
     print(f"Wrote grammar search family/timeframe CSV: {paths['family_timeframe_csv']}")
+    print(f"Wrote grammar search family robustness CSV: {paths['family_robustness_csv']}")
+    print(f"Wrote grammar search duplicate clusters CSV: {paths['duplicate_clusters_csv']}")
+    print(f"Wrote grammar search chart review queue CSV: {paths['chart_review_queue_csv']}")
+    print(f"Wrote grammar search time split validation CSV: {paths['time_split_validation_csv']}")
+    if "strict_referee_csv" in paths:
+        print(f"Wrote grammar search strict referee CSV: {paths['strict_referee_csv']}")
     print(f"Wrote grammar search manifest: {paths['manifest_yaml']}")
     print(f"Wrote grammar search HTML: {paths['summary_html']}")
     print(f"Wrote Obsidian grammar search report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
+def indicator_behavior_search_command(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe_config(args.config)
+        analysis_by_timeframe: dict[str, dict[str, pd.DataFrame]] = {}
+        warnings: list[str] = []
+        timeframes = [normalize_timeframe(timeframe) for timeframe in args.timeframes]
+        for timeframe in timeframes:
+            raw_frames, load_warnings = load_universe_ohlcv(
+                universe,
+                data_dir=args.data_dir,
+                timeframe=timeframe,
+            )
+            warnings.extend(f"{timeframe}: {warning}" for warning in load_warnings)
+            if not raw_frames:
+                warnings.append(f"{timeframe}: no usable CSV files found in {Path(args.data_dir)}")
+                analysis_by_timeframe[timeframe] = {}
+                continue
+            analysis_frames, _basket, analysis_warnings = build_analysis_frames(universe, raw_frames)
+            warnings.extend(f"{timeframe}: {warning}" for warning in analysis_warnings)
+            analysis_by_timeframe[timeframe] = analysis_frames
+
+        cooldowns = {timeframe: args.cooldown_bars for timeframe in timeframes} if args.cooldown_bars else None
+        priority = None if args.priority == "all" else args.priority
+        summary, records, ranked, family_summary, variants = run_indicator_behavior_search(
+            analysis_by_timeframe,
+            concept_library_path=args.concept_library,
+            primitive_registry_path=args.primitive_registry,
+            timeframes=timeframes,
+            priority=priority,
+            context_windows=args.context_windows,
+            benchmark_name=universe.benchmark.name,
+            min_sample_size=args.min_sample_size,
+            entry_lag_bars=args.entry_lag_bars,
+            cooldown_bars_by_timeframe=cooldowns,
+        )
+
+        report_dir = Path(args.report_dir)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        paths = {
+            "records_csv": report_dir / "indicator_behavior_records.csv",
+            "summary_csv": report_dir / "indicator_behavior_summary.csv",
+            "ranked_csv": report_dir / "indicator_behavior_ranked.csv",
+            "family_timeframe_csv": report_dir / "indicator_behavior_family_timeframe.csv",
+            "robustness_csv": report_dir / "indicator_behavior_robustness.csv",
+            "duplicate_clusters_csv": report_dir / "indicator_behavior_duplicate_clusters.csv",
+            "chart_review_queue_csv": report_dir / "indicator_behavior_chart_review_queue.csv",
+            "time_split_validation_csv": report_dir / "indicator_behavior_time_split_validation.csv",
+            "manifest_json": report_dir / "indicator_behavior_manifest.json",
+        }
+        summary.to_csv(paths["summary_csv"], index=False)
+        records.to_csv(paths["records_csv"], index=False)
+        ranked.to_csv(paths["ranked_csv"], index=False)
+        family_summary.to_csv(paths["family_timeframe_csv"], index=False)
+        family_timeframe_robustness(summary).to_csv(paths["robustness_csv"], index=False)
+        duplicate_outcome_clusters(summary).to_csv(paths["duplicate_clusters_csv"], index=False)
+        chart_review_queue(ranked, records).to_csv(paths["chart_review_queue_csv"], index=False)
+        time_split_validation(ranked, records).to_csv(paths["time_split_validation_csv"], index=False)
+
+        if args.strict_referee:
+            strict_referee = strict_baseline_referee(
+                ranked,
+                records,
+                analysis_by_timeframe,
+                entry_lag_bars=args.entry_lag_bars,
+                null_iterations=args.strict_null_iterations,
+                random_seed=args.strict_random_seed,
+            )
+            paths["strict_referee_csv"] = report_dir / "indicator_behavior_strict_referee.csv"
+            strict_referee.to_csv(paths["strict_referee_csv"], index=False)
+
+        manifest = {
+            "model": "riskflow_indicator_behavior_search_v0",
+            "config": args.config,
+            "data_dir": args.data_dir,
+            "concept_library": args.concept_library,
+            "primitive_registry": args.primitive_registry,
+            "timeframes": timeframes,
+            "priority": args.priority,
+            "context_windows": args.context_windows,
+            "min_sample_size": args.min_sample_size,
+            "entry_lag_bars": args.entry_lag_bars,
+            "cooldown_bars_by_timeframe": cooldowns
+            or {timeframe: timeframe_cooldown(timeframe) for timeframe in timeframes},
+            "variant_count": len(variants),
+            "record_count": int(len(records)),
+            "warnings": warnings,
+        }
+        paths["manifest_json"].write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"Indicator behavior search failed: {exc}")
+        return 1
+
+    print(f"Wrote indicator behavior records CSV: {paths['records_csv']}")
+    print(f"Wrote indicator behavior summary CSV: {paths['summary_csv']}")
+    print(f"Wrote indicator behavior ranked CSV: {paths['ranked_csv']}")
+    print(f"Wrote indicator behavior family/timeframe CSV: {paths['family_timeframe_csv']}")
+    print(f"Wrote indicator behavior robustness CSV: {paths['robustness_csv']}")
+    print(f"Wrote indicator behavior duplicate clusters CSV: {paths['duplicate_clusters_csv']}")
+    print(f"Wrote indicator behavior chart review queue CSV: {paths['chart_review_queue_csv']}")
+    print(f"Wrote indicator behavior time split validation CSV: {paths['time_split_validation_csv']}")
+    if "strict_referee_csv" in paths:
+        print(f"Wrote indicator behavior strict referee CSV: {paths['strict_referee_csv']}")
+    print(f"Wrote indicator behavior manifest: {paths['manifest_json']}")
     if warnings:
         print(f"Warnings: {len(warnings)}")
     return 0
@@ -1352,7 +1494,101 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional shared cooldown bars for all timeframes. Defaults to timeframe-scaled values.",
     )
+    grammar_search.add_argument(
+        "--strict-referee",
+        action="store_true",
+        help="Also write strict baseline/null validation for grammar-search variants.",
+    )
+    grammar_search.add_argument(
+        "--strict-null-iterations",
+        type=int,
+        default=300,
+        help="Matched random-null iterations for --strict-referee.",
+    )
+    grammar_search.add_argument(
+        "--strict-random-seed",
+        type=int,
+        default=29,
+        help="Random seed for --strict-referee matched-null sampling.",
+    )
     grammar_search.set_defaults(func=grammar_search_command)
+
+    indicator_behavior_search = subparsers.add_parser(
+        "indicator-behavior-search",
+        help="Run encoded indicator-behavior concept search across timeframes.",
+    )
+    indicator_behavior_search.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    indicator_behavior_search.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    indicator_behavior_search.add_argument(
+        "--report-dir",
+        default="reports/indicator_behavior/search",
+        help="Directory for indicator-behavior search outputs.",
+    )
+    indicator_behavior_search.add_argument(
+        "--concept-library",
+        default=DEFAULT_CONCEPT_LIBRARY,
+        help="Indicator behavior concept library YAML.",
+    )
+    indicator_behavior_search.add_argument(
+        "--primitive-registry",
+        default=DEFAULT_PRIMITIVE_REGISTRY,
+        help="Indicator behavior primitive registry YAML.",
+    )
+    indicator_behavior_search.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=["1d", "12h", "4h", "1h"],
+        help="Timeframe suffixes to search independently.",
+    )
+    indicator_behavior_search.add_argument(
+        "--priority",
+        choices=["first_batch", "backlog", "all"],
+        default="first_batch",
+        help="Concept priority bucket to run.",
+    )
+    indicator_behavior_search.add_argument(
+        "--context-windows",
+        nargs="+",
+        type=int,
+        default=[10],
+        help="Primitive context windows, in bars.",
+    )
+    indicator_behavior_search.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=20,
+        help="Minimum independent event count before a variant can classify beyond inconclusive.",
+    )
+    indicator_behavior_search.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the candidate event before forward-return measurement starts.",
+    )
+    indicator_behavior_search.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=None,
+        help="Optional shared cooldown bars for all timeframes. Defaults to timeframe-scaled values.",
+    )
+    indicator_behavior_search.add_argument(
+        "--strict-referee",
+        action="store_true",
+        help="Also write strict baseline/null validation for indicator-behavior variants.",
+    )
+    indicator_behavior_search.add_argument(
+        "--strict-null-iterations",
+        type=int,
+        default=300,
+        help="Matched random-null iterations for --strict-referee.",
+    )
+    indicator_behavior_search.add_argument(
+        "--strict-random-seed",
+        type=int,
+        default=29,
+        help="Random seed for --strict-referee matched-null sampling.",
+    )
+    indicator_behavior_search.set_defaults(func=indicator_behavior_search_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

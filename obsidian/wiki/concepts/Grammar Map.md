@@ -7,6 +7,7 @@ The purpose is to keep individual observations from floating free. Case notes sh
 ## Core Hubs
 
 - [[Signal Grammar Lab]]
+- [[Lab Loop]]
 - [[Bullish Setup Grammar]]
 - [[Reset Grammar]]
 - [[Bearish Avoid Grammar]]
@@ -30,4 +31,3 @@ Every useful concept should eventually answer three questions:
 1. What visual behavior does it describe?
 2. Which cases demonstrate it?
 3. How could Riskflow test it with data?
-

@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: amplitude_reset_warning
+    direction: negative
+    detector: amplitude_reset_warning
+    description: A hot oscillator with high recent range cools below structure after a large amplitude move.
+    parameter_grid:
+      prior_window: [12, 13, 20]
+      hot_level: [1.5, 2.0]
+      cooloff_level: [1.0, 1.5]
+      min_signal_range: [2.0, 2.5]
+      max_compression: [30.0, 50.0]
+      require_below_viscosity: [true]

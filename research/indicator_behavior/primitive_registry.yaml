@@ -1,0 +1,316 @@
+model: riskflow_indicator_behavior_primitives_v0
+purpose: >
+  Research-only primitive definitions for encoding common indicator behaviors
+  in terms of Riskflow's oscillator, viscosity, gradient, relative, compression,
+  price, and volume data.
+production_effect: none
+default_inputs:
+  oscillator: final_signal
+  baseline: viscosity
+  gradient: gradient_driver
+  relative: relative_component
+  compression: compression_score
+  price: target
+  benchmark: benchmark
+  volume: volume
+  outcome: forward_relative_return
+implementation_status_values:
+  - existing_sidecar_column
+  - directly_derivable
+  - needs_sidecar
+  - needs_multi_timeframe_join
+  - needs_peer_basket_context
+primitive_families:
+  oscillator_position:
+    primitives:
+      signal_below_low_band:
+        definition: final_signal <= low_level
+        parameters: {low_level: [-2.0, -1.5, -1.0]}
+        status: directly_derivable
+      signal_above_high_band:
+        definition: final_signal >= high_level
+        parameters: {high_level: [1.0, 1.5, 2.0]}
+        status: directly_derivable
+      signal_cross_above_low_band:
+        definition: final_signal crosses above low_level after being below it
+        parameters: {low_level: [-2.0, -1.5, -1.0]}
+        status: directly_derivable
+      signal_cross_below_high_band:
+        definition: final_signal crosses below high_level after being above it
+        parameters: {high_level: [1.0, 1.5, 2.0]}
+        status: directly_derivable
+      signal_cross_above_zero:
+        definition: final_signal crosses above 0
+        parameters: {}
+        status: directly_derivable
+      signal_cross_below_zero:
+        definition: final_signal crosses below 0
+        parameters: {}
+        status: directly_derivable
+      zero_rejection_from_below:
+        definition: final_signal approaches 0 from below, fails, and rolls down
+        parameters: {lookback: [6, 10, 20], tolerance: [0.15, 0.3]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_zero_rejection]
+      zero_retest_hold_from_above:
+        definition: final_signal reclaims 0, retests it, and holds
+        parameters: {lookback: [6, 10, 20], tolerance: [0.15, 0.3]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_zero_retest_hold]
+  oscillator_shape:
+    primitives:
+      signal_higher_low:
+        definition: recent oscillator low is higher than the prior oscillator low
+        parameters: {pivot_window: [5, 10, 20], tolerance: [0.1, 0.25]}
+        status: needs_sidecar
+      signal_lower_high:
+        definition: recent oscillator high is lower than the prior oscillator high
+        parameters: {pivot_window: [5, 10, 20], tolerance: [0.1, 0.25]}
+        status: needs_sidecar
+      signal_slope_up:
+        definition: final_signal slope over slope_window is positive
+        parameters: {slope_window: [3, 5, 10]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_signal_slope_3, grammar_signal_slope_5]
+      signal_slope_down:
+        definition: final_signal slope over slope_window is negative
+        parameters: {slope_window: [3, 5, 10]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_signal_slope_3, grammar_signal_slope_5]
+      signal_accelerating_up:
+        definition: signal slope is rising and acceleration is positive
+        parameters: {accel_window: [3, 5]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_signal_accel_3, grammar_signal_curvature_up]
+      signal_decelerating_up:
+        definition: signal is positive or rising but slope/gradient is fading
+        parameters: {lookback: [5, 10, 20]}
+        status: directly_derivable
+      signal_accelerating_down:
+        definition: signal slope is falling and acceleration is negative
+        parameters: {accel_window: [3, 5]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_signal_accel_3, grammar_signal_curvature_down]
+      signal_repairing_from_down:
+        definition: negative/down pressure stops worsening and begins improving
+        parameters: {lookback: [5, 10, 20]}
+        status: directly_derivable
+  divergence:
+    primitives:
+      price_lower_low_signal_higher_low:
+        definition: target makes lower low while final_signal makes higher low
+        parameters: {lookback: [10, 20, 40]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_bullish_divergence_20]
+      price_higher_high_signal_lower_high:
+        definition: target makes higher high while final_signal makes lower high
+        parameters: {lookback: [10, 20, 40]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_bearish_divergence_20]
+      relative_lower_low_signal_higher_low:
+        definition: relative_component makes lower low while final_signal makes higher low
+        parameters: {lookback: [10, 20, 40]}
+        status: needs_sidecar
+      relative_higher_high_signal_lower_high:
+        definition: relative_component makes higher high while final_signal makes lower high
+        parameters: {lookback: [10, 20, 40]}
+        status: needs_sidecar
+      gradient_momentum_divergence:
+        definition: price or relative extends but gradient_driver fails to confirm
+        parameters: {lookback: [10, 20, 40]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_gradient_momentum_divergence_20]
+  viscosity_baseline:
+    primitives:
+      viscosity_reclaim:
+        definition: final_signal crosses above viscosity
+        parameters: {}
+        status: directly_derivable
+      viscosity_loss:
+        definition: final_signal crosses below viscosity
+        parameters: {}
+        status: directly_derivable
+      time_above_viscosity:
+        definition: share/count of recent bars with final_signal above viscosity
+        parameters: {window: [5, 10, 20]}
+        status: existing_sidecar_column
+        sidecar_columns:
+          - grammar_time_above_viscosity_5
+          - grammar_time_above_viscosity_10
+          - grammar_time_above_viscosity_20
+      sustained_above_viscosity:
+        definition: final_signal remains above viscosity for most of a window
+        parameters: {window: [10, 20], min_share: [0.6, 0.7, 0.8]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_sustained_above_viscosity_10]
+      pressure_area_positive:
+        definition: rolling area of final_signal above viscosity is positive/dominant
+        parameters: {window: [10, 20, 40]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_pressure_area_balance_20]
+      pressure_area_negative:
+        definition: rolling area of final_signal below viscosity is negative/dominant
+        parameters: {window: [10, 20, 40]}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_pressure_area_balance_20]
+      baseline_flat:
+        definition: viscosity slope and signal range are both small
+        parameters: {window: [10, 20, 40], slope_max: [0.03, 0.06]}
+        status: needs_sidecar
+      baseline_slope_up:
+        definition: viscosity slope is positive
+        parameters: {window: [5, 10, 20]}
+        status: directly_derivable
+      baseline_slope_down:
+        definition: viscosity slope is negative
+        parameters: {window: [5, 10, 20]}
+        status: directly_derivable
+      baseline_retest_hold:
+        definition: signal reclaims viscosity, pulls back near it, and remains above
+        parameters: {lookback: [6, 12, 20], tolerance: [0.1, 0.25]}
+        status: needs_sidecar
+      baseline_retest_fail:
+        definition: signal reclaims viscosity, retests it, and loses it
+        parameters: {lookback: [6, 12, 20], tolerance: [0.1, 0.25]}
+        status: needs_sidecar
+  gradient_pressure:
+    primitives:
+      gradient_positive_expanding:
+        definition: gradient_driver is positive and rising
+        parameters: {lookback: [3, 5, 10]}
+        status: directly_derivable
+      gradient_positive_fading:
+        definition: gradient_driver is positive but falling
+        parameters: {lookback: [3, 5, 10]}
+        status: directly_derivable
+      gradient_negative_expanding:
+        definition: gradient_driver is negative and falling
+        parameters: {lookback: [3, 5, 10]}
+        status: directly_derivable
+      gradient_negative_repairing:
+        definition: gradient_driver is negative but rising
+        parameters: {lookback: [3, 5, 10]}
+        status: directly_derivable
+      fast_pressure_cross_up:
+        definition: fast pressure crosses above slow pressure
+        parameters: {}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_fast_pressure, grammar_slow_pressure, grammar_fast_slow_pressure_gap]
+      fast_pressure_cross_down:
+        definition: fast pressure crosses below slow pressure
+        parameters: {}
+        status: existing_sidecar_column
+        sidecar_columns: [grammar_fast_pressure, grammar_slow_pressure, grammar_fast_slow_pressure_gap]
+  compression_volatility:
+    primitives:
+      compression_high:
+        definition: compression_score is above a high threshold
+        parameters: {threshold: [0.65, 0.75, 0.85]}
+        status: directly_derivable
+      compression_low:
+        definition: compression_score is below a low threshold
+        parameters: {threshold: [0.15, 0.25, 0.35]}
+        status: directly_derivable
+      compression_release_up:
+        definition: high compression resolves with signal/gradient pressure up
+        parameters: {lookback: [5, 10, 20]}
+        status: needs_sidecar
+      compression_release_down:
+        definition: high compression resolves with signal/gradient pressure down
+        parameters: {lookback: [5, 10, 20]}
+        status: needs_sidecar
+      range_expansion_up:
+        definition: target range/return expands while signal and gradient confirm up
+        parameters: {window: [10, 20, 40], quantile: [0.7, 0.8, 0.9]}
+        status: needs_sidecar
+      range_expansion_down:
+        definition: target range/return expands while signal and gradient confirm down
+        parameters: {window: [10, 20, 40], quantile: [0.7, 0.8, 0.9]}
+        status: needs_sidecar
+      range_expansion_unconfirmed:
+        definition: target range expands but signal, gradient, or relative does not confirm
+        parameters: {window: [10, 20, 40], quantile: [0.7, 0.8, 0.9]}
+        status: needs_sidecar
+  volume_flow:
+    primitives:
+      volume_spike:
+        definition: volume is above rolling median by multiplier
+        parameters: {window: [20, 50], multiplier: [1.5, 2.0, 3.0]}
+        status: directly_derivable
+      volume_dryup:
+        definition: volume is below rolling median by multiplier
+        parameters: {window: [20, 50], multiplier: [0.35, 0.5, 0.7]}
+        status: directly_derivable
+      volume_spike_failed_reclaim:
+        definition: volume spikes while a reclaim attempt fails
+        parameters: {lookback: [5, 10, 20]}
+        status: needs_sidecar
+      volume_spike_confirmed_reclaim:
+        definition: volume spikes on a successful signal or viscosity reclaim
+        parameters: {lookback: [5, 10, 20]}
+        status: needs_sidecar
+      signed_volume_accumulation:
+        definition: close-up volume pressure accumulates while signal/relative improves
+        parameters: {window: [20, 50]}
+        status: needs_sidecar
+      volume_divergent_breakout:
+        definition: price breaks out but volume and gradient confirmation lag
+        parameters: {window: [10, 20, 40]}
+        status: needs_sidecar
+  relative_peer:
+    primitives:
+      relative_improving:
+        definition: relative_component slope is positive
+        parameters: {window: [5, 10, 20]}
+        status: directly_derivable
+      relative_deteriorating:
+        definition: relative_component slope is negative
+        parameters: {window: [5, 10, 20]}
+        status: directly_derivable
+      relative_reclaim:
+        definition: relative_component crosses above relative baseline or threshold
+        parameters: {window: [10, 20], threshold: [0.0]}
+        status: needs_sidecar
+      relative_failed_breakout:
+        definition: relative_component makes a new local high then loses it quickly
+        parameters: {lookback: [10, 20, 40], fail_window: [3, 5, 10]}
+        status: needs_sidecar
+      relative_lower_high:
+        definition: relative_component forms a lower high after leadership impulse
+        parameters: {pivot_window: [10, 20, 40], impulse_min: [0.5, 1.0]}
+        status: needs_sidecar
+      peer_decoupling_bull:
+        definition: symbol improves while basket/peers weaken or stall
+        parameters: {peer_window: [10, 20, 40]}
+        status: needs_peer_basket_context
+      peer_decoupling_bear:
+        definition: symbol weakens while basket/peers remain strong or improve
+        parameters: {peer_window: [10, 20, 40]}
+        status: needs_peer_basket_context
+      correlation_spike_risk_off:
+        definition: broad peer correlations rise while relative leadership compresses
+        parameters: {window: [20, 50]}
+        status: needs_peer_basket_context
+  multi_timeframe:
+    primitives:
+      higher_tf_positive_bias:
+        definition: higher timeframe signal/viscosity/relative state is constructive
+        parameters: {higher_timeframe: [1d, 12h, 4h]}
+        status: needs_multi_timeframe_join
+      higher_tf_negative_bias:
+        definition: higher timeframe signal/viscosity/relative state is deteriorating
+        parameters: {higher_timeframe: [1d, 12h, 4h]}
+        status: needs_multi_timeframe_join
+      lower_tf_reclaim:
+        definition: lower timeframe reclaims signal/viscosity after higher timeframe bias
+        parameters: {lower_timeframe: [12h, 4h, 1h]}
+        status: needs_multi_timeframe_join
+      lower_tf_bounce_fail:
+        definition: lower timeframe bounce fails beneath higher timeframe resistance/bias
+        parameters: {lower_timeframe: [12h, 4h, 1h]}
+        status: needs_multi_timeframe_join
+      mtf_compression_stack:
+        definition: multiple timeframes show elevated compression at the same time
+        parameters: {timeframes: [[1d, 12h, 4h], [12h, 4h, 1h]]}
+        status: needs_multi_timeframe_join
+

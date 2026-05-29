@@ -1,0 +1,12 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: one_hour_zero_rejection_neighborhood
+    direction: negative
+    detector: zero_rejection_warning
+    description: Broader 1h zero/equilibrium rejection warning neighborhood for strict-referee validation after v4 showed broad-null support.
+    parameter_grid:
+      lookback: [3, 5, 8, 13]
+      level: [0.0]
+      tolerance: [0.10, 0.15, 0.25, 0.40, 0.60]
+      require_below_viscosity: [true, false]
+      max_compression: [50.0, 75.0, 100.0]

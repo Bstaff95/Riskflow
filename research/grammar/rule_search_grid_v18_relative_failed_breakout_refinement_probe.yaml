@@ -1,0 +1,25 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: relative_failed_breakout_refinement_probe
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: >
+      Focused refinement probe for the daily relative failed breakout survivor.
+      Uses only false-positive audit filters that kept roughly 30+ events in
+      the initial separation pass. Sample-derived; requires fresh validation.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+      min_gradient: [0.0, 0.73]
+      min_signal: [null, 0.59, 0.90]
+      min_viscosity: [null, 0.61]
+      max_relative_component: [null, -0.21]
+      max_pressure_area_delta: [null, 0.96, 1.73]
+      max_prior_relative_high: [null, 0.54]
+      min_time_above_viscosity_20: [null, 13, 16]
+      min_viscosity_cross_count_20: [null, 3]
+      min_compression: [null, 45]

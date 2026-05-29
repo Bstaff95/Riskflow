@@ -7,6 +7,12 @@ import pandas as pd
 import yaml
 
 from .config import UniverseConfig
+from .grammar_search import (
+    chart_review_queue,
+    duplicate_outcome_clusters,
+    family_timeframe_robustness,
+    time_split_validation,
+)
 
 
 LEADERBOARD_CSV = "latest_meme_leaderboard.csv"
@@ -54,6 +60,10 @@ GRAMMAR_SEARCH_RECORDS_CSV = "grammar_search_variant_records.csv"
 GRAMMAR_SEARCH_SUMMARY_CSV = "grammar_search_variant_summary.csv"
 GRAMMAR_SEARCH_RANKED_CSV = "grammar_search_ranked.csv"
 GRAMMAR_SEARCH_FAMILY_TIMEFRAME_CSV = "grammar_search_family_timeframe_summary.csv"
+GRAMMAR_SEARCH_FAMILY_ROBUSTNESS_CSV = "grammar_search_family_timeframe_robustness.csv"
+GRAMMAR_SEARCH_DUPLICATE_CLUSTERS_CSV = "grammar_search_duplicate_clusters.csv"
+GRAMMAR_SEARCH_CHART_REVIEW_QUEUE_CSV = "grammar_search_chart_review_queue.csv"
+GRAMMAR_SEARCH_TIME_SPLIT_VALIDATION_CSV = "grammar_search_time_split_validation.csv"
 GRAMMAR_SEARCH_MANIFEST_YAML = "grammar_search_manifest.yaml"
 GRAMMAR_SEARCH_SUMMARY_HTML = "grammar_search_summary.html"
 OBSIDIAN_GRAMMAR_SEARCH_MD = "latest_grammar_search.md"
@@ -441,6 +451,66 @@ def build_obsidian_grammar_search_report(
     ]
     review_columns.extend([column for column in records.columns if column.startswith("forward_relative_return_")][-2:])
     review_columns.extend([column for column in records.columns if column.startswith("max_drawdown_")][-1:])
+    robustness = family_timeframe_robustness(ranked)
+    duplicate_clusters = duplicate_outcome_clusters(ranked)
+    focused_review_queue = chart_review_queue(ranked, records)
+    validation = time_split_validation(ranked, records)
+    supported_validation = validation[
+        validation["classification"].isin(["useful", "watchlist"])
+        & validation["validation_status"].eq("time_split_supported")
+    ] if not validation.empty and "validation_status" in validation.columns else pd.DataFrame()
+    robustness_columns = [
+        "family_id",
+        "timeframe",
+        "direction",
+        "variants",
+        "useful",
+        "watchlist",
+        "useful_watchlist_rate",
+        "best_rank_score",
+        "median_sample_size",
+        "best_sample_size",
+        "best_primary",
+        "worst_primary",
+        "best_secondary",
+        "worst_secondary",
+    ]
+    duplicate_columns = [
+        "duplicate_count",
+        "family_id",
+        "timeframe",
+        "direction",
+        "classification",
+        "sample_size",
+        "example_variant",
+    ]
+    focused_review_columns = [
+        "symbol",
+        "date",
+        "timeframe",
+        "variant_id",
+        "family_id",
+        "direction",
+        "benchmark",
+        "event_cluster_id",
+        "review_outcome_column",
+        "review_outcome",
+    ]
+    validation_columns = [
+        "variant_id",
+        "family_id",
+        "timeframe",
+        "direction",
+        "classification",
+        "rank_score",
+        "sample_size",
+        "split_sample_size_discovery",
+        "split_median_terminal_relative_return_discovery",
+        "split_sample_size_validation",
+        "split_median_terminal_relative_return_validation",
+        "split_hit_rate_terminal_relative_return_validation",
+        "validation_status",
+    ]
 
     warning_section = "_None._"
     if warnings:
@@ -472,11 +542,23 @@ Records: {len(records)}
 ## Best Family By Timeframe
 {dataframe_to_markdown(family_summary, columns=columns, max_rows=30)}
 
+## Family / Timeframe Robustness
+{dataframe_to_markdown(robustness, columns=robustness_columns, max_rows=30)}
+
+## Duplicate Outcome Clusters
+{dataframe_to_markdown(duplicate_clusters, columns=duplicate_columns, max_rows=20)}
+
+## Time Split Validation
+{dataframe_to_markdown(supported_validation, columns=validation_columns, max_rows=40)}
+
 ## Concentration Risks
 {dataframe_to_markdown(concentrated, columns=columns, max_rows=20)}
 
 ## Fragile / Inconclusive Variants
 {dataframe_to_markdown(fragile, columns=columns, max_rows=20)}
+
+## Focused Chart Review Queue
+{dataframe_to_markdown(focused_review_queue, columns=focused_review_columns, max_rows=40)}
 
 ## Chart Review Queue
 {dataframe_to_markdown(review_queue, columns=review_columns, max_rows=30)}
@@ -521,14 +603,27 @@ def export_grammar_search_reports(
     summary_csv_path = report_path / GRAMMAR_SEARCH_SUMMARY_CSV
     ranked_csv_path = report_path / GRAMMAR_SEARCH_RANKED_CSV
     family_csv_path = report_path / GRAMMAR_SEARCH_FAMILY_TIMEFRAME_CSV
+    family_robustness_csv_path = report_path / GRAMMAR_SEARCH_FAMILY_ROBUSTNESS_CSV
+    duplicate_clusters_csv_path = report_path / GRAMMAR_SEARCH_DUPLICATE_CLUSTERS_CSV
+    chart_review_queue_csv_path = report_path / GRAMMAR_SEARCH_CHART_REVIEW_QUEUE_CSV
+    time_split_validation_csv_path = report_path / GRAMMAR_SEARCH_TIME_SPLIT_VALIDATION_CSV
     manifest_path = report_path / GRAMMAR_SEARCH_MANIFEST_YAML
     html_path = report_path / GRAMMAR_SEARCH_SUMMARY_HTML
     obsidian_path = obsidian_report_path / OBSIDIAN_GRAMMAR_SEARCH_MD
+
+    robustness = family_timeframe_robustness(ranked)
+    duplicate_clusters = duplicate_outcome_clusters(ranked)
+    focused_review_queue = chart_review_queue(ranked, records)
+    validation = time_split_validation(ranked, records)
 
     records.to_csv(records_csv_path, index=False)
     summary.to_csv(summary_csv_path, index=False)
     ranked.to_csv(ranked_csv_path, index=False)
     family_summary.to_csv(family_csv_path, index=False)
+    robustness.to_csv(family_robustness_csv_path, index=False)
+    duplicate_clusters.to_csv(duplicate_clusters_csv_path, index=False)
+    focused_review_queue.to_csv(chart_review_queue_csv_path, index=False)
+    validation.to_csv(time_split_validation_csv_path, index=False)
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     write_html_report(ranked, html_path, "Signal Grammar Search Summary", warnings=warnings)
     obsidian_path.write_text(
@@ -540,6 +635,10 @@ def export_grammar_search_reports(
         "summary_csv": summary_csv_path,
         "ranked_csv": ranked_csv_path,
         "family_timeframe_csv": family_csv_path,
+        "family_robustness_csv": family_robustness_csv_path,
+        "duplicate_clusters_csv": duplicate_clusters_csv_path,
+        "chart_review_queue_csv": chart_review_queue_csv_path,
+        "time_split_validation_csv": time_split_validation_csv_path,
         "manifest_yaml": manifest_path,
         "summary_html": html_path,
         "obsidian": obsidian_path,

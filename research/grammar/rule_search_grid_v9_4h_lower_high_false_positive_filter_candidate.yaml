@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: four_hour_lower_high_false_positive_filter_probe
+    direction: negative
+    detector: lower_high_rollover
+    description: Research-only probe of optional event-time filters suggested by the v8 false-positive atlas.
+    parameter_grid:
+      lookback: [8, 13, 20]
+      recent_window: [5]
+      min_prior_high: [1.5, 2.0, 2.5]
+      min_lower_high_gap: [0.15, 0.25, 0.50]
+      require_below_viscosity: [true]
+      max_relative_slope: [0.0, 0.05]
+      min_fast_slow_pressure_gap: [null, -0.32]
+      max_pressure_area_balance: [null, 5.25]
+      max_pressure_distance: [null, -0.90, -0.50]
+      min_viscosity: [null, 0.42]

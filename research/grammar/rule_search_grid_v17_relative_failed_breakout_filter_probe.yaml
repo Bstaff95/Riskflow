@@ -1,0 +1,21 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: relative_failed_breakout_filter_probe
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: >
+      Sample-derived false-positive filter probe for the daily relative failed
+      breakout warning. This is exploratory and must not be promoted without
+      fresh-data validation.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      min_gradient: [0.0, 0.73]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+      min_signal: [null, 0.59, 0.90]
+      min_viscosity: [null, 0.61, 0.90]
+      max_relative_component: [null, -0.21]
+      max_pressure_area_delta: [null, 0.96, 1.73]

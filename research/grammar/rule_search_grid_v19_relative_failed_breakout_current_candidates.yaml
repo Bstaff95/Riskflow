@@ -1,0 +1,30 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: relative_failed_breakout_baseline_current
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: Current baseline daily relative failed breakout warning.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+  - family_id: relative_failed_breakout_compression_cross_refined
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: >
+      Current refined candidate from v18: daily relative failed breakout with
+      compression support and elevated viscosity-cross activity.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+      min_compression: [45]
+      min_viscosity_cross_count_20: [3]

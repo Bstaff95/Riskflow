@@ -1,0 +1,24 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: zero_rejection_warning_survivor
+    direction: negative
+    detector: zero_rejection_warning
+    description: Narrow survivor grid for zero/equilibrium rejection warnings after v4 baseline and matched-null testing.
+    parameter_grid:
+      lookback: [3, 5, 8]
+      level: [0.0]
+      tolerance: [0.15, 0.25, 0.40]
+      require_below_viscosity: [true, false]
+      max_compression: [75.0]
+
+  - family_id: lower_high_rollover_survivor
+    direction: negative
+    detector: lower_high_rollover
+    description: Narrow survivor grid for lower-high rollover warnings after v4 baseline and matched-null testing.
+    parameter_grid:
+      lookback: [13, 20]
+      recent_window: [5]
+      min_prior_high: [1.5, 2.0]
+      min_lower_high_gap: [0.25, 0.50]
+      require_below_viscosity: [true]
+      max_relative_slope: [0.0]

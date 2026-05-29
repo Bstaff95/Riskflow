@@ -1,0 +1,37 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: failed_weakness_reclaim
+    direction: positive
+    detector: failed_weakness_reclaim
+    description: Deep weakness first stops getting worse, then later reclaims viscosity or zero.
+    parameter_grid:
+      lookback: [13, 21]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.15, 0.35]
+      min_slope: [0.0, 0.03]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8, 13]
+      trigger: [viscosity_reclaim, zero_reclaim]
+
+  - family_id: post_reset_reclaim
+    direction: positive
+    detector: post_reset_reclaim
+    description: Former hot leader cools below structure, then later repairs through a reclaim trigger.
+    parameter_grid:
+      prior_window: [13, 20]
+      hot_level: [1.5, 2.0]
+      reset_level: [1.0, 1.5]
+      reset_window: [8, 13]
+      require_below_viscosity: [true]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      relative_slope_min: [-0.05, 0.0]
+
+  - family_id: chaotic_chop_resolution
+    direction: positive
+    detector: chaotic_chop_resolution
+    description: Chaotic chop warning appears first, then the oscillator repairs through reclaim with current compression quality.
+    parameter_grid:
+      recent_window: [8, 13]
+      max_chop_compression: [60.0, 75.0]
+      min_current_compression: [50.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]

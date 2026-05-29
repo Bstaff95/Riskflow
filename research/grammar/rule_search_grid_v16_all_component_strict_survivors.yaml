@@ -1,0 +1,86 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: all99_stoch_overbought_cross_down_daily
+    direction: negative
+    detector: overbought_pressure_cross_down_warning
+    description: Frozen all-99 strict survivor; overbought signal loses high-zone pressure while gradient fades.
+    parameter_grid:
+      context_window: [20]
+      high_level: [1.5]
+      loss_level: [1.0]
+      min_gradient: [0.0]
+  - family_id: all99_relative_failed_breakout_daily
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: Frozen all-99 strict survivor; relative leadership breakout fails as gradient fades and signal loses viscosity.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+  - family_id: all99_dmi_bear_cross_from_high_daily
+    direction: negative
+    detector: bear_pressure_cross_from_high_warning
+    description: Frozen all-99 strict survivor; fast pressure crosses down from a high signal zone while relative pressure weakens.
+    parameter_grid:
+      context_window: [10]
+      high_level: [1.0]
+      max_relative_slope: [0.0]
+  - family_id: all99_volatility_bulge_exhaustion_daily
+    direction: negative
+    detector: volatility_bulge_exhaustion_warning
+    description: Frozen all-99 strict survivor; upside range expansion appears from a high signal zone while gradient fades.
+    parameter_grid:
+      context_window: [10]
+      high_level: [1.0]
+      range_window: [20]
+      range_quantile: [0.8]
+      min_gradient: [0.0]
+  - family_id: all99_late_cycle_leader_exhaustion_daily_ctx5
+    direction: negative
+    detector: late_cycle_leader_exhaustion_warning
+    description: Frozen all-99 strict survivor; relative lower high from leadership while signal remains high and gradient fades.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      context_window: [5]
+      signal_high_level: [1.0]
+      min_relative_prior_high: [0.0]
+      min_relative_lower_high_gap: [0.05]
+  - family_id: all99_lower_high_after_impulse_daily
+    direction: negative
+    detector: lower_high_rollover
+    description: Frozen all-99 strict survivor; signal lower high after impulse while gradient and relative pressure fade.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      min_prior_high: [1.0]
+      min_lower_high_gap: [0.1]
+      require_below_viscosity: [false]
+      max_relative_slope: [0.0]
+  - family_id: all99_late_cycle_leader_exhaustion_daily_ctx10
+    direction: negative
+    detector: late_cycle_leader_exhaustion_warning
+    description: Frozen all-99 strict survivor; wider context version of relative lower-high leadership exhaustion.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      context_window: [10]
+      signal_high_level: [1.0]
+      min_relative_prior_high: [0.0]
+      min_relative_lower_high_gap: [0.05]
+  - family_id: all99_macd_bearish_divergence_daily
+    direction: negative
+    detector: bearish_divergence_fade_warning
+    description: Frozen all-99 strict survivor; bearish divergence with fading positive gradient pressure.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      context_window: [20]
+      min_prior_signal_high: [0.0]
+      min_lower_high_gap: [0.1]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]

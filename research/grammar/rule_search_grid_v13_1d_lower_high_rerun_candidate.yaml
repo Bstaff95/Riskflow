@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: daily_lower_high_rerun
+    direction: negative
+    detector: lower_high_rollover
+    description: Tiny daily lower-high rollover fresh-data rerun spec derived from v12 higher-timeframe refinement.
+    parameter_grid:
+      lookback: [13, 20, 34]
+      recent_window: [8]
+      min_prior_high: [1.0, 1.5, 2.0]
+      min_lower_high_gap: [0.50]
+      require_below_viscosity: [false]
+      max_relative_slope: [0.0, 0.05]

@@ -19,7 +19,7 @@ Then read according to the task:
 - For code work: docs/ARCHITECTURE.md and the relevant module/tests.
 - For planning/product work: docs/ROADMAP.md and docs/END_STATE.md.
 - For git, workflow, or Obsidian work: docs/WORKFLOW.md and docs/OBSIDIAN_MEMORY_POLICY.md.
-- For indicator/research/grammar work: docs/SIGNAL_GRAMMAR_LAB.md and docs/VISUAL_INDICATOR_LEARNING_LOOP.md.
+- For indicator/research/grammar work: docs/SIGNAL_GRAMMAR_LAB.md, docs/LAB_LOOP.md, and docs/VISUAL_INDICATOR_LEARNING_LOOP.md.
 
 For deep handoff context, also read:
 
@@ -28,6 +28,7 @@ For deep handoff context, also read:
 - docs/WORKFLOW.md
 - docs/END_STATE.md
 - docs/SIGNAL_GRAMMAR_LAB.md
+- docs/LAB_LOOP.md
 - docs/VISUAL_INDICATOR_LEARNING_LOOP.md
 - docs/OBSIDIAN_MEMORY_POLICY.md
 

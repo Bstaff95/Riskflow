@@ -32,6 +32,10 @@ The oscillator is TA-readable:
 
 The lab turns these visual reads into structured observations, then into measurable features, then into evidence-tested events.
 
+The current autonomous operating model is [[Lab Loop]]. It defines the queue,
+validation ladder, promotion levels, and agent-checkpoint cadence used to run
+the grammar research without jumping across unrelated ideas.
+
 ## Policy
 
 - Keep the base oscillator frozen for now.
@@ -62,6 +66,7 @@ The eventual product should feel like a universal adaptive relative chart indica
 
 Related:
 
+- [[Lab Loop]]
 - [[Indicator Grammar]]
 - [[Indicator Observation Library]]
 - [[Breakout Archetypes]]

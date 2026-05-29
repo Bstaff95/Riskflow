@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: higher_timeframe_lower_high_refinement
+    direction: negative
+    detector: lower_high_rollover
+    description: Focused 1d/12h lower-high rollover refinement after the canonical v4 strict CLI run found strict survivor support outside the 4h island.
+    parameter_grid:
+      lookback: [13, 20, 34]
+      recent_window: [5, 8, 13]
+      min_prior_high: [1.0, 1.5, 2.0]
+      min_lower_high_gap: [0.25, 0.50, 0.75]
+      require_below_viscosity: [true, false]
+      max_relative_slope: [-0.05, 0.0, 0.05]

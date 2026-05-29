@@ -2,7 +2,7 @@
 
 ## Current Research Frame
 
-The current mission is the [[Signal Grammar Lab]] idea: learn the oscillator's language before changing the core formula.
+The current mission is the [[Signal Grammar Lab]] idea: learn the oscillator's language before changing the core formula. The operating model is [[Lab Loop]].
 
 Pressure waves are one candidate expression of that language, not the mission by themselves. The main grammar families are:
 

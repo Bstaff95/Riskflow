@@ -119,7 +119,7 @@ The observation library is the Karpathy-style LLM wiki layer for this loop. Mach
 
 The next research layer is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`. It keeps the base oscillator frozen while translating human visual reads into grammar primitives such as `pressure_acceptance`, `failed_weakness`, `zone_reclaim_retest`, `oscillator_structure`, `divergence_quality`, and `curvature_intent`. The primitive registry lives in `research/grammar/primitive_registry.yaml`.
 
-The automated grammar-search layer is a research-only hypothesis generator. `grammar_search.py` expands structured rule families from `research/grammar/rule_search_grid.yaml` across selected timeframes, evaluates forward absolute and relative returns with Layer 7 outcome helpers, and exports ranked candidate variants for chart review. It does not change `core_signal_v0`, production state labels, setup scores, opportunity ranking, or TradingView defaults.
+The automated grammar-search layer is a research-only hypothesis generator. `grammar_search.py` expands structured rule families from `research/grammar/rule_search_grid.yaml` across selected timeframes, evaluates forward absolute and relative returns with Layer 7 outcome helpers, and exports ranked candidate variants for chart review. It also exports family/timeframe robustness, duplicate outcome clusters, focused chart-review queues, and time-split validation so top-ranked variants can be separated from more durable candidates. Use optional `grammar-search --strict-referee` for stricter baseline/null validation against same-timeframe, same-cluster, and matched random baselines. Follow-up learning-loop reports can add visual galleries and false-positive atlases for survivors. It does not change `core_signal_v0`, production state labels, setup scores, opportunity ranking, or TradingView defaults.
 
 Pressure waves are currently an experimental candidate family inside the grammar lab, not the mission itself. Future user-facing visual layers should be chosen only after reviewed observations and Layer 7 evidence show which grammar primitives actually improve timing, false-positive control, and forward relative-return outcomes.
 
@@ -244,7 +244,7 @@ Only `.gitkeep` placeholders should be committed in those directories.
 
 ## Current Gaps To Remember
 
-- The Python engine is closer to the active Pine settings after aligning the default 200-bar component lookback, risk-off setting, viscosity parameters, and gradient normalization style. It is still not full one-to-one visual parity because TradingView rendering, feed behavior, security calls, and overlay candle coloring are outside the Python engine.
+- The Python engine is aligned with the Pine reference for the current grammar-lab measurement path: close price source, selected equal-weight meme basket, weight-scaled fusion, 200-bar component lookback, risk-off setting, viscosity parameters, and gradient normalization style. It is still not full one-to-one TradingView parity because Pine risk-auto mode, alternate display settings, TradingView feed behavior, `request.security()` calls, rendering, and overlay candle coloring are outside the Python engine. The latest audit lives at `reports/grammar_search/learning_loop/pine_python_formula_parity_audit.md`.
 - Subgroup/sector baskets are still structural placeholders; only the main meme basket and per-asset ex-target variants are implemented.
 - Event-study markdown export is not yet as complete as scan markdown reporting.
 - Real market data is not included in the repo.

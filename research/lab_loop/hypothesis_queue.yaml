@@ -1,0 +1,161 @@
+model: riskflow_lab_loop_hypothesis_queue_v0
+date: 2026-05-29
+production_effect: none
+default_timeframes: [1d, 12h, 4h, 1h]
+default_outcome: forward_relative_return_vs_basket
+strict_referee_required: true
+promotion_ladder:
+  - L0_registered
+  - L1_encoded
+  - L2_discovered
+  - L3_strict_survivor
+  - L4_fresh_data_survivor
+  - L5_indicator_candidate
+queue:
+  - id: warning_relative_failed_breakout_daily_current
+    track: warning
+    status: tested_needs_fresh_data
+    promotion_level: L2_discovered
+    priority: 1
+    source: research/grammar/rule_search_grid_v19_relative_failed_breakout_current_candidates.yaml
+    hypothesis: >
+      A daily relative leadership breakout that fails while gradient pressure
+      fades and signal loses viscosity marks a no-chase or invalidation zone.
+    measurable_primitives:
+      - relative_failed_breakout_warning
+      - gradient_positive_fading
+      - viscosity_loss
+      - compression_context
+      - viscosity_cross_count
+    expected_outcome: negative_forward_relative_return
+    next_action: >
+      Rerun after OHLCV refresh with strict referee and compare baseline versus
+      compression/cross-count refined candidate across entry lags and cooldowns.
+
+  - id: bullish_deep_weakness_reclaim_retest
+    track: bullish_setup
+    status: new
+    promotion_level: L0_registered
+    priority: 2
+    hypothesis: >
+      Deep weakness becomes actionable only after weakness stops worsening,
+      signal reclaims viscosity, and a retest holds.
+    stages:
+      stage_0_context: deep negative signal or weak relative component
+      stage_1_repair: downside pressure stops expanding
+      stage_2_trigger: viscosity reclaim
+      stage_3_confirmation: retest hold or higher low
+      stage_4_invalidation: viscosity loss or renewed relative deterioration
+    measurable_primitives:
+      - failed_weakness
+      - viscosity_reclaim
+      - viscosity_retest_hold
+      - signal_higher_low
+      - relative_improving
+    expected_outcome: positive_trade_path
+    next_action: Encode as staged grammar sequence and evaluate MFE, MAE, time-to-upside, and terminal relative return.
+
+  - id: bullish_compression_gradient_reheat_relative_repair
+    track: bullish_setup
+    status: new
+    promotion_level: L0_registered
+    priority: 3
+    hypothesis: >
+      Clean compression becomes more useful when gradient reheats and relative
+      component repairs before the move is extended.
+    stages:
+      stage_0_context: clean compression or low chop
+      stage_1_repair: relative component improves
+      stage_2_trigger: gradient turns positive or expands
+      stage_3_confirmation: signal accepts above viscosity
+      stage_4_invalidation: gradient fade plus viscosity loss
+    measurable_primitives:
+      - compression_score
+      - clean_chop_quality
+      - gradient_positive_expanding
+      - relative_improving
+      - viscosity_acceptance
+    expected_outcome: positive_forward_relative_return
+    next_action: Encode sequence and compare against compression-only and random matched-null baselines.
+
+  - id: bullish_failed_warning_reclaim_recovery
+    track: bullish_setup
+    status: new
+    promotion_level: L0_registered
+    priority: 4
+    hypothesis: >
+      A failed bearish warning followed by reclaim and relative repair may mark
+      a better long setup than a clean reclaim without prior shakeout.
+    stages:
+      stage_0_context: warning condition fires
+      stage_1_repair: warning fails to follow through
+      stage_2_trigger: viscosity or zero reclaim
+      stage_3_confirmation: relative strength repairs
+      stage_4_invalidation: warning refires or reclaim fails
+    measurable_primitives:
+      - lower_high_rollover
+      - relative_failed_breakout_warning
+      - viscosity_reclaim
+      - zero_reclaim
+      - relative_improving
+    expected_outcome: positive_trade_path_after_recovery
+    next_action: Encode only after warning-family definitions are frozen enough to avoid circular filtering.
+
+  - id: bullish_hot_leader_reset_reacceleration
+    track: bullish_setup
+    status: new
+    promotion_level: L0_registered
+    priority: 5
+    hypothesis: >
+      A hot leader can become buyable again after cooling, compressing, holding
+      structure, and showing renewed pressure expansion.
+    stages:
+      stage_0_context: prior high-zone impulse or leadership
+      stage_1_repair: cooling period without full relative breakdown
+      stage_2_trigger: compression hold or viscosity reclaim
+      stage_3_confirmation: renewed gradient expansion
+      stage_4_invalidation: failed leadership or lower-high warning
+    measurable_primitives:
+      - signal_above_high_band
+      - hot_leader_reset
+      - compression_score
+      - gradient_positive_expanding
+      - relative_component
+    expected_outcome: positive_reacceleration_with_controlled_mae
+    next_action: Test as journey with explicit invalidation from warning grammar.
+
+  - id: warning_lower_high_rollover_family
+    track: warning
+    status: tested_needs_fresh_data
+    promotion_level: L2_discovered
+    priority: 6
+    source: research/grammar/README.md
+    hypothesis: >
+      Lower-high rollover after leadership marks fading pressure and future
+      relative underperformance, with separate 4h and daily branches.
+    measurable_primitives:
+      - signal_lower_high
+      - relative_deteriorating
+      - gradient_positive_fading
+      - below_viscosity_context
+    expected_outcome: negative_forward_relative_return
+    next_action: >
+      Preserve as a warning family, but require fresh-data validation and clear
+      branch separation before considering indicator logic.
+
+  - id: gradient_translation_warning_overlay_candidate
+    track: gradient_translation
+    status: blocked_by_evidence
+    promotion_level: L0_registered
+    priority: 7
+    hypothesis: >
+      Warning grammar may eventually inform gradient downgrade or no-chase
+      visual states, but only after candidates reach fresh-data survivor status.
+    measurable_primitives:
+      - relative_failed_breakout_warning
+      - lower_high_rollover
+      - gradient_positive_fading
+      - viscosity_loss
+    expected_outcome: better_visual_interpretation_without_formula_change
+    next_action: Do not implement until at least one warning candidate reaches L4_fresh_data_survivor.
+

@@ -1,0 +1,715 @@
+model: riskflow_indicator_behavior_concept_library_v0
+date: 2026-05-29
+source_report: reports/grammar_search/learning_loop/indicator_behavior_concept_research.md
+production_effect: none
+default_evaluation:
+  outcome: forward_relative_return
+  timeframes: [1d, 12h, 4h, 1h]
+  evidence_stage: discovery
+  promotion_level: L0_registered
+  strict_referee_required: true
+concept_fields:
+  id: stable concept id
+  family: concept group
+  direction: expected relative-return direction or regime
+  priority: first_batch or backlog
+  primitives: measurable Riskflow primitive ids
+  riskflow_inputs: columns or sidecar groups used to measure the concept
+  implementation_status: how close the concept is to executable
+concepts:
+  - id: rsi_oversold_reclaim
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_below_low_band, signal_cross_above_low_band, signal_slope_up]
+    riskflow_inputs: [final_signal, grammar_signal_slope_3]
+    implementation_status: directly_derivable
+  - id: rsi_overbought_loss
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_above_high_band, signal_cross_below_high_band, signal_slope_down]
+    riskflow_inputs: [final_signal, grammar_signal_slope_3]
+    implementation_status: directly_derivable
+  - id: rsi_bullish_divergence
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [price_lower_low_signal_higher_low, signal_cross_above_low_band]
+    riskflow_inputs: [target, final_signal, grammar_bullish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: rsi_bearish_divergence
+    family: oscillator_momentum
+    direction: negative
+    priority: first_batch
+    primitives: [price_higher_high_signal_lower_high, gradient_positive_fading]
+    riskflow_inputs: [target, final_signal, gradient_driver, grammar_bearish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: rsi_centerline_reclaim
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_cross_above_zero, relative_improving]
+    riskflow_inputs: [final_signal, relative_component]
+    implementation_status: directly_derivable
+  - id: rsi_centerline_rejection
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [zero_rejection_from_below, relative_deteriorating]
+    riskflow_inputs: [final_signal, relative_component, grammar_zero_rejection]
+    implementation_status: existing_sidecar_column
+  - id: rsi_bull_failure_swing
+    family: oscillator_momentum
+    direction: positive
+    priority: first_batch
+    primitives: [signal_higher_low, signal_cross_above_low_band, signal_accelerating_up]
+    riskflow_inputs: [final_signal, grammar_signal_curvature_up]
+    implementation_status: needs_sidecar
+  - id: rsi_bear_failure_swing
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_lower_high, signal_cross_below_high_band, signal_accelerating_down]
+    riskflow_inputs: [final_signal, grammar_signal_curvature_down]
+    implementation_status: needs_sidecar
+  - id: macd_signal_cross_up
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [fast_pressure_cross_up, signal_slope_up]
+    riskflow_inputs: [grammar_fast_pressure, grammar_slow_pressure, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: macd_signal_cross_down
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [fast_pressure_cross_down, signal_slope_down]
+    riskflow_inputs: [grammar_fast_pressure, grammar_slow_pressure, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: macd_zero_reclaim
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_cross_above_zero, fast_pressure_cross_up]
+    riskflow_inputs: [final_signal, grammar_fast_slow_pressure_gap]
+    implementation_status: directly_derivable
+  - id: macd_zero_loss
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_cross_below_zero, fast_pressure_cross_down]
+    riskflow_inputs: [final_signal, grammar_fast_slow_pressure_gap]
+    implementation_status: directly_derivable
+  - id: macd_histogram_expansion_up
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [gradient_positive_expanding, fast_pressure_cross_up]
+    riskflow_inputs: [gradient_driver, grammar_fast_slow_pressure_gap]
+    implementation_status: directly_derivable
+  - id: macd_histogram_fade_up
+    family: oscillator_momentum
+    direction: negative
+    priority: first_batch
+    primitives: [gradient_positive_fading, signal_lower_high, relative_deteriorating]
+    riskflow_inputs: [gradient_driver, final_signal, relative_component]
+    implementation_status: needs_sidecar
+  - id: macd_histogram_expansion_down
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [gradient_negative_expanding, fast_pressure_cross_down]
+    riskflow_inputs: [gradient_driver, grammar_fast_slow_pressure_gap]
+    implementation_status: directly_derivable
+  - id: macd_histogram_repair_down
+    family: oscillator_momentum
+    direction: positive
+    priority: first_batch
+    primitives: [gradient_negative_repairing, signal_repairing_from_down]
+    riskflow_inputs: [gradient_driver, final_signal]
+    implementation_status: directly_derivable
+  - id: macd_bullish_divergence
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [price_lower_low_signal_higher_low, gradient_negative_repairing]
+    riskflow_inputs: [target, final_signal, gradient_driver, grammar_bullish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: macd_bearish_divergence
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [price_higher_high_signal_lower_high, gradient_positive_fading]
+    riskflow_inputs: [target, final_signal, gradient_driver, grammar_bearish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: stoch_oversold_cross_up
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_below_low_band, fast_pressure_cross_up, signal_cross_above_low_band]
+    riskflow_inputs: [final_signal, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: stoch_overbought_cross_down
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_above_high_band, fast_pressure_cross_down, signal_cross_below_high_band]
+    riskflow_inputs: [final_signal, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: stoch_range_reclaim
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_cross_above_low_band, zero_retest_hold_from_above]
+    riskflow_inputs: [final_signal, grammar_zero_retest_hold]
+    implementation_status: existing_sidecar_column
+  - id: stoch_range_rejection
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_cross_below_high_band, zero_rejection_from_below]
+    riskflow_inputs: [final_signal, grammar_zero_rejection]
+    implementation_status: existing_sidecar_column
+  - id: stoch_bullish_divergence
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [price_lower_low_signal_higher_low, fast_pressure_cross_up]
+    riskflow_inputs: [target, final_signal, grammar_bullish_divergence_20, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: stoch_bearish_divergence
+    family: oscillator_momentum
+    direction: negative
+    priority: first_batch
+    primitives: [price_higher_high_signal_lower_high, fast_pressure_cross_down]
+    riskflow_inputs: [target, final_signal, grammar_bearish_divergence_20, grammar_fast_slow_pressure_gap]
+    implementation_status: existing_sidecar_column
+  - id: cci_plus100_breakout
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_above_high_band, viscosity_reclaim, gradient_positive_expanding]
+    riskflow_inputs: [final_signal, viscosity, gradient_driver]
+    implementation_status: directly_derivable
+  - id: cci_plus100_failed_breakout
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_above_high_band, viscosity_loss, gradient_positive_fading]
+    riskflow_inputs: [final_signal, viscosity, gradient_driver]
+    implementation_status: directly_derivable
+  - id: cci_minus100_reclaim
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_below_low_band, signal_cross_above_low_band, viscosity_reclaim]
+    riskflow_inputs: [final_signal, viscosity]
+    implementation_status: directly_derivable
+  - id: cci_minus100_rejection
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_below_low_band, viscosity_loss, gradient_negative_expanding]
+    riskflow_inputs: [final_signal, viscosity, gradient_driver]
+    implementation_status: directly_derivable
+  - id: momentum_acceleration_up
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_accelerating_up, gradient_positive_expanding]
+    riskflow_inputs: [final_signal, gradient_driver, grammar_signal_curvature_up]
+    implementation_status: existing_sidecar_column
+  - id: momentum_deceleration_up
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_decelerating_up, gradient_positive_fading]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: directly_derivable
+  - id: roc_positive_flip
+    family: oscillator_momentum
+    direction: positive
+    priority: backlog
+    primitives: [signal_cross_above_zero, gradient_positive_expanding]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: directly_derivable
+  - id: roc_negative_flip
+    family: oscillator_momentum
+    direction: negative
+    priority: backlog
+    primitives: [signal_cross_below_zero, gradient_negative_expanding]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: directly_derivable
+
+  - id: ma_reclaim_with_slope
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [viscosity_reclaim, baseline_slope_up, relative_improving]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: directly_derivable
+  - id: ma_loss_with_slope
+    family: trend_baseline_structure
+    direction: negative
+    priority: first_batch
+    primitives: [viscosity_loss, baseline_slope_down, relative_deteriorating]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: directly_derivable
+  - id: baseline_retest_hold
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [viscosity_reclaim, baseline_retest_hold, time_above_viscosity]
+    riskflow_inputs: [final_signal, viscosity, grammar_time_above_viscosity_10]
+    implementation_status: needs_sidecar
+  - id: baseline_retest_fail
+    family: trend_baseline_structure
+    direction: negative
+    priority: first_batch
+    primitives: [viscosity_reclaim, baseline_retest_fail, viscosity_loss]
+    riskflow_inputs: [final_signal, viscosity]
+    implementation_status: needs_sidecar
+  - id: extended_above_baseline_exhaustion
+    family: trend_baseline_structure
+    direction: negative
+    priority: first_batch
+    primitives: [time_above_viscosity, signal_above_high_band, gradient_positive_fading]
+    riskflow_inputs: [final_signal, viscosity, gradient_driver, grammar_time_above_viscosity_20]
+    implementation_status: existing_sidecar_column
+  - id: deep_below_baseline_repair
+    family: trend_baseline_structure
+    direction: positive
+    priority: first_batch
+    primitives: [signal_below_low_band, gradient_negative_repairing, signal_repairing_from_down]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: directly_derivable
+  - id: baseline_flat_chop
+    family: trend_baseline_structure
+    direction: regime
+    priority: backlog
+    primitives: [baseline_flat, compression_high]
+    riskflow_inputs: [viscosity, final_signal, compression_score]
+    implementation_status: needs_sidecar
+  - id: baseline_compression_release
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [baseline_flat, compression_release_up, viscosity_reclaim]
+    riskflow_inputs: [viscosity, compression_score, final_signal]
+    implementation_status: needs_sidecar
+  - id: failed_baseline_breakdown
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [viscosity_loss, signal_higher_low, viscosity_reclaim]
+    riskflow_inputs: [final_signal, viscosity]
+    implementation_status: needs_sidecar
+  - id: failed_baseline_breakout
+    family: trend_baseline_structure
+    direction: negative
+    priority: first_batch
+    primitives: [viscosity_reclaim, signal_lower_high, viscosity_loss]
+    riskflow_inputs: [final_signal, viscosity]
+    implementation_status: needs_sidecar
+  - id: adx_rising_positive_dmi
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [gradient_positive_expanding, baseline_slope_up, relative_improving]
+    riskflow_inputs: [gradient_driver, viscosity, relative_component]
+    implementation_status: directly_derivable
+  - id: adx_rising_negative_dmi
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [gradient_negative_expanding, baseline_slope_down, relative_deteriorating]
+    riskflow_inputs: [gradient_driver, viscosity, relative_component]
+    implementation_status: directly_derivable
+  - id: adx_falling_trend_decay
+    family: trend_baseline_structure
+    direction: regime
+    priority: backlog
+    primitives: [gradient_positive_fading, baseline_flat, compression_high]
+    riskflow_inputs: [gradient_driver, viscosity, compression_score]
+    implementation_status: needs_sidecar
+  - id: dmi_bull_cross_from_low_trend
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [fast_pressure_cross_up, signal_below_low_band, relative_improving]
+    riskflow_inputs: [grammar_fast_slow_pressure_gap, final_signal, relative_component]
+    implementation_status: existing_sidecar_column
+  - id: dmi_bear_cross_from_low_trend
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [fast_pressure_cross_down, signal_above_high_band, relative_deteriorating]
+    riskflow_inputs: [grammar_fast_slow_pressure_gap, final_signal, relative_component]
+    implementation_status: existing_sidecar_column
+  - id: dmi_divergent_pressure
+    family: trend_baseline_structure
+    direction: regime
+    priority: backlog
+    primitives: [gradient_momentum_divergence, relative_deteriorating]
+    riskflow_inputs: [gradient_driver, relative_component, grammar_gradient_momentum_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: trendline_break_signal
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [signal_lower_high, signal_cross_above_zero, gradient_positive_expanding]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: trendline_reclaim_signal
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [viscosity_reclaim, zero_retest_hold_from_above, relative_improving]
+    riskflow_inputs: [final_signal, viscosity, relative_component, grammar_zero_retest_hold]
+    implementation_status: existing_sidecar_column
+  - id: lower_high_after_impulse
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [signal_above_high_band, signal_lower_high, gradient_positive_fading]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: higher_low_after_washout
+    family: trend_baseline_structure
+    direction: positive
+    priority: first_batch
+    primitives: [signal_below_low_band, signal_higher_low, gradient_negative_repairing]
+    riskflow_inputs: [final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: support_retest_hold_signal
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [baseline_retest_hold, relative_improving, volume_dryup]
+    riskflow_inputs: [final_signal, viscosity, relative_component, volume]
+    implementation_status: needs_sidecar
+  - id: support_retest_fail_signal
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [baseline_retest_fail, relative_deteriorating, volume_spike]
+    riskflow_inputs: [final_signal, viscosity, relative_component, volume]
+    implementation_status: needs_sidecar
+  - id: resistance_retest_reject_signal
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [zero_rejection_from_below, signal_lower_high, gradient_positive_fading]
+    riskflow_inputs: [final_signal, gradient_driver, grammar_zero_rejection]
+    implementation_status: needs_sidecar
+  - id: resistance_break_retest_hold
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [signal_cross_above_zero, zero_retest_hold_from_above, relative_improving]
+    riskflow_inputs: [final_signal, relative_component, grammar_zero_retest_hold]
+    implementation_status: existing_sidecar_column
+  - id: failed_price_breakout_signal_confirm
+    family: trend_baseline_structure
+    direction: negative
+    priority: first_batch
+    primitives: [price_higher_high_signal_lower_high, gradient_positive_fading, relative_failed_breakout]
+    riskflow_inputs: [target, final_signal, gradient_driver, relative_component, grammar_bearish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: failed_price_breakdown_signal_diverge
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [price_lower_low_signal_higher_low, gradient_negative_repairing]
+    riskflow_inputs: [target, final_signal, gradient_driver, grammar_bullish_divergence_20]
+    implementation_status: existing_sidecar_column
+  - id: breakout_retest_no_followthrough
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [range_expansion_unconfirmed, gradient_positive_fading, relative_deteriorating]
+    riskflow_inputs: [target, gradient_driver, relative_component]
+    implementation_status: needs_sidecar
+  - id: pullback_to_rising_baseline
+    family: trend_baseline_structure
+    direction: positive
+    priority: backlog
+    primitives: [baseline_slope_up, baseline_retest_hold, relative_improving]
+    riskflow_inputs: [viscosity, final_signal, relative_component]
+    implementation_status: needs_sidecar
+  - id: pullback_too_deep
+    family: trend_baseline_structure
+    direction: negative
+    priority: backlog
+    primitives: [baseline_slope_up, viscosity_loss, relative_deteriorating]
+    riskflow_inputs: [viscosity, final_signal, relative_component]
+    implementation_status: directly_derivable
+  - id: regime_shift_chop_to_trend
+    family: trend_baseline_structure
+    direction: regime
+    priority: backlog
+    primitives: [baseline_flat, compression_release_up, gradient_positive_expanding]
+    riskflow_inputs: [viscosity, compression_score, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: regime_shift_trend_to_chop
+    family: trend_baseline_structure
+    direction: regime
+    priority: backlog
+    primitives: [gradient_positive_fading, baseline_flat, compression_high]
+    riskflow_inputs: [gradient_driver, viscosity, compression_score]
+    implementation_status: needs_sidecar
+  - id: relative_trend_disagreement
+    family: trend_baseline_structure
+    direction: regime
+    priority: first_batch
+    primitives: [baseline_slope_up, relative_deteriorating, gradient_momentum_divergence]
+    riskflow_inputs: [viscosity, relative_component, gradient_driver, grammar_gradient_momentum_divergence_20]
+    implementation_status: existing_sidecar_column
+
+  - id: volatility_squeeze_bull_release
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [compression_high, compression_release_up, gradient_positive_expanding]
+    riskflow_inputs: [compression_score, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: volatility_squeeze_bear_release
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: backlog
+    primitives: [compression_high, compression_release_down, gradient_negative_expanding]
+    riskflow_inputs: [compression_score, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: compression_no_followthrough
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [compression_high, range_expansion_unconfirmed, gradient_positive_fading]
+    riskflow_inputs: [compression_score, target, gradient_driver, relative_component]
+    implementation_status: needs_sidecar
+  - id: post_squeeze_fakeout_reversal
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: backlog
+    primitives: [compression_release_up, viscosity_loss, gradient_negative_expanding]
+    riskflow_inputs: [compression_score, final_signal, viscosity, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: volatility_bulge_exhaustion
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [range_expansion_up, signal_above_high_band, gradient_positive_fading]
+    riskflow_inputs: [target, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: range_expansion_confirmed
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [range_expansion_up, gradient_positive_expanding, relative_improving]
+    riskflow_inputs: [target, gradient_driver, relative_component]
+    implementation_status: needs_sidecar
+  - id: range_expansion_unconfirmed
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [range_expansion_unconfirmed, gradient_positive_fading, relative_deteriorating]
+    riskflow_inputs: [target, gradient_driver, relative_component]
+    implementation_status: needs_sidecar
+  - id: quiet_relative_accumulation
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [volume_dryup, compression_high, relative_improving]
+    riskflow_inputs: [volume, compression_score, relative_component]
+    implementation_status: directly_derivable
+  - id: volume_confirmed_reclaim
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [volume_spike_confirmed_reclaim, viscosity_reclaim, relative_improving]
+    riskflow_inputs: [volume, final_signal, viscosity, relative_component]
+    implementation_status: needs_sidecar
+  - id: volume_dryup_pullback_hold
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [volume_dryup, baseline_retest_hold, relative_improving]
+    riskflow_inputs: [volume, final_signal, viscosity, relative_component]
+    implementation_status: needs_sidecar
+  - id: high_volume_failed_reclaim
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [volume_spike_failed_reclaim, viscosity_loss, relative_deteriorating]
+    riskflow_inputs: [volume, final_signal, viscosity, relative_component]
+    implementation_status: needs_sidecar
+  - id: volume_climax_exhaustion
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [volume_spike, signal_above_high_band, gradient_positive_fading]
+    riskflow_inputs: [volume, final_signal, gradient_driver]
+    implementation_status: directly_derivable
+  - id: obv_style_accumulation
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [signed_volume_accumulation, relative_improving, gradient_negative_repairing]
+    riskflow_inputs: [volume, target, relative_component, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: volume_divergent_breakout
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: backlog
+    primitives: [volume_divergent_breakout, range_expansion_unconfirmed, gradient_positive_fading]
+    riskflow_inputs: [volume, target, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: liquidity_air_pocket_warning
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: backlog
+    primitives: [volume_dryup, range_expansion_down, relative_deteriorating]
+    riskflow_inputs: [volume, target, relative_component]
+    implementation_status: needs_sidecar
+  - id: higher_tf_bias_lower_tf_reclaim
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [higher_tf_positive_bias, lower_tf_reclaim, relative_improving]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: needs_multi_timeframe_join
+  - id: higher_tf_rollover_lower_tf_bounce_fail
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [higher_tf_negative_bias, lower_tf_bounce_fail, relative_deteriorating]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: needs_multi_timeframe_join
+  - id: lower_tf_leads_higher_tf_turn
+    family: volatility_volume_relative_mtf
+    direction: regime
+    priority: backlog
+    primitives: [lower_tf_reclaim, higher_tf_positive_bias, relative_improving]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: needs_multi_timeframe_join
+  - id: timeframe_disagreement_chop
+    family: volatility_volume_relative_mtf
+    direction: regime
+    priority: backlog
+    primitives: [higher_tf_positive_bias, lower_tf_bounce_fail, compression_high]
+    riskflow_inputs: [final_signal, viscosity, compression_score]
+    implementation_status: needs_multi_timeframe_join
+  - id: mtf_compression_stack
+    family: volatility_volume_relative_mtf
+    direction: regime
+    priority: backlog
+    primitives: [mtf_compression_stack, compression_high]
+    riskflow_inputs: [compression_score]
+    implementation_status: needs_multi_timeframe_join
+  - id: daily_warning_4h_confirmation
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [higher_tf_negative_bias, lower_tf_bounce_fail, signal_lower_high]
+    riskflow_inputs: [final_signal, viscosity, relative_component]
+    implementation_status: needs_multi_timeframe_join
+  - id: trend_regime_pullback_reset
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [higher_tf_positive_bias, baseline_retest_hold, volume_dryup]
+    riskflow_inputs: [final_signal, viscosity, volume]
+    implementation_status: needs_multi_timeframe_join
+  - id: range_regime_zero_reversion
+    family: volatility_volume_relative_mtf
+    direction: regime
+    priority: backlog
+    primitives: [baseline_flat, zero_rejection_from_below, zero_retest_hold_from_above]
+    riskflow_inputs: [viscosity, final_signal, grammar_zero_rejection, grammar_zero_retest_hold]
+    implementation_status: needs_sidecar
+  - id: high_vol_trend_persistence
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [range_expansion_up, sustained_above_viscosity, relative_improving]
+    riskflow_inputs: [target, final_signal, viscosity, relative_component, grammar_sustained_above_viscosity_10]
+    implementation_status: existing_sidecar_column
+  - id: risk_on_leadership_expansion
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [peer_decoupling_bull, relative_improving, gradient_positive_expanding]
+    riskflow_inputs: [relative_component, gradient_driver]
+    implementation_status: needs_peer_basket_context
+  - id: risk_off_correlation_spike
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [correlation_spike_risk_off, relative_deteriorating, compression_high]
+    riskflow_inputs: [relative_component, compression_score]
+    implementation_status: needs_peer_basket_context
+  - id: late_cycle_leader_exhaustion
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: backlog
+    primitives: [relative_lower_high, signal_above_high_band, gradient_positive_fading]
+    riskflow_inputs: [relative_component, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: relative_strength_reclaim
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [relative_reclaim, viscosity_reclaim, gradient_positive_expanding]
+    riskflow_inputs: [relative_component, final_signal, viscosity, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: relative_lower_high_warning
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [relative_lower_high, signal_lower_high, gradient_positive_fading]
+    riskflow_inputs: [relative_component, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: hidden_relative_bull_divergence
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [relative_lower_low_signal_higher_low, gradient_negative_repairing]
+    riskflow_inputs: [relative_component, final_signal, gradient_driver]
+    implementation_status: needs_sidecar
+  - id: relative_failed_breakout
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [relative_failed_breakout, gradient_positive_fading, viscosity_loss]
+    riskflow_inputs: [relative_component, gradient_driver, final_signal, viscosity]
+    implementation_status: needs_sidecar
+  - id: peer_decoupling_bull
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: first_batch
+    primitives: [peer_decoupling_bull, relative_improving, gradient_positive_expanding]
+    riskflow_inputs: [relative_component, gradient_driver]
+    implementation_status: needs_peer_basket_context
+  - id: peer_decoupling_bear
+    family: volatility_volume_relative_mtf
+    direction: negative
+    priority: first_batch
+    primitives: [peer_decoupling_bear, relative_deteriorating, gradient_negative_expanding]
+    riskflow_inputs: [relative_component, gradient_driver]
+    implementation_status: needs_peer_basket_context
+  - id: relative_rotation_improvement
+    family: volatility_volume_relative_mtf
+    direction: positive
+    priority: backlog
+    primitives: [relative_improving, peer_decoupling_bull, gradient_negative_repairing]
+    riskflow_inputs: [relative_component, gradient_driver]
+    implementation_status: needs_peer_basket_context
+  - id: pressure_area_asymmetry
+    family: volatility_volume_relative_mtf
+    direction: regime
+    priority: backlog
+    primitives: [pressure_area_positive, pressure_area_negative, relative_improving]
+    riskflow_inputs: [final_signal, viscosity, relative_component, grammar_pressure_area_balance_20]
+    implementation_status: existing_sidecar_column
+

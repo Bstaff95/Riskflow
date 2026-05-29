@@ -1,0 +1,45 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: frozen_relative_failed_breakout_daily
+    direction: negative
+    detector: relative_failed_breakout_warning
+    description: >
+      Frozen daily version of the first-batch indicator-behavior strict
+      survivor: relative leadership breaks out, fails within five bars,
+      gradient pressure fades, and signal loses viscosity.
+    parameter_grid:
+      lookback: [20]
+      fail_window: [5]
+      context_window: [5]
+      min_breakout_margin: [0.0]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]
+      require_viscosity_loss: [true]
+  - family_id: frozen_bearish_divergence_fade_12h
+    direction: negative
+    detector: bearish_divergence_fade_warning
+    description: >
+      Frozen 12h version of the first-batch strict survivor: bearish
+      divergence or price higher-high/signal lower-high behavior followed by
+      fading positive gradient pressure.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      context_window: [20]
+      min_prior_signal_high: [0.0]
+      min_lower_high_gap: [0.1]
+      min_gradient: [0.0]
+      gradient_diff_window: [3]
+  - family_id: frozen_failed_baseline_breakout_daily
+    direction: negative
+    detector: failed_baseline_breakout_warning
+    description: >
+      Frozen daily version of the first-batch strict survivor: signal reclaims
+      viscosity, forms a lower high, then loses viscosity again.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      context_window: [10]
+      min_prior_signal_high: [0.0]
+      min_lower_high_gap: [0.1]
+      require_gradient_fade: [false]

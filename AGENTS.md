@@ -15,6 +15,7 @@ These instructions are for Codex or any coding agent working in this repo.
 - Then read `docs/PROJECT_CONTEXT.md`.
 - For code work, also read `docs/ARCHITECTURE.md`.
 - For planning work, also read `docs/ROADMAP.md`.
+- For lab-loop, indicator research, or grammar work, also read `docs/LAB_LOOP.md` and `docs/SIGNAL_GRAMMAR_LAB.md`.
 - For workflow/git/Obsidian questions, also read `docs/WORKFLOW.md`.
 - Treat these docs as the durable project memory between sessions.
 

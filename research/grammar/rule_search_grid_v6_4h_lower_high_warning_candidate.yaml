@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: four_hour_lower_high_rollover_warning
+    direction: negative
+    detector: lower_high_rollover
+    description: Narrow 4h warning candidate after v5 baseline, matched-null, cluster-holdout, entry-lag, and cooldown sensitivity tests.
+    parameter_grid:
+      lookback: [13, 20]
+      recent_window: [5]
+      min_prior_high: [1.5, 2.0]
+      min_lower_high_gap: [0.25, 0.50]
+      require_below_viscosity: [true]
+      max_relative_slope: [0.0]

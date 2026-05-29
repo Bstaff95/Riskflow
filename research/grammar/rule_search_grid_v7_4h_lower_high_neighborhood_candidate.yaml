@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: four_hour_lower_high_rollover_neighborhood
+    direction: negative
+    detector: lower_high_rollover
+    description: Wider local neighborhood around the v6 4h lower-high rollover candidate to test parameter stability before fresh-data reruns.
+    parameter_grid:
+      lookback: [8, 13, 20, 34]
+      recent_window: [3, 5, 8]
+      min_prior_high: [1.0, 1.5, 2.0, 2.5]
+      min_lower_high_gap: [0.15, 0.25, 0.50, 0.75]
+      require_below_viscosity: [true, false]
+      max_relative_slope: [-0.05, 0.0, 0.05]

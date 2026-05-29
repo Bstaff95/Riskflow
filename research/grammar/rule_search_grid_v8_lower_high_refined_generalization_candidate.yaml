@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: lower_high_rollover_refined_generalization
+    direction: negative
+    detector: lower_high_rollover
+    description: Refined below-viscosity lower-high rollover island from v7, rerun across all active timeframes to test whether the grammar is 4h-specific or broader.
+    parameter_grid:
+      lookback: [8, 13, 20]
+      recent_window: [5]
+      min_prior_high: [1.5, 2.0, 2.5]
+      min_lower_high_gap: [0.15, 0.25, 0.50, 0.75]
+      require_below_viscosity: [true]
+      max_relative_slope: [0.0, 0.05]

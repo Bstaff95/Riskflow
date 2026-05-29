@@ -58,6 +58,8 @@ The next implementation should focus on:
 
 These are research candidates only. They should not alter production scan rankings, state labels, scores, or the base TradingView indicator until evidence supports promotion.
 
+The automated search layer now lives outside the stable sidecar. `signal_grammar_sidecar_v0` remains the hand-authored feature contract, while `grammar-search` expands structured rule families from `research/grammar/rule_search_grid.yaml` into temporary research variants.
+
 ## Research Objects
 
 ### Observations
@@ -190,8 +192,12 @@ Default interpretation:
 2. Save each reviewed case into the observation library.
 3. Tag each case with grammar primitives.
 4. Convert recurring tags into measurable features.
-5. Test features with Layer 7 evidence.
-6. Only then decide whether the user-facing layer should be waves, markers, ribbons, or something else.
+5. Run `python3 -m riskflow grammar-search --timeframes 1d 12h 4h 1h` to brute-force structured candidate families.
+6. Review `reports/grammar_search/grammar_search_ranked.csv` and `obsidian/reports/latest_grammar_search.md`.
+7. Send the best hits, false positives, missed winners, and boundary cases back into chart review.
+8. Only then decide whether the user-facing layer should be waves, markers, ribbons, or something else.
+
+The search command is a hypothesis generator, not a promotion engine. A high-ranked variant still needs baseline comparison, concentration checks, and visual review before it can become a registered event, score input, or TradingView visual layer.
 
 ## Cross-Market Generalization
 

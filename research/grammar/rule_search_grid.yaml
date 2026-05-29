@@ -1,0 +1,92 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: pressure_acceptance
+    direction: positive
+    detector: pressure_acceptance
+    description: Sustained positive pressure above viscosity before or during acceptance.
+    parameter_grid:
+      window: [10, 20]
+      min_time_above: [0.6, 0.75]
+      min_balance: [0.0, 1.0]
+      min_delta: [0.0]
+      zone_max: [0.75, 1.5]
+
+  - family_id: low_zone_coil_reclaim
+    direction: positive
+    detector: low_zone_coil_reclaim
+    description: Lower-zone coil followed by viscosity or level reclaim.
+    parameter_grid:
+      coil_window: [8, 12, 20]
+      range_max: [0.45, 0.7]
+      std_max: [0.25, 0.35]
+      zone_max: [-1.5, -1.0]
+      trigger: [viscosity_reclaim, minus_1_5_reclaim, zero_reclaim]
+      recent_window: [8, 12]
+
+  - family_id: failed_weakness
+    direction: positive
+    detector: failed_weakness
+    description: Deep weakness stops accelerating and starts building higher oscillator structure.
+    parameter_grid:
+      lookback: [8, 13, 21]
+      zone_max: [-2.0, -1.5, -1.0]
+      low_tolerance: [0.15, 0.35]
+      min_slope: [0.0, 0.03]
+      relative_slope_min: [-0.05, 0.0]
+
+  - family_id: zone_reclaim_retest
+    direction: positive
+    detector: zone_reclaim_retest
+    description: Reclaim or retest-hold at major oscillator grammar levels.
+    parameter_grid:
+      level: [-2.0, -1.5, 0.0]
+      mode: [reclaim, retest]
+      tolerance: [0.10, 0.20]
+      hold_bars: [3, 5]
+
+  - family_id: curvature_from_low_zone
+    direction: positive
+    detector: curvature_from_low_zone
+    description: Oscillator slope and acceleration turn up while still below confirmation.
+    parameter_grid:
+      zone_max: [-2.0, -1.5, -1.0]
+      slope_window: [3, 5]
+      accel_min: [0.0]
+      confirm_below: [-0.25, 0.0]
+
+  - family_id: divergence_reclaim
+    direction: positive
+    detector: divergence_reclaim
+    description: Bullish oscillator divergence followed by reclaim confirmation.
+    parameter_grid:
+      divergence: [bullish]
+      confirm: [viscosity_reclaim, minus_1_5_reclaim, zero_reclaim]
+      recent_window: [8, 13]
+
+  - family_id: clean_chop_reclaim
+    direction: positive
+    detector: chop_quality
+    description: Clean chop structure followed by reclaim trigger.
+    parameter_grid:
+      chop_type: [clean]
+      min_quality: [0.55, 0.70]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      recent_window: [8, 13]
+
+  - family_id: chaotic_chop_warning
+    direction: negative
+    detector: chop_quality
+    description: Chaotic chop warning without clean compression quality.
+    parameter_grid:
+      chop_type: [chaotic]
+      max_compression: [60.0, 75.0]
+
+  - family_id: hot_leader_reset
+    direction: negative
+    detector: hot_leader_reset
+    description: Prior hot leader loses structure under cooling gradient and viscosity.
+    parameter_grid:
+      prior_window: [13, 20]
+      hot_level: [1.5, 2.0]
+      cooloff_level: [1.0, 1.5]
+      require_below_viscosity: [true, false]

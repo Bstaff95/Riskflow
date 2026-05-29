@@ -12,11 +12,18 @@ from .data_loader import load_universe_ohlcv
 from .event_study import run_event_study
 from .flow_graph import build_flow_graph_tables
 from .flow_research import run_flow_research
+from .grammar_search import (
+    DEFAULT_GRAMMAR_SEARCH_GRID,
+    GRAMMAR_SEARCH_MODEL,
+    run_grammar_search,
+    timeframe_cooldown,
+)
 from .indicator_engine import calculate_indicator
 from .reports import (
     export_event_study_reports,
     export_flow_graph_reports,
     export_flow_research_reports,
+    export_grammar_search_reports,
     export_mtf_research_reports,
     export_scan_reports,
     export_score_research_reports,
@@ -923,6 +930,77 @@ def grammar_lab_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def grammar_search_command(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe_config(args.config)
+        analysis_by_timeframe: dict[str, dict[str, pd.DataFrame]] = {}
+        warnings: list[str] = []
+        timeframes = [normalize_timeframe(timeframe) for timeframe in args.timeframes]
+        for timeframe in timeframes:
+            raw_frames, load_warnings = load_universe_ohlcv(
+                universe,
+                data_dir=args.data_dir,
+                timeframe=timeframe,
+            )
+            warnings.extend(f"{timeframe}: {warning}" for warning in load_warnings)
+            if not raw_frames:
+                warnings.append(f"{timeframe}: no usable CSV files found in {Path(args.data_dir)}")
+                analysis_by_timeframe[timeframe] = {}
+                continue
+            analysis_frames, _basket, analysis_warnings = build_analysis_frames(universe, raw_frames)
+            warnings.extend(f"{timeframe}: {warning}" for warning in analysis_warnings)
+            analysis_by_timeframe[timeframe] = analysis_frames
+
+        cooldowns = {timeframe: args.cooldown_bars for timeframe in timeframes} if args.cooldown_bars else None
+        summary, records, ranked, family_summary, variants = run_grammar_search(
+            analysis_by_timeframe,
+            grid_path=args.grid,
+            timeframes=timeframes,
+            benchmark_name=universe.benchmark.name,
+            min_sample_size=args.min_sample_size,
+            entry_lag_bars=args.entry_lag_bars,
+            cooldown_bars_by_timeframe=cooldowns,
+        )
+        manifest = {
+            "model": GRAMMAR_SEARCH_MODEL,
+            "config": args.config,
+            "data_dir": args.data_dir,
+            "grid": args.grid,
+            "timeframes": timeframes,
+            "min_sample_size": args.min_sample_size,
+            "entry_lag_bars": args.entry_lag_bars,
+            "cooldown_bars_by_timeframe": cooldowns
+            or {timeframe: timeframe_cooldown(timeframe) for timeframe in timeframes},
+            "variant_count": len(variants),
+            "record_count": int(len(records)),
+        }
+    except Exception as exc:
+        print(f"Grammar search failed: {exc}")
+        return 1
+
+    paths = export_grammar_search_reports(
+        summary,
+        records,
+        ranked,
+        family_summary,
+        manifest,
+        universe,
+        warnings=warnings,
+        report_dir=args.report_dir,
+        obsidian_dir=args.obsidian_dir,
+    )
+    print(f"Wrote grammar search records CSV: {paths['records_csv']}")
+    print(f"Wrote grammar search summary CSV: {paths['summary_csv']}")
+    print(f"Wrote grammar search ranked CSV: {paths['ranked_csv']}")
+    print(f"Wrote grammar search family/timeframe CSV: {paths['family_timeframe_csv']}")
+    print(f"Wrote grammar search manifest: {paths['manifest_yaml']}")
+    print(f"Wrote grammar search HTML: {paths['summary_html']}")
+    print(f"Wrote Obsidian grammar search report: {paths['obsidian']}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -1232,6 +1310,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Existing Obsidian vault directory to receive the grammar lab map.",
     )
     grammar_lab.set_defaults(func=grammar_lab_command)
+
+    grammar_search = subparsers.add_parser(
+        "grammar-search",
+        help="Run automated Signal Grammar Lab parameter search across timeframes.",
+    )
+    grammar_search.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    grammar_search.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    grammar_search.add_argument(
+        "--report-dir",
+        default="reports/grammar_search",
+        help="Directory for grammar-search CSV, HTML, and manifest outputs.",
+    )
+    grammar_search.add_argument("--obsidian-dir", default="obsidian", help="Obsidian vault directory for markdown reports.")
+    grammar_search.add_argument(
+        "--grid",
+        default=DEFAULT_GRAMMAR_SEARCH_GRID,
+        help="Grammar search rule grid YAML.",
+    )
+    grammar_search.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=["1d", "12h", "4h", "1h"],
+        help="Timeframe suffixes to search independently.",
+    )
+    grammar_search.add_argument(
+        "--min-sample-size",
+        type=int,
+        default=20,
+        help="Minimum independent event count before a variant can classify beyond inconclusive.",
+    )
+    grammar_search.add_argument(
+        "--entry-lag-bars",
+        type=int,
+        default=1,
+        help="Bars after the candidate event before forward-return measurement starts.",
+    )
+    grammar_search.add_argument(
+        "--cooldown-bars",
+        type=int,
+        default=None,
+        help="Optional shared cooldown bars for all timeframes. Defaults to timeframe-scaled values.",
+    )
+    grammar_search.set_defaults(func=grammar_search_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

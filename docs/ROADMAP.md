@@ -12,6 +12,7 @@ Current implementation note:
 
 - `signal_grammar_sidecar_v0` now adds first-pass research columns and Layer 7 candidate events for pressure acceptance, failed weakness, zone reclaim/retest, curvature intent, divergence warnings, chop quality, and reset warnings.
 - These columns are visible in scan outputs and evaluated by `event-study`, but they do not change `core_signal_v0`, state labels, setup scores, opportunity ranking, or TradingView defaults.
+- `grammar-search` now expands structured rule-family grids from `research/grammar/rule_search_grid.yaml` across `1d`, `12h`, `4h`, and `1h` so the lab can brute-force candidate grammar variants without hand-registering each idea as a stable sidecar event.
 
 First deliverables:
 
@@ -84,10 +85,11 @@ Near-term research factory loop:
 2. Review the chart snapshots visually.
 3. Name candidate patterns in plain English.
 4. Convert only recurring patterns into explicit test events.
-5. Use Layer 7 evidence before promoting any formula, state, or score change.
-6. Use the observation library as the calibration set before tuning z-score lookback, viscosity behavior, gradient sensitivity, weights, or any future confluence wave.
-7. Track pressure waves as one candidate family, not the mission. The mission is the broader oscillator grammar: levels, viscosity behavior, structure, divergence, gradient quality, pressure acceptance, and failed weakness.
-8. Validate any useful primitive outside the meme sandbox before treating it as product material.
+5. Use `grammar-search` to sweep structured variants across the meme universe and all active research timeframes.
+6. Use Layer 7 evidence before promoting any formula, state, or score change.
+7. Use the observation library as the calibration set before tuning z-score lookback, viscosity behavior, gradient sensitivity, weights, or any future confluence wave.
+8. Track pressure waves as one candidate family, not the mission. The mission is the broader oscillator grammar: levels, viscosity behavior, structure, divergence, gradient quality, pressure acceptance, and failed weakness.
+9. Validate any useful primitive outside the meme sandbox before treating it as product material.
 
 See `docs/VISUAL_INDICATOR_LEARNING_LOOP.md` for the detailed chart-to-evidence workflow.
 See `docs/SIGNAL_GRAMMAR_LAB.md` for the grammar-first research plan.

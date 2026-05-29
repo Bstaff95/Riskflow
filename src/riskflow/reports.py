@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from .config import UniverseConfig
 
@@ -49,6 +50,13 @@ TRANSITION_MATRIX_UNCONDITIONAL_CSV = "transition_matrix_unconditional.csv"
 TRANSITION_MATRIX_CONDITIONED_CSV = "transition_matrix_conditioned.csv"
 TRANSITION_RESEARCH_SUMMARY_HTML = "transition_research_summary.html"
 OBSIDIAN_TRANSITION_RESEARCH_MD = "latest_transition_research.md"
+GRAMMAR_SEARCH_RECORDS_CSV = "grammar_search_variant_records.csv"
+GRAMMAR_SEARCH_SUMMARY_CSV = "grammar_search_variant_summary.csv"
+GRAMMAR_SEARCH_RANKED_CSV = "grammar_search_ranked.csv"
+GRAMMAR_SEARCH_FAMILY_TIMEFRAME_CSV = "grammar_search_family_timeframe_summary.csv"
+GRAMMAR_SEARCH_MANIFEST_YAML = "grammar_search_manifest.yaml"
+GRAMMAR_SEARCH_SUMMARY_HTML = "grammar_search_summary.html"
+OBSIDIAN_GRAMMAR_SEARCH_MD = "latest_grammar_search.md"
 
 
 def _format_value(value: object) -> str:
@@ -358,6 +366,182 @@ def export_event_study_reports(
         "csv": csv_path,
         "records_csv": records_path,
         "html": html_path,
+        "obsidian": obsidian_path,
+    }
+
+
+def build_obsidian_grammar_search_report(
+    ranked: pd.DataFrame,
+    family_summary: pd.DataFrame,
+    records: pd.DataFrame,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+) -> str:
+    generated = datetime.now().isoformat(timespec="seconds")
+    columns = [
+        "variant_id",
+        "family_id",
+        "timeframe",
+        "direction",
+        "classification",
+        "rank_score",
+        "sample_size",
+        "unique_symbols",
+        "unique_event_clusters",
+        "median_forward_relative_return_primary",
+        "median_forward_relative_return_secondary",
+        "hit_rate_forward_relative_return_primary",
+        "median_max_drawdown",
+        "max_symbol_event_share",
+        "max_cluster_event_share",
+        "notes",
+    ]
+    ranked = ranked.copy()
+    family_summary = family_summary.copy()
+    records = records.copy()
+    for column in columns:
+        if column not in ranked.columns:
+            ranked[column] = pd.NA
+        if column not in family_summary.columns:
+            family_summary[column] = pd.NA
+    classification = ranked["classification"]
+    direction = ranked["direction"]
+    useful_positive = ranked[
+        classification.isin(["useful", "watchlist"]) & direction.eq("positive")
+    ].sort_values("rank_score", ascending=False)
+    useful_negative = ranked[
+        classification.isin(["useful", "watchlist"]) & direction.eq("negative")
+    ].sort_values("rank_score", ascending=False)
+    fragile = ranked[classification.isin(["fragile", "inconclusive"])].sort_values(
+        ["classification", "sample_size"],
+        ascending=[True, False],
+    )
+    symbol_share = pd.to_numeric(ranked["max_symbol_event_share"], errors="coerce")
+    cluster_share = pd.to_numeric(ranked["max_cluster_event_share"], errors="coerce")
+    concentrated = ranked[
+        (symbol_share > 0.55)
+        | (cluster_share > 0.60)
+    ].sort_values("sample_size", ascending=False)
+    review_queue = records
+    if not review_queue.empty:
+        relative_columns = [column for column in review_queue.columns if column.startswith("forward_relative_return_")]
+        outcome_column = relative_columns[-1] if relative_columns else None
+        if outcome_column:
+            review_queue["_abs_outcome"] = pd.to_numeric(review_queue[outcome_column], errors="coerce").abs()
+            review_queue = review_queue.sort_values("_abs_outcome", ascending=False).drop(columns=["_abs_outcome"])
+    review_columns = [
+        "symbol",
+        "date",
+        "timeframe",
+        "variant_id",
+        "family_id",
+        "direction",
+        "benchmark",
+        "event_cluster_id",
+    ]
+    review_columns.extend([column for column in records.columns if column.startswith("forward_relative_return_")][-2:])
+    review_columns.extend([column for column in records.columns if column.startswith("max_drawdown_")][-1:])
+
+    warning_section = "_None._"
+    if warnings:
+        warning_section = "\n".join(f"- {warning}" for warning in warnings)
+
+    verdict = "No grammar-search variants reached useful/watchlist gates yet."
+    if not useful_positive.empty or not useful_negative.empty:
+        verdict = (
+            f"{len(useful_positive)} positive and {len(useful_negative)} negative variants reached useful/watchlist gates. "
+            "Treat these as chart-review candidates, not production signals."
+        )
+
+    return f"""# Latest Grammar Search
+
+Generated: {generated}
+Universe: {universe.name}
+Benchmark: {universe.benchmark.name}
+Records: {len(records)}
+
+## Verdict
+{verdict}
+
+## Positive Useful / Watchlist Variants
+{dataframe_to_markdown(useful_positive, columns=columns, max_rows=20)}
+
+## Negative Warning Variants
+{dataframe_to_markdown(useful_negative, columns=columns, max_rows=20)}
+
+## Best Family By Timeframe
+{dataframe_to_markdown(family_summary, columns=columns, max_rows=30)}
+
+## Concentration Risks
+{dataframe_to_markdown(concentrated, columns=columns, max_rows=20)}
+
+## Fragile / Inconclusive Variants
+{dataframe_to_markdown(fragile, columns=columns, max_rows=20)}
+
+## Chart Review Queue
+{dataframe_to_markdown(review_queue, columns=review_columns, max_rows=30)}
+
+## Guardrails
+- Grammar search produces research candidates only.
+- Do not promote a variant unless it beats simpler baselines and survives visual review.
+- Watch symbol concentration, calendar-cluster concentration, and nearby-threshold stability.
+- Keep default TradingView parity runs on the selected full basket unless explicitly auditing ex-target behavior.
+
+## Warnings
+{warning_section}
+
+## Concept Links
+- [[Signal Grammar Lab]]
+- [[False Positive Atlas]]
+- [[Breakout Archetypes]]
+- [[Zero Rejection]]
+- [[Hot Leader Cooloff]]
+- [[Time Above Viscosity]]
+- [[Riskflow]]
+"""
+
+
+def export_grammar_search_reports(
+    summary: pd.DataFrame,
+    records: pd.DataFrame,
+    ranked: pd.DataFrame,
+    family_summary: pd.DataFrame,
+    manifest: dict,
+    universe: UniverseConfig,
+    warnings: list[str] | None = None,
+    report_dir: str | Path = "reports/grammar_search",
+    obsidian_dir: str | Path = "obsidian",
+) -> dict[str, Path]:
+    report_path = Path(report_dir)
+    obsidian_report_path = Path(obsidian_dir) / "reports"
+    report_path.mkdir(parents=True, exist_ok=True)
+    obsidian_report_path.mkdir(parents=True, exist_ok=True)
+
+    records_csv_path = report_path / GRAMMAR_SEARCH_RECORDS_CSV
+    summary_csv_path = report_path / GRAMMAR_SEARCH_SUMMARY_CSV
+    ranked_csv_path = report_path / GRAMMAR_SEARCH_RANKED_CSV
+    family_csv_path = report_path / GRAMMAR_SEARCH_FAMILY_TIMEFRAME_CSV
+    manifest_path = report_path / GRAMMAR_SEARCH_MANIFEST_YAML
+    html_path = report_path / GRAMMAR_SEARCH_SUMMARY_HTML
+    obsidian_path = obsidian_report_path / OBSIDIAN_GRAMMAR_SEARCH_MD
+
+    records.to_csv(records_csv_path, index=False)
+    summary.to_csv(summary_csv_path, index=False)
+    ranked.to_csv(ranked_csv_path, index=False)
+    family_summary.to_csv(family_csv_path, index=False)
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    write_html_report(ranked, html_path, "Signal Grammar Search Summary", warnings=warnings)
+    obsidian_path.write_text(
+        build_obsidian_grammar_search_report(ranked, family_summary, records, universe, warnings),
+        encoding="utf-8",
+    )
+    return {
+        "records_csv": records_csv_path,
+        "summary_csv": summary_csv_path,
+        "ranked_csv": ranked_csv_path,
+        "family_timeframe_csv": family_csv_path,
+        "manifest_yaml": manifest_path,
+        "summary_html": html_path,
         "obsidian": obsidian_path,
     }
 

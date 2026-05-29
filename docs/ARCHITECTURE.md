@@ -119,6 +119,8 @@ The observation library is the Karpathy-style LLM wiki layer for this loop. Mach
 
 The next research layer is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`. It keeps the base oscillator frozen while translating human visual reads into grammar primitives such as `pressure_acceptance`, `failed_weakness`, `zone_reclaim_retest`, `oscillator_structure`, `divergence_quality`, and `curvature_intent`. The primitive registry lives in `research/grammar/primitive_registry.yaml`.
 
+The automated grammar-search layer is a research-only hypothesis generator. `grammar_search.py` expands structured rule families from `research/grammar/rule_search_grid.yaml` across selected timeframes, evaluates forward absolute and relative returns with Layer 7 outcome helpers, and exports ranked candidate variants for chart review. It does not change `core_signal_v0`, production state labels, setup scores, opportunity ranking, or TradingView defaults.
+
 Pressure waves are currently an experimental candidate family inside the grammar lab, not the mission itself. Future user-facing visual layers should be chosen only after reviewed observations and Layer 7 evidence show which grammar primitives actually improve timing, false-positive control, and forward relative-return outcomes.
 
 ## Setup Quality Direction
@@ -195,6 +197,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `transition_research.py`: Layer 10 completed state-run transition evidence, observed rates, and conditioned summaries.
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_grammar.py`: Signal Grammar Lab registry loading, primitive coverage summaries, review-plan exports, and research-only `signal_grammar_sidecar_v0` feature/event columns.
+- `grammar_search.py`: research-only structured grammar variant expansion, event detection, forward outcome summaries, and ranking for brute-force hypothesis generation.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
@@ -211,6 +214,7 @@ python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow grammar-lab
+python3 -m riskflow grammar-search --config configs/meme_universe.yaml --timeframes 1d 12h 4h 1h
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d

@@ -147,11 +147,87 @@ queue:
       Preserve as a warning family, but require fresh-data validation and clear
       branch separation before considering indicator logic.
 
+  - id: warning_pair_filter_invalidation_study
+    track: warning
+    status: needs_encoding
+    promotion_level: L0_registered
+    priority: 7
+    hypothesis: >
+      Relative failed breakout and lower-high rollover may be more valuable as
+      entry blockers, no-chase filters, and invalidation states than as
+      standalone directional calls.
+    measurable_primitives:
+      - relative_failed_breakout_warning
+      - lower_high_rollover
+      - warning_absent
+      - bullish_setup_present
+    expected_outcome: improved_bullish_filtering_and_downside_avoidance
+    next_action: >
+      Encode paired tests comparing bullish setup performance when warning
+      grammar is active versus absent.
+
+  - id: bullish_reclaim_retest_hold_journey
+    track: bullish_setup
+    status: needs_encoding
+    promotion_level: L0_registered
+    priority: 8
+    hypothesis: >
+      A reclaim is only actionable when the follow-up retest holds and downside
+      does not re-accelerate.
+    stages:
+      stage_0_context: prior weakness, compression, or reset
+      stage_1_repair: signal or relative pressure stops worsening
+      stage_2_trigger: viscosity or zero reclaim
+      stage_3_confirmation: retest hold above reclaimed level
+      stage_4_invalidation: reclaim loss or warning refire
+    measurable_primitives:
+      - viscosity_reclaim
+      - zero_reclaim
+      - viscosity_retest_hold
+      - signal_higher_low
+      - relative_improving
+    expected_outcome: improved_mfe_mae_and_lower_time_underwater
+    next_action: Encode as a staged journey and measure retest hold versus no-retest behavior.
+
+  - id: bullish_fresh_leader_ignition
+    track: bullish_setup
+    status: needs_encoding
+    promotion_level: L0_registered
+    priority: 9
+    hypothesis: >
+      The best long setup may appear when relative strength improves before
+      price fully breaks out and before Riskflow reaches obvious extension.
+    measurable_primitives:
+      - relative_improving
+      - gradient_positive_expanding
+      - zero_reclaim
+      - below_recent_price_high
+      - warning_absent
+    expected_outcome: positive_forward_relative_return_with_controlled_mae
+    next_action: Encode early relative repair before price breakout and compare to generic zero reclaim.
+
+  - id: mtf_disagreement_early_repair
+    track: mtf_context
+    status: needs_encoding
+    promotion_level: L0_registered
+    priority: 10
+    hypothesis: >
+      Early opportunities may occur when 1h or 4h repairs while 12h or 1d
+      still looks damaged, but only if higher-timeframe warning grammar is not
+      actively deteriorating.
+    measurable_primitives:
+      - low_timeframe_reclaim
+      - high_timeframe_below_viscosity
+      - warning_absent
+      - relative_improving
+    expected_outcome: earlier_entry_with_acceptable_mae
+    next_action: Encode MTF sequence tests after single-timeframe warning and reclaim definitions are stable.
+
   - id: gradient_translation_warning_overlay_candidate
     track: gradient_translation
     status: blocked_by_evidence
     promotion_level: L0_registered
-    priority: 7
+    priority: 20
     hypothesis: >
       Warning grammar may eventually inform gradient downgrade or no-chase
       visual states, but only after candidates reach fresh-data survivor status.

@@ -75,14 +75,19 @@ Invalidation: reclaim fails, gradient fades, relative breakout fails, or signal 
 Warning rules should feed this track. A bullish setup can be allowed, downgraded,
 blocked, or reset based on whether warning grammar is active.
 
-## Loop
+## Epoch Loop
 
-Every lab loop should follow the same order:
+The canonical unit of research is an epoch, not an open-ended loop.
+
+An epoch is 5 to 10 completed tests followed by a required Codex supervisor
+review. The Python runner executes evidence; Codex decides what the evidence
+means and what should run next.
+
+Every epoch should follow the same order:
 
 1. Pull ranked hypotheses from `research/lab_loop/hypothesis_queue.yaml`.
-2. Encode them as exact measurable rules, detectors, or staged sequences.
-3. Run broad discovery across `1d`, `12h`, `4h`, and `1h`.
-4. Run strict validation:
+2. Run 5 to 10 bounded tests across `1d`, `12h`, `4h`, and `1h`.
+3. Run strict validation:
    - time split;
    - unconditional baseline;
    - same-timeframe and same-cluster baseline;
@@ -90,11 +95,27 @@ Every lab loop should follow the same order:
    - symbol and cluster concentration;
    - entry-lag sensitivity;
    - cooldown sensitivity.
-5. Review false positives, missed winners, and boundary cases when a survivor is
+4. Write epoch artifacts:
+   - manifest;
+   - tested hypotheses;
+   - concept scoreboard;
+   - branch decisions;
+   - next-epoch suggestions.
+5. Codex reviews false positives, missed winners, and boundary cases when a survivor is
    promising or confusing.
-6. Promote, refine, or archive the hypothesis.
-7. Write a concise local note with what was learned and what should run next.
-8. Generate the next queue items from evidence, not from novelty alone.
+6. Assign each concept exactly one branch decision:
+   - promote;
+   - refine;
+   - broaden;
+   - pair;
+   - invert;
+   - archive;
+   - agent_review.
+7. Update the next epoch intentionally. Do not treat same-sample refinements as
+   validation.
+
+Open-ended `lab-loop run` remains available for controlled testing, but the
+preferred research mode is `lab-loop run-epoch`.
 
 ## Agent Checkpoints
 
@@ -198,7 +219,18 @@ instead of single trigger events.
 
 ## Standard Commands
 
-Autonomous loop runner:
+Supervised epoch runner:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop run-epoch \
+  --queue research/lab_loop/hypothesis_queue.yaml \
+  --timeframes 1d 12h 4h 1h \
+  --epoch-size 5 \
+  --strict-referee \
+  --resume
+```
+
+Open-ended runner:
 
 ```bash
 PYTHONPATH=src python3 -m riskflow lab-loop run \
@@ -216,6 +248,8 @@ Inspect the latest run:
 PYTHONPATH=src python3 -m riskflow lab-loop status
 PYTHONPATH=src python3 -m riskflow lab-loop next
 PYTHONPATH=src python3 -m riskflow lab-loop validate-queue
+PYTHONPATH=src python3 -m riskflow lab-loop epoch-summary
+PYTHONPATH=src python3 -m riskflow lab-loop concept-scoreboard
 ```
 
 The runner writes a process-quality checkpoint every 5 completed loops by
@@ -231,6 +265,9 @@ not only whether variants are surviving:
 
 Checkpoint reports live under each session's `checkpoints/` directory, and the
 latest status file links the most recent checkpoint.
+
+Epoch reports live under each session's `epochs/` directory. The durable concept
+scoreboard lives at `research/lab_loop/concept_scoreboard.yaml`.
 
 Discovery:
 

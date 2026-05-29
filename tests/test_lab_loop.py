@@ -15,7 +15,9 @@ from riskflow.lab_loop import (
     decide_loop_outcome,
     load_lab_queue,
     release_lock,
+    run_lab_epoch,
     run_lab_loop,
+    safe_child_hypothesis_id,
     select_next_hypothesis,
     validate_lab_queue,
 )
@@ -257,6 +259,100 @@ def test_lab_loop_lock_rejects_duplicate_runner(tmp_path: Path) -> None:
     assert not lock_path.exists()
 
 
+def test_run_lab_epoch_writes_epoch_artifacts_and_scoreboard(tmp_path: Path) -> None:
+    queue = _queue()
+    for idx in range(3):
+        queue["queue"].append(
+            {
+                "id": f"extra_{idx}",
+                "track": "warning",
+                "status": "new",
+                "promotion_level": "L0_registered",
+                "priority": 10 + idx,
+                "source": "research/grammar/rule_search_grid_v2_candidate.yaml",
+                "hypothesis": f"extra hypothesis {idx}",
+                "measurable_primitives": ["relative_failed_breakout_warning"],
+                "expected_outcome": "negative_forward_relative_return",
+            }
+        )
+    queue_path = tmp_path / "queue.yaml"
+    runtime_queue = tmp_path / "runtime_queue.yaml"
+    state_path = tmp_path / "lab_state.json"
+    report_root = tmp_path / "reports"
+    scoreboard_path = tmp_path / "concept_scoreboard.yaml"
+    queue_path.write_text(yaml.safe_dump(queue), encoding="utf-8")
+
+    state = run_lab_epoch(
+        LabLoopOptions(
+            queue_path=queue_path,
+            runtime_queue_path=runtime_queue,
+            state_path=state_path,
+            lock_path=tmp_path / "lab_loop.lock",
+            report_root=report_root,
+            concept_scoreboard_path=scoreboard_path,
+            max_loops=99,
+            dry_run=True,
+        ),
+        epoch_size=3,
+    )
+
+    assert state["completed_this_run"] == 3
+    assert state["last_completed_loop"] == 3
+    epoch = state["last_epoch"]
+    assert Path(epoch["summary"]).exists()
+    assert Path(epoch["manifest"]).exists()
+    assert Path(epoch["branch_decisions"]).exists()
+    assert Path(epoch["next_epoch_suggestions"]).exists()
+    assert scoreboard_path.exists()
+
+    branch_decisions = yaml.safe_load(Path(epoch["branch_decisions"]).read_text(encoding="utf-8"))
+    assert {item["decision"] for item in branch_decisions["decisions"]} <= {
+        "promote",
+        "refine",
+        "broaden",
+        "pair",
+        "invert",
+        "archive",
+        "agent_review",
+    }
+    suggestions = yaml.safe_load(Path(epoch["next_epoch_suggestions"]).read_text(encoding="utf-8"))
+    assert suggestions["applied"] is False
+
+
+def test_run_lab_epoch_rejects_invalid_epoch_size(tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.yaml"
+    queue_path.write_text(yaml.safe_dump(_queue()), encoding="utf-8")
+
+    try:
+        run_lab_epoch(
+            LabLoopOptions(
+                queue_path=queue_path,
+                runtime_queue_path=tmp_path / "runtime_queue.yaml",
+                state_path=tmp_path / "lab_state.json",
+                lock_path=tmp_path / "lab_loop.lock",
+                report_root=tmp_path / "reports",
+                dry_run=True,
+            ),
+            epoch_size=2,
+        )
+    except ValueError as exc:
+        assert "epoch_size must be between 3 and 10" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected invalid epoch size failure")
+
+
+def test_safe_child_hypothesis_id_stays_short_for_deep_lineages() -> None:
+    hypothesis = {
+        "id": "warning_lower_high_rollover_family" + "_child_0001" * 40,
+        "generation": 41,
+    }
+
+    child_id = safe_child_hypothesis_id(hypothesis, loop_number=999)
+
+    assert len(child_id) < 100
+    assert child_id.startswith("warning_lower_high_rollover_family_child_g042_l0999_")
+
+
 def test_checkpoint_detects_mission_gap_and_boosts_bullish_track() -> None:
     history = [
         {
@@ -299,6 +395,6 @@ def test_checkpoint_detects_mission_gap_and_boosts_bullish_track() -> None:
 
     latest = next(item for item in queue["queue"] if item["id"] == "warning_a_child_0005")
     bullish = next(item for item in queue["queue"] if item["id"] == "bullish_a")
-    assert latest["cooldown_until_loop"] == 8
+    assert latest["cooldown_until_loop"] == 15
     assert bullish["priority"] == 1
     assert actions

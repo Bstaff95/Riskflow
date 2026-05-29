@@ -31,6 +31,7 @@ from .indicator_behavior import (
 )
 from .indicator_engine import calculate_indicator
 from .lab_loop import (
+    DEFAULT_CONCEPT_SCOREBOARD_PATH,
     DEFAULT_QUEUE_PATH,
     DEFAULT_REPORT_ROOT,
     DEFAULT_RUNTIME_QUEUE_PATH,
@@ -38,6 +39,7 @@ from .lab_loop import (
     LabLoopOptions,
     lab_loop_status,
     load_lab_queue,
+    run_lab_epoch,
     run_lab_loop,
     select_next_hypothesis,
     validate_lab_queue,
@@ -1196,16 +1198,17 @@ def lab_loop_command(args: argparse.Namespace) -> int:
         print(f"Source: {hypothesis.get('source', '')}")
         return 0
 
-    if action == "run":
+    if action in {"run", "run-epoch"}:
         options = LabLoopOptions(
             queue_path=Path(args.queue),
             runtime_queue_path=Path(args.runtime_queue),
             state_path=Path(args.state),
             report_root=Path(args.report_root),
+            concept_scoreboard_path=Path(args.concept_scoreboard),
             config_path=Path(args.config),
             data_dir=Path(args.data_dir),
             timeframes=tuple(args.timeframes),
-            max_loops=args.max_loops,
+            max_loops=args.max_loops if action == "run" else args.epoch_size,
             max_hours=args.max_hours,
             min_sample_size=args.min_sample_size,
             entry_lag_bars=args.entry_lag_bars,
@@ -1216,17 +1219,41 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             checkpoint_interval=args.checkpoint_interval,
             resume=args.resume,
             dry_run=args.dry_run,
+            auto_refine=args.auto_refine if action == "run" else False,
         )
         try:
-            state = run_lab_loop(options)
+            state = run_lab_epoch(options, epoch_size=args.epoch_size) if action == "run-epoch" else run_lab_loop(options)
         except Exception as exc:
-            print(f"Lab loop run failed: {exc}")
+            print(f"Lab loop {action} failed: {exc}")
             return 1
         print(f"Lab loop status: {state.get('status')}")
         print(f"Session: {state.get('session_id')}")
         print(f"Completed this run: {state.get('completed_this_run')}")
         print(f"Last completed loop: {state.get('last_completed_loop')}")
+        if action == "run-epoch":
+            print(f"Epoch summary: {state.get('last_epoch', {}).get('summary', '')}")
         print(f"Latest status: {Path(args.report_root) / 'latest_status.md'}")
+        return 0
+
+    if action == "epoch-summary":
+        state_path = Path(args.state)
+        if not state_path.exists():
+            print(f"No lab-loop state found at {state_path}")
+            return 1
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        summary_path = Path(state.get("last_epoch", {}).get("summary", ""))
+        if not summary_path.exists():
+            print("No lab-loop epoch summary found.")
+            return 1
+        print(summary_path.read_text(encoding="utf-8"))
+        return 0
+
+    if action == "concept-scoreboard":
+        scoreboard_path = Path(args.concept_scoreboard)
+        if not scoreboard_path.exists():
+            print(f"No lab-loop concept scoreboard found at {scoreboard_path}")
+            return 1
+        print(scoreboard_path.read_text(encoding="utf-8"))
         return 0
 
     if action == "summarize":
@@ -1703,34 +1730,55 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--state", default=str(DEFAULT_STATE_PATH), help="Lab-loop state JSON path.")
         command.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT), help="Lab-loop report root.")
+        command.add_argument(
+            "--concept-scoreboard",
+            default=str(DEFAULT_CONCEPT_SCOREBOARD_PATH),
+            help="Durable concept scoreboard YAML.",
+        )
+
+    def add_lab_loop_execution_args(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+        command.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+        command.add_argument(
+            "--timeframes",
+            nargs="+",
+            default=["1d", "12h", "4h", "1h"],
+            help="Timeframes to run each executable hypothesis across.",
+        )
+        command.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap.")
+        command.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
+        command.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
+        command.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
+        command.add_argument("--strict-referee", action="store_true", help="Run strict baseline/null validation.")
+        command.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
+        command.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+        command.add_argument(
+            "--checkpoint-interval",
+            type=int,
+            default=5,
+            help="Write a process-quality checkpoint and adjust queue priorities every N completed loops.",
+        )
+        command.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
+        command.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
 
     lab_run = lab_subparsers.add_parser("run", help="Run autonomous lab-loop iterations.")
     add_lab_loop_common(lab_run)
-    lab_run.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
-    lab_run.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
-    lab_run.add_argument(
-        "--timeframes",
-        nargs="+",
-        default=["1d", "12h", "4h", "1h"],
-        help="Timeframes to run each executable hypothesis across.",
-    )
+    add_lab_loop_execution_args(lab_run)
     lab_run.add_argument("--max-loops", type=int, default=1, help="Maximum loop iterations to run.")
-    lab_run.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap.")
-    lab_run.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
-    lab_run.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
-    lab_run.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
-    lab_run.add_argument("--strict-referee", action="store_true", help="Run strict baseline/null validation.")
-    lab_run.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
-    lab_run.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
     lab_run.add_argument(
-        "--checkpoint-interval",
-        type=int,
-        default=5,
-        help="Write a process-quality checkpoint and adjust queue priorities every N completed loops.",
+        "--no-auto-refine",
+        dest="auto_refine",
+        action="store_false",
+        help="Do not automatically append child refinement hypotheses after each loop.",
     )
-    lab_run.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
-    lab_run.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+    lab_run.set_defaults(auto_refine=True)
     lab_run.set_defaults(func=lab_loop_command)
+
+    lab_epoch = lab_subparsers.add_parser("run-epoch", help="Run a supervised 3-10 loop research epoch.")
+    add_lab_loop_common(lab_epoch)
+    add_lab_loop_execution_args(lab_epoch)
+    lab_epoch.add_argument("--epoch-size", type=int, default=5, help="Completed loops in this supervised epoch.")
+    lab_epoch.set_defaults(func=lab_loop_command)
 
     lab_status = lab_subparsers.add_parser("status", help="Print latest lab-loop state.")
     add_lab_loop_common(lab_status)
@@ -1747,6 +1795,14 @@ def build_parser() -> argparse.ArgumentParser:
     lab_summarize = lab_subparsers.add_parser("summarize", help="Print reports/lab_loop/latest_status.md.")
     add_lab_loop_common(lab_summarize)
     lab_summarize.set_defaults(func=lab_loop_command)
+
+    lab_epoch_summary = lab_subparsers.add_parser("epoch-summary", help="Print the latest lab-loop epoch summary.")
+    add_lab_loop_common(lab_epoch_summary)
+    lab_epoch_summary.set_defaults(func=lab_loop_command)
+
+    lab_scoreboard = lab_subparsers.add_parser("concept-scoreboard", help="Print the lab-loop concept scoreboard.")
+    add_lab_loop_common(lab_scoreboard)
+    lab_scoreboard.set_defaults(func=lab_loop_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

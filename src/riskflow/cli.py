@@ -1213,6 +1213,7 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             strict_referee=args.strict_referee,
             strict_null_iterations=args.strict_null_iterations,
             strict_random_seed=args.strict_random_seed,
+            checkpoint_interval=args.checkpoint_interval,
             resume=args.resume,
             dry_run=args.dry_run,
         )
@@ -1721,6 +1722,12 @@ def build_parser() -> argparse.ArgumentParser:
     lab_run.add_argument("--strict-referee", action="store_true", help="Run strict baseline/null validation.")
     lab_run.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
     lab_run.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+    lab_run.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=5,
+        help="Write a process-quality checkpoint and adjust queue priorities every N completed loops.",
+    )
     lab_run.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
     lab_run.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
     lab_run.set_defaults(func=lab_loop_command)

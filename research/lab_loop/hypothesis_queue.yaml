@@ -37,6 +37,7 @@ queue:
     status: new
     promotion_level: L0_registered
     priority: 2
+    source: research/grammar/rule_search_grid_v2_candidate.yaml
     hypothesis: >
       Deep weakness becomes actionable only after weakness stops worsening,
       signal reclaims viscosity, and a retest holds.
@@ -60,6 +61,7 @@ queue:
     status: new
     promotion_level: L0_registered
     priority: 3
+    source: research/grammar/rule_search_grid_v2_candidate.yaml
     hypothesis: >
       Clean compression becomes more useful when gradient reheats and relative
       component repairs before the move is extended.
@@ -83,6 +85,7 @@ queue:
     status: new
     promotion_level: L0_registered
     priority: 4
+    source: research/grammar/rule_search_grid_v2_candidate.yaml
     hypothesis: >
       A failed bearish warning followed by reclaim and relative repair may mark
       a better long setup than a clean reclaim without prior shakeout.
@@ -106,6 +109,7 @@ queue:
     status: new
     promotion_level: L0_registered
     priority: 5
+    source: research/grammar/rule_search_grid_v2_candidate.yaml
     hypothesis: >
       A hot leader can become buyable again after cooling, compressing, holding
       structure, and showing renewed pressure expansion.
@@ -129,7 +133,7 @@ queue:
     status: tested_needs_fresh_data
     promotion_level: L2_discovered
     priority: 6
-    source: research/grammar/README.md
+    source: research/grammar/rule_search_grid_v6_4h_lower_high_warning_candidate.yaml
     hypothesis: >
       Lower-high rollover after leadership marks fading pressure and future
       relative underperformance, with separate 4h and daily branches.
@@ -158,4 +162,3 @@ queue:
       - viscosity_loss
     expected_outcome: better_visual_interpretation_without_formula_change
     next_action: Do not implement until at least one warning candidate reaches L4_fresh_data_survivor.
-

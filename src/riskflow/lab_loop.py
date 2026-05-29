@@ -63,6 +63,7 @@ class LabLoopOptions:
     strict_referee: bool = True
     strict_null_iterations: int = 300
     strict_random_seed: int = 29
+    checkpoint_interval: int = 5
     resume: bool = False
     dry_run: bool = False
 
@@ -342,17 +343,26 @@ def _numeric_mutations(key: str, value: int | float) -> list[int | float]:
     return sorted({round(float(value) - step, 6), round(float(value), 6), round(float(value) + step, 6)})
 
 
-def build_refinement_grid(row: pd.Series, *, family_suffix: str) -> dict[str, Any]:
+def build_refinement_grid(row: pd.Series, *, family_suffix: str, max_mutated_numeric_params: int = 3) -> dict[str, Any]:
     params = parse_params(row.get("params"))
     params.pop("timeframe", None)
     parameter_grid: dict[str, list[Any]] = {}
+    mutated_numeric_count = 0
     for key, value in params.items():
         if isinstance(value, bool):
             parameter_grid[key] = [value]
         elif isinstance(value, int) and not isinstance(value, bool):
-            parameter_grid[key] = _numeric_mutations(key, value)
+            if mutated_numeric_count < max_mutated_numeric_params:
+                parameter_grid[key] = _numeric_mutations(key, value)
+                mutated_numeric_count += 1
+            else:
+                parameter_grid[key] = [value]
         elif isinstance(value, float):
-            parameter_grid[key] = _numeric_mutations(key, value)
+            if mutated_numeric_count < max_mutated_numeric_params:
+                parameter_grid[key] = _numeric_mutations(key, value)
+                mutated_numeric_count += 1
+            else:
+                parameter_grid[key] = [value]
         else:
             parameter_grid[key] = [value]
     return {
@@ -418,6 +428,216 @@ def create_next_hypothesis(
     }
     queue.setdefault("queue", []).append(child)
     return child
+
+
+def root_hypothesis_id(hypothesis_id: str) -> str:
+    return hypothesis_id.split("_child_", 1)[0]
+
+
+def loop_history_entry(
+    *,
+    loop_number: int,
+    hypothesis: dict[str, Any],
+    decision: dict[str, Any],
+    child: dict[str, Any] | None,
+    report_dir: Path,
+    errors: int,
+) -> dict[str, Any]:
+    hypothesis_id = str(hypothesis.get("id", ""))
+    return {
+        "loop_number": loop_number,
+        "hypothesis_id": hypothesis_id,
+        "root_hypothesis_id": root_hypothesis_id(hypothesis_id),
+        "generation": int(hypothesis.get("generation", 0) or 0),
+        "track": hypothesis.get("track"),
+        "decision": decision.get("decision"),
+        "reason": decision.get("reason"),
+        "survivor_count": int(decision.get("survivor_count", 0) or 0),
+        "useful_count": int(decision.get("useful_count", 0) or 0),
+        "next_hypothesis_id": child.get("id") if child else "",
+        "report_dir": str(report_dir),
+        "errors": errors,
+        "created_at": utc_now_iso(),
+    }
+
+
+def analyze_recent_loops(history: list[dict[str, Any]], *, checkpoint_interval: int = 5) -> dict[str, Any]:
+    recent = history[-checkpoint_interval:]
+    loop_count = len(recent)
+    root_counts: dict[str, int] = {}
+    track_counts: dict[str, int] = {}
+    decision_counts: dict[str, int] = {}
+    for entry in recent:
+        root = str(entry.get("root_hypothesis_id", ""))
+        track = str(entry.get("track", ""))
+        decision = str(entry.get("decision", ""))
+        root_counts[root] = root_counts.get(root, 0) + 1
+        track_counts[track] = track_counts.get(track, 0) + 1
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
+
+    dominant_root = max(root_counts, key=root_counts.get) if root_counts else ""
+    dominant_root_share = (root_counts.get(dominant_root, 0) / loop_count) if loop_count else 0.0
+    promoted = decision_counts.get("promote", 0)
+    refined = decision_counts.get("refine", 0)
+    archived_or_failed = decision_counts.get("archive", 0) + decision_counts.get("failed", 0)
+    error_total = sum(int(entry.get("errors", 0) or 0) for entry in recent)
+    total_survivors = sum(int(entry.get("survivor_count", 0) or 0) for entry in recent)
+    max_generation = max((int(entry.get("generation", 0) or 0) for entry in recent), default=0)
+
+    doing_well: list[str] = []
+    not_doing_well: list[str] = []
+    interventions: list[str] = []
+    mission_questions: list[str] = []
+
+    if promoted:
+        doing_well.append(f"{promoted}/{loop_count} recent loops promoted strict survivors.")
+    if total_survivors:
+        doing_well.append(f"Recent loops found {total_survivors} strict survivor rows.")
+    if refined:
+        doing_well.append(f"{refined}/{loop_count} recent loops found useful non-strict evidence to refine.")
+    if error_total == 0 and loop_count:
+        doing_well.append("Runner reliability is good: no errors in the recent checkpoint window.")
+    if "warning" in track_counts:
+        mission_questions.append("Warning/avoidance evidence is being tested.")
+    if "bullish_setup" in track_counts:
+        mission_questions.append("Bullish setup journey evidence is being tested.")
+    if "bullish_setup" not in track_counts and loop_count >= 3:
+        not_doing_well.append("Mission gap: recent loops did not test bullish setup journeys.")
+        interventions.append("boost_bullish_setup_track")
+    if "warning" in track_counts and "bullish_setup" not in track_counts:
+        not_doing_well.append("Recent learning is skewed toward avoiding bad trades, not finding best long setups.")
+    if "gradient_translation" in track_counts:
+        mission_questions.append("Gradient translation is being touched, but should remain evidence-gated.")
+    if dominant_root_share >= 0.8 and loop_count >= 3:
+        not_doing_well.append(
+            f"Research is over-exploiting one branch: {dominant_root} appeared in {root_counts[dominant_root]}/{loop_count} loops."
+        )
+        interventions.append("cool_latest_child_and_boost_alternatives")
+    if max_generation >= 4:
+        not_doing_well.append(
+            f"Research is deep in one refinement lineage, with generation depth {max_generation}."
+        )
+        interventions.append("cool_latest_child_and_boost_alternatives")
+    if archived_or_failed >= max(3, loop_count):
+        not_doing_well.append("Recent loops are mostly dead ends or failures.")
+        interventions.append("broaden_search")
+    if error_total:
+        not_doing_well.append(f"Recent loops logged {error_total} error(s); reliability needs attention before scaling.")
+        interventions.append("reliability_pause")
+    if len(track_counts) == 1 and loop_count >= 3:
+        only_track = next(iter(track_counts))
+        not_doing_well.append(f"Recent loops stayed on one track: {only_track}.")
+        interventions.append("boost_other_tracks")
+    if promoted == loop_count and dominant_root_share >= 0.8 and loop_count >= 3:
+        not_doing_well.append(
+            "Even though evidence is strong, the lab is mostly confirming one idea instead of broadening mission coverage."
+        )
+    if "warning" in track_counts and total_survivors:
+        mission_questions.append("Next useful question: can this warning improve invalidation or entry filtering?")
+    if not doing_well:
+        doing_well.append("The runner completed checkpoint loops without crashing.")
+    if not not_doing_well:
+        not_doing_well.append("No major process weakness detected in this checkpoint.")
+    if not mission_questions:
+        mission_questions.append("No mission-specific learning theme was detected; broaden the next checkpoint window.")
+
+    return {
+        "checkpoint_at_loop": recent[-1].get("loop_number") if recent else 0,
+        "loop_count": loop_count,
+        "root_counts": root_counts,
+        "track_counts": track_counts,
+        "decision_counts": decision_counts,
+        "dominant_root": dominant_root,
+        "dominant_root_share": dominant_root_share,
+        "doing_well": doing_well,
+        "not_doing_well": not_doing_well,
+        "mission_questions": mission_questions,
+        "interventions": sorted(set(interventions)),
+        "recent_hypothesis_ids": [entry.get("hypothesis_id") for entry in recent],
+    }
+
+
+def apply_checkpoint_interventions(
+    queue: dict[str, Any],
+    checkpoint: dict[str, Any],
+    *,
+    completed_hypothesis_ids: set[str],
+    latest_child_id: str | None,
+) -> list[str]:
+    actions: list[str] = []
+    interventions = set(checkpoint.get("interventions", []))
+    if not interventions:
+        return actions
+
+    checkpoint_loop = int(checkpoint.get("checkpoint_at_loop", 0) or 0)
+    dominant_root = str(checkpoint.get("dominant_root", ""))
+    for item in queue.get("queue", []):
+        item_id = str(item.get("id", ""))
+        if item_id in completed_hypothesis_ids:
+            continue
+        status = str(item.get("status", "new"))
+        if status in TERMINAL_STATUSES:
+            continue
+        item_root = root_hypothesis_id(item_id)
+        if item_id == latest_child_id and "cool_latest_child_and_boost_alternatives" in interventions:
+            item["cooldown_until_loop"] = checkpoint_loop + 3
+            item["priority"] = int(item.get("priority", 999)) + 50
+            item["checkpoint_note"] = "Cooled because checkpoint detected narrow mission coverage."
+            actions.append(f"cooled {item_id} until loop {checkpoint_loop + 3}")
+            continue
+        if item_root == dominant_root:
+            continue
+        if "boost_bullish_setup_track" in interventions and item.get("track") == "bullish_setup":
+            old_priority = int(item.get("priority", 999))
+            item["priority"] = max(1, old_priority - 50)
+            item["checkpoint_note"] = "Boosted because checkpoint detected no recent bullish setup research."
+            actions.append(f"boosted bullish setup {item_id} priority {old_priority}->{item['priority']}")
+            continue
+        if is_executable_hypothesis(item):
+            old_priority = int(item.get("priority", 999))
+            item["priority"] = max(1, old_priority - 25)
+            item["checkpoint_note"] = "Boosted as executable mission-coverage alternative."
+            actions.append(f"boosted executable alternative {item_id} priority {old_priority}->{item['priority']}")
+        elif "boost_other_tracks" in interventions:
+            old_priority = int(item.get("priority", 999))
+            item["priority"] = max(1, old_priority - 5)
+            item["checkpoint_note"] = "Boosted for encoding because checkpoint detected single-track drift."
+            actions.append(f"boosted non-executable alternative {item_id} priority {old_priority}->{item['priority']}")
+    if not actions:
+        actions.append("no queue intervention available; all alternatives were completed, terminal, or non-actionable")
+    return actions
+
+
+def write_checkpoint_report(path: Path, checkpoint: dict[str, Any], actions: list[str]) -> None:
+    lines = [
+        f"# Lab Loop Checkpoint {checkpoint.get('checkpoint_at_loop')}",
+        "",
+        f"Generated: {utc_now_iso()}",
+        "",
+        "## What Is Working",
+        *[f"- {item}" for item in checkpoint.get("doing_well", [])],
+        "",
+        "## What Is Not Working",
+        *[f"- {item}" for item in checkpoint.get("not_doing_well", [])],
+        "",
+        "## Mission Questions",
+        *[f"- {item}" for item in checkpoint.get("mission_questions", [])],
+        "",
+        "## Interventions",
+        *[f"- {item}" for item in actions],
+        "",
+        "## Recent Roots",
+        "```json",
+        json.dumps(checkpoint.get("root_counts", {}), indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Recent Decisions",
+        "```json",
+        json.dumps(checkpoint.get("decision_counts", {}), indent=2, sort_keys=True),
+        "```",
+        "",
+    ]
+    atomic_write_text(path, "\n".join(lines))
 
 
 def update_hypothesis(queue: dict[str, Any], hypothesis_id: str, updates: dict[str, Any]) -> None:
@@ -492,6 +712,7 @@ def write_loop_summary(
 
 def latest_status_text(state: dict[str, Any]) -> str:
     last = state.get("last_loop_summary", {})
+    checkpoint = state.get("last_checkpoint", {})
     return "\n".join(
         [
             "# Riskflow Lab Loop Status",
@@ -506,6 +727,7 @@ def latest_status_text(state: dict[str, Any]) -> str:
             f"Next Hypothesis: {last.get('next_hypothesis_id', '')}",
             f"Report: {last.get('report_dir', '')}",
             f"Errors: {last.get('errors', 0)}",
+            f"Last Checkpoint: {checkpoint.get('report', '')}",
             "",
         ]
     )
@@ -555,7 +777,7 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
     start_time = time.monotonic()
     normalized_timeframes = tuple(normalize_timeframe(timeframe) for timeframe in options.timeframes)
     queue = initialize_runtime_queue(options)
-    state = load_lab_state(options.state_path)
+    state = load_lab_state(options.state_path) if options.resume else {}
     session_id = state.get("session_id") if options.resume and state.get("session_id") else uuid.uuid4().hex[:12]
     report_session_dir = options.report_root / datetime.now().strftime("%Y-%m-%d") / f"session_{session_id}"
     state.update(
@@ -573,6 +795,7 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
     )
     state.setdefault("last_completed_loop", 0)
     state.setdefault("completed_hypothesis_ids", [])
+    state.setdefault("loop_history", [])
     atomic_write_json(options.state_path, state)
 
     universe = None
@@ -759,6 +982,35 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                 "report_dir": str(loop_dir),
                 "errors": errors,
             }
+            history_entry = loop_history_entry(
+                loop_number=loop_number,
+                hypothesis=hypothesis,
+                decision=decision,
+                child=child,
+                report_dir=loop_dir,
+                errors=errors,
+            )
+            state.setdefault("loop_history", []).append(history_entry)
+            if options.checkpoint_interval and loop_number % options.checkpoint_interval == 0:
+                checkpoint = analyze_recent_loops(
+                    state.get("loop_history", []),
+                    checkpoint_interval=options.checkpoint_interval,
+                )
+                actions = apply_checkpoint_interventions(
+                    queue,
+                    checkpoint,
+                    completed_hypothesis_ids=set(state.get("completed_hypothesis_ids", [])),
+                    latest_child_id=child.get("id") if child else "",
+                )
+                checkpoint_dir = report_session_dir / "checkpoints"
+                checkpoint_path = checkpoint_dir / f"checkpoint_loop_{loop_number:04d}.md"
+                write_checkpoint_report(checkpoint_path, checkpoint, actions)
+                state["last_checkpoint"] = {
+                    **checkpoint,
+                    "actions": actions,
+                    "report": str(checkpoint_path),
+                }
+                atomic_write_yaml(options.runtime_queue_path, queue)
             state["updated_at"] = utc_now_iso()
             atomic_write_json(options.state_path, state)
             atomic_write_text(options.report_root / "latest_status.md", latest_status_text(state))
@@ -796,6 +1048,21 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                 "report_dir": str(loop_dir),
                 "errors": errors,
             }
+            state.setdefault("loop_history", []).append(
+                loop_history_entry(
+                    loop_number=loop_number,
+                    hypothesis=hypothesis,
+                    decision={
+                        "decision": "failed",
+                        "reason": str(exc),
+                        "survivor_count": 0,
+                        "useful_count": 0,
+                    },
+                    child=None,
+                    report_dir=loop_dir,
+                    errors=errors,
+                )
+            )
             atomic_write_json(options.state_path, state)
             atomic_write_text(options.report_root / "latest_status.md", latest_status_text(state))
             completed_this_run += 1

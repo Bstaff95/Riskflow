@@ -218,6 +218,20 @@ PYTHONPATH=src python3 -m riskflow lab-loop next
 PYTHONPATH=src python3 -m riskflow lab-loop validate-queue
 ```
 
+The runner writes a process-quality checkpoint every 5 completed loops by
+default. Checkpoints ask whether the research is actually serving the mission,
+not only whether variants are surviving:
+
+- are we finding trade-selection evidence;
+- are we testing both warnings and bullish setup journeys;
+- are we learning invalidation/filtering value;
+- are we over-refining one lineage;
+- are failures informative or just repetitive;
+- is the runner reliable enough to keep scaling.
+
+Checkpoint reports live under each session's `checkpoints/` directory, and the
+latest status file links the most recent checkpoint.
+
 Discovery:
 
 ```bash

@@ -30,6 +30,18 @@ from .indicator_behavior import (
     run_indicator_behavior_search,
 )
 from .indicator_engine import calculate_indicator
+from .lab_loop import (
+    DEFAULT_QUEUE_PATH,
+    DEFAULT_REPORT_ROOT,
+    DEFAULT_RUNTIME_QUEUE_PATH,
+    DEFAULT_STATE_PATH,
+    LabLoopOptions,
+    lab_loop_status,
+    load_lab_queue,
+    run_lab_loop,
+    select_next_hypothesis,
+    validate_lab_queue,
+)
 from .reports import (
     export_event_study_reports,
     export_flow_graph_reports,
@@ -1143,6 +1155,91 @@ def indicator_behavior_search_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def lab_loop_command(args: argparse.Namespace) -> int:
+    action = args.lab_loop_action
+    if action == "validate-queue":
+        try:
+            data = load_lab_queue(args.queue)
+            errors = validate_lab_queue(data)
+        except Exception as exc:
+            print(f"Lab loop queue validation failed: {exc}")
+            return 1
+        if errors:
+            print("Lab loop queue validation failed:")
+            for error in errors:
+                print(f"- {error}")
+            return 1
+        print(f"Lab loop queue valid: {args.queue}")
+        print(f"Hypotheses: {len(data.get('queue', []))}")
+        return 0
+
+    if action == "status":
+        print(lab_loop_status(args.state))
+        return 0
+
+    if action == "next":
+        try:
+            queue = load_lab_queue(args.runtime_queue if Path(args.runtime_queue).exists() else args.queue)
+            state_path = Path(args.state)
+            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            hypothesis = select_next_hypothesis(queue, state)
+        except Exception as exc:
+            print(f"Lab loop next failed: {exc}")
+            return 1
+        if hypothesis is None:
+            print("No runnable lab-loop hypothesis found.")
+            return 0
+        print(f"Next hypothesis: {hypothesis.get('id')}")
+        print(f"Track: {hypothesis.get('track')}")
+        print(f"Status: {hypothesis.get('status')}")
+        print(f"Priority: {hypothesis.get('priority')}")
+        print(f"Source: {hypothesis.get('source', '')}")
+        return 0
+
+    if action == "run":
+        options = LabLoopOptions(
+            queue_path=Path(args.queue),
+            runtime_queue_path=Path(args.runtime_queue),
+            state_path=Path(args.state),
+            report_root=Path(args.report_root),
+            config_path=Path(args.config),
+            data_dir=Path(args.data_dir),
+            timeframes=tuple(args.timeframes),
+            max_loops=args.max_loops,
+            max_hours=args.max_hours,
+            min_sample_size=args.min_sample_size,
+            entry_lag_bars=args.entry_lag_bars,
+            cooldown_bars=args.cooldown_bars,
+            strict_referee=args.strict_referee,
+            strict_null_iterations=args.strict_null_iterations,
+            strict_random_seed=args.strict_random_seed,
+            resume=args.resume,
+            dry_run=args.dry_run,
+        )
+        try:
+            state = run_lab_loop(options)
+        except Exception as exc:
+            print(f"Lab loop run failed: {exc}")
+            return 1
+        print(f"Lab loop status: {state.get('status')}")
+        print(f"Session: {state.get('session_id')}")
+        print(f"Completed this run: {state.get('completed_this_run')}")
+        print(f"Last completed loop: {state.get('last_completed_loop')}")
+        print(f"Latest status: {Path(args.report_root) / 'latest_status.md'}")
+        return 0
+
+    if action == "summarize":
+        status_path = Path(args.report_root) / "latest_status.md"
+        if not status_path.exists():
+            print(f"No latest lab-loop status found at {status_path}")
+            return 1
+        print(status_path.read_text(encoding="utf-8"))
+        return 0
+
+    print(f"Unknown lab-loop action: {action}")
+    return 1
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -1589,6 +1686,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="Random seed for --strict-referee matched-null sampling.",
     )
     indicator_behavior_search.set_defaults(func=indicator_behavior_search_command)
+
+    lab_loop = subparsers.add_parser(
+        "lab-loop",
+        help="Run or inspect the autonomous Riskflow lab-loop runner.",
+    )
+    lab_subparsers = lab_loop.add_subparsers(dest="lab_loop_action", required=True)
+
+    def add_lab_loop_common(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--queue", default=str(DEFAULT_QUEUE_PATH), help="Seed hypothesis queue YAML.")
+        command.add_argument(
+            "--runtime-queue",
+            default=str(DEFAULT_RUNTIME_QUEUE_PATH),
+            help="Runtime queue YAML updated during autonomous runs.",
+        )
+        command.add_argument("--state", default=str(DEFAULT_STATE_PATH), help="Lab-loop state JSON path.")
+        command.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT), help="Lab-loop report root.")
+
+    lab_run = lab_subparsers.add_parser("run", help="Run autonomous lab-loop iterations.")
+    add_lab_loop_common(lab_run)
+    lab_run.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    lab_run.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    lab_run.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=["1d", "12h", "4h", "1h"],
+        help="Timeframes to run each executable hypothesis across.",
+    )
+    lab_run.add_argument("--max-loops", type=int, default=1, help="Maximum loop iterations to run.")
+    lab_run.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap.")
+    lab_run.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
+    lab_run.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
+    lab_run.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
+    lab_run.add_argument("--strict-referee", action="store_true", help="Run strict baseline/null validation.")
+    lab_run.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
+    lab_run.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+    lab_run.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
+    lab_run.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+    lab_run.set_defaults(func=lab_loop_command)
+
+    lab_status = lab_subparsers.add_parser("status", help="Print latest lab-loop state.")
+    add_lab_loop_common(lab_status)
+    lab_status.set_defaults(func=lab_loop_command)
+
+    lab_next = lab_subparsers.add_parser("next", help="Print the next runnable hypothesis.")
+    add_lab_loop_common(lab_next)
+    lab_next.set_defaults(func=lab_loop_command)
+
+    lab_validate = lab_subparsers.add_parser("validate-queue", help="Validate the lab-loop queue schema.")
+    add_lab_loop_common(lab_validate)
+    lab_validate.set_defaults(func=lab_loop_command)
+
+    lab_summarize = lab_subparsers.add_parser("summarize", help="Print reports/lab_loop/latest_status.md.")
+    add_lab_loop_common(lab_summarize)
+    lab_summarize.set_defaults(func=lab_loop_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

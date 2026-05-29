@@ -198,6 +198,26 @@ instead of single trigger events.
 
 ## Standard Commands
 
+Autonomous loop runner:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop run \
+  --queue research/lab_loop/hypothesis_queue.yaml \
+  --timeframes 1d 12h 4h 1h \
+  --max-loops 100 \
+  --max-hours 4 \
+  --strict-referee \
+  --resume
+```
+
+Inspect the latest run:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop status
+PYTHONPATH=src python3 -m riskflow lab-loop next
+PYTHONPATH=src python3 -m riskflow lab-loop validate-queue
+```
+
 Discovery:
 
 ```bash
@@ -220,4 +240,3 @@ python3 -m pytest
 git diff --check
 PYTHONPYCACHEPREFIX=/tmp/riskflow_pycache python3 -m compileall -q src
 ```
-

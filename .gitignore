@@ -19,6 +19,11 @@ research/observations/*
 !research/observations/.gitkeep
 obsidian/reports/*
 !obsidian/reports/.gitkeep
+research/lab_loop/lab_state.json
+research/lab_loop/runtime_queue.yaml
+research/lab_loop/failure_log.jsonl
+research/lab_loop/lab_loop.lock
+research/lab_loop/generated_grids/
 obsidian/wiki/cases/*.png
 obsidian/wiki/cases/*.jpg
 obsidian/wiki/cases/*.jpeg

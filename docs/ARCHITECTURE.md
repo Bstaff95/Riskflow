@@ -198,6 +198,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `signal_registry.py`: explicit signal identities, roles, versions, triggers, and downstream-use contracts.
 - `signal_grammar.py`: Signal Grammar Lab registry loading, primitive coverage summaries, review-plan exports, and research-only `signal_grammar_sidecar_v0` feature/event columns.
 - `grammar_search.py`: research-only structured grammar variant expansion, event detection, forward outcome summaries, and ranking for brute-force hypothesis generation.
+- `lab_loop.py`: autonomous research-loop runner that selects queued hypotheses, executes grammar-search grids, writes resumable state, records per-loop reports, updates a runtime queue, and generates refinement children without changing production formulas, scores, states, or TradingView defaults.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
@@ -215,6 +216,7 @@ python3 -m riskflow signal-research --config configs/meme_universe.yaml --timefr
 python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow grammar-lab
 python3 -m riskflow grammar-search --config configs/meme_universe.yaml --timeframes 1d 12h 4h 1h
+PYTHONPATH=src python3 -m riskflow lab-loop run --max-loops 100 --max-hours 4 --strict-referee --resume
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d

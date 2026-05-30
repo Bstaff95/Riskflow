@@ -1,0 +1,61 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_warning_active_failed_weakness_blocker
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Failed-weakness reclaim while recent compression-reclaim warning is active.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [active]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_absent_failed_weakness_allowed
+    direction: positive
+    detector: compression_warning_bullish_setup
+    description: Failed-weakness reclaim when recent compression-reclaim warning is absent.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [absent]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_cleared_failed_weakness_reset
+    direction: positive
+    detector: compression_warning_bullish_setup
+    description: Failed-weakness reclaim after recent compression-reclaim warning clears.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [cleared]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]

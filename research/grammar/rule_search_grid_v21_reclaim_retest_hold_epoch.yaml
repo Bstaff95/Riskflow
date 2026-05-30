@@ -1,0 +1,31 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: reclaim_retest_hold_zero
+    direction: positive
+    detector: zone_reclaim_retest
+    description: Zero reclaim followed by a retest/hold instead of first-cross entry.
+    parameter_grid:
+      level: [0.0]
+      mode: [retest]
+      tolerance: [0.1, 0.2, 0.35]
+      hold_bars: [3, 5, 8]
+
+  - family_id: reclaim_retest_hold_minus_1_5
+    direction: positive
+    detector: zone_reclaim_retest
+    description: Low-zone reclaim followed by retest/hold.
+    parameter_grid:
+      level: [-1.5]
+      mode: [retest]
+      tolerance: [0.1, 0.2, 0.35]
+      hold_bars: [3, 5, 8]
+
+  - family_id: reclaim_first_cross_baseline
+    direction: positive
+    detector: zone_reclaim_retest
+    description: First-cross reclaim baseline for comparing retest hold value.
+    parameter_grid:
+      level: [-1.5, 0.0]
+      mode: [reclaim]
+      tolerance: [0.2]
+      hold_bars: [3]

@@ -1,0 +1,65 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: parent_active_failed_weakness_tight_blocker
+    direction: negative
+    detector: parent_context_bullish_setup
+    description: Tight parent-active failed-weakness reclaim blocker.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      parent_mode: [active]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.5]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_active_compression_tight_blocker
+    direction: negative
+    detector: parent_context_bullish_setup
+    description: Tight parent-active compression reclaim blocker.
+    parameter_grid:
+      setup: [compression_reclaim]
+      parent_mode: [active]
+      min_compression: [55.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      relative_window: [5, 8]
+      min_relative_slope: [-0.02, 0.02]
+      lookback: [20]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.5]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_active_zone_reclaim_tight_blocker
+    direction: negative
+    detector: parent_context_bullish_setup
+    description: Tight parent-active zone reclaim/retest blocker.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      parent_mode: [active]
+      level: [-1.5, 0.0]
+      tolerance: [0.15, 0.3]
+      hold_bars: [3, 5]
+      lookback: [20]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.5]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]

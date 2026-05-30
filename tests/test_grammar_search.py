@@ -149,6 +149,26 @@ def test_second_generation_detectors_return_aligned_masks() -> None:
             },
         ),
         RuleVariant(
+            variant_id="test.rotation_reclaim_setup",
+            family_id="rotation_reclaim_setup",
+            direction="positive",
+            detector="rotation_reclaim_setup",
+            params={
+                "setup_mode": "post_underperformance",
+                "lookback": 5,
+                "relative_window": 3,
+                "trigger": "none",
+                "min_prior_relative_return": -10.0,
+                "min_signal_repair": 0.0,
+                "max_signal": 2.0,
+                "min_relative_slope": -1.0,
+                "min_signal_slope": -1.0,
+                "min_gradient_slope": -1.0,
+                "exclude_late_leader_pullback": False,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
             variant_id="test.chaotic_chop_resolution",
             family_id="chaotic_chop_resolution",
             direction="positive",
@@ -370,6 +390,393 @@ def test_all_component_strict_survivor_detectors_return_aligned_masks() -> None:
         assert mask.any()
 
 
+def test_supervised_epoch_detectors_return_aligned_masks() -> None:
+    frame = _analysis_frame()
+    frame["target"] = pd.Series(
+        [100, 103, 108, 112, 109, 106, 103, 101, 99, 98]
+        + [99, 101, 104, 107, 105, 103, 101, 100, 99, 98]
+        + [100 + idx for idx in range(60)],
+        index=frame.index,
+        dtype=float,
+    )
+    frame["relative_component"] = (
+        [0.1, 0.2, 0.4, 0.7, 0.5, 0.2, 0.0, -0.1, -0.2, -0.1]
+        + [-0.2, -0.1, 0.0, 0.2, 0.5, 0.8, 1.0, 1.1, 1.2, 1.3]
+        + [0.2] * 60
+    )[: len(frame)]
+    variants = [
+        RuleVariant(
+            variant_id="test.warning_absent_bullish_setup",
+            family_id="warning_absent_bullish_setup",
+            direction="positive",
+            detector="warning_absent_bullish_setup",
+            params={
+                "setup": "zone_reclaim_retest",
+                "level": 0.0,
+                "tolerance": 0.5,
+                "hold_bars": 3,
+                "lookback": 5,
+                "warning_context_window": 3,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.warning_active_bullish_setup",
+            family_id="warning_absent_bullish_setup",
+            direction="positive",
+            detector="warning_absent_bullish_setup",
+            params={
+                "setup": "zone_reclaim_retest",
+                "warning_mode": "active",
+                "level": 0.0,
+                "tolerance": 0.5,
+                "hold_bars": 3,
+                "lookback": 5,
+                "warning_context_window": 3,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.fresh_leader_ignition",
+            family_id="fresh_leader_ignition",
+            direction="positive",
+            detector="fresh_leader_ignition",
+            params={
+                "relative_window": 3,
+                "min_relative_slope": -0.1,
+                "max_signal": 2.0,
+                "min_gradient_slope": -0.5,
+                "price_lookback": 5,
+                "below_high_margin": 0.0,
+                "trigger": "zero_reclaim",
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.fresh_leader_ignition.warning_absent",
+            family_id="fresh_leader_ignition",
+            direction="positive",
+            detector="fresh_leader_ignition",
+            params={
+                "relative_window": 3,
+                "min_relative_slope": -0.1,
+                "max_signal": 2.0,
+                "min_gradient_slope": -0.5,
+                "price_lookback": 5,
+                "below_high_margin": 0.0,
+                "trigger": "zero_reclaim",
+                "require_warning_absent": True,
+                "warning_lookback": 5,
+                "warning_context_window": 3,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.fresh_relative_compression_breakout",
+            family_id="fresh_relative_compression_breakout",
+            direction="positive",
+            detector="fresh_relative_compression_breakout",
+            params={
+                "relative_window": 3,
+                "gradient_window": 3,
+                "compression_window": 5,
+                "price_lookback": 5,
+                "min_compression": 50.0,
+                "min_relative_slope": -0.1,
+                "min_gradient_slope": -0.5,
+                "min_signal": -1.0,
+                "max_signal": 2.0,
+                "max_prior_signal": 2.0,
+                "below_high_margin": 0.0,
+                "trigger": "zero_reclaim",
+                "require_warning_absent": False,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.warning_context",
+            family_id="warning_context",
+            direction="negative",
+            detector="warning_context",
+            params={
+                "warning_mode": "active",
+                "warning_lookback": 5,
+                "warning_context_window": 3,
+                "min_prior_signal": 0.5,
+                "max_signal": 2.0,
+                "relative_window": 3,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.warning_cleared_reclaim",
+            family_id="warning_cleared_reclaim",
+            direction="positive",
+            detector="warning_cleared_reclaim",
+            params={
+                "warning_lookback": 5,
+                "warning_context_window": 3,
+                "clearance_window": 5,
+                "relative_window": 3,
+                "min_relative_slope": -0.1,
+                "trigger": "zero_reclaim",
+                "max_signal": 2.0,
+                "min_recent_signal_low": -0.5,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.regime_confirmed_reclaim",
+            family_id="regime_confirmed_reclaim",
+            direction="positive",
+            detector="regime_confirmed_reclaim",
+            params={
+                "relative_window": 3,
+                "benchmark_window": 3,
+                "min_relative_slope": -0.1,
+                "min_benchmark_return": -0.1,
+                "trigger": "zero_reclaim",
+                "require_warning_absent": False,
+                "max_signal": 2.0,
+                "min_compression": 50.0,
+                "min_recent_signal_low": -0.5,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.trend_continuation_no_warning",
+            family_id="trend_continuation_no_warning",
+            direction="positive",
+            detector="trend_continuation_no_warning",
+            params={
+                "window": 5,
+                "relative_window": 3,
+                "gradient_window": 3,
+                "min_signal": -1.0,
+                "max_signal": 2.0,
+                "min_time_above": 0.2,
+                "min_relative_slope": -0.5,
+                "min_gradient_slope": -0.5,
+                "warning_mode": "ignore",
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.trend_pullback_hold",
+            family_id="trend_pullback_hold",
+            direction="positive",
+            detector="trend_pullback_hold",
+            params={
+                "lookback": 5,
+                "relative_window": 3,
+                "min_prior_signal": 0.5,
+                "hold_tolerance": 0.5,
+                "max_pressure_distance": 1.0,
+                "min_relative_slope": -0.5,
+                "warning_mode": "ignore",
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.leader_pullback_component",
+            family_id="leader_pullback_component",
+            direction="negative",
+            detector="leader_pullback_component",
+            params={
+                "lookback": 5,
+                "relative_window": 3,
+                "min_prior_signal": 0.5,
+                "hold_tolerance": 0.5,
+                "max_pressure_distance": 1.0,
+                "min_relative_slope": -0.5,
+                "min_signal_slope": -0.5,
+                "warning_mode": "ignore",
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.parent_context_bullish_setup",
+            family_id="parent_context_bullish_setup",
+            direction="positive",
+            detector="parent_context_bullish_setup",
+            params={
+                "setup": "zone_reclaim_retest",
+                "parent_mode": "ignore",
+                "level": 0.0,
+                "tolerance": 0.5,
+                "hold_bars": 3,
+                "lookback": 5,
+                "parent_context_window": 5,
+                "timeframe": "1d",
+            },
+        ),
+        RuleVariant(
+            variant_id="test.compression_warning_bullish_setup",
+            family_id="compression_warning_bullish_setup",
+            direction="positive",
+            detector="compression_warning_bullish_setup",
+            params={
+                "setup": "zone_reclaim_retest",
+                "warning_mode": "ignore",
+                "level": 0.0,
+                "tolerance": 0.5,
+                "hold_bars": 3,
+                "lookback": 5,
+                "warning_context_window": 5,
+                "timeframe": "1d",
+            },
+        ),
+    ]
+
+    for variant in variants:
+        mask = detect_variant_events(frame, variant)
+        assert mask.index.equals(frame.index)
+        assert mask.dtype == bool
+
+
+def test_parent_context_bullish_setup_splits_active_and_absent_parent() -> None:
+    frame = _analysis_frame(periods=20)
+    frame["final_signal"] = pd.Series(
+        [0.5, 1.2, 1.5, 0.4, -0.2, 0.1, 0.2, 0.3, 0.4, 0.5] + [0.6] * 10,
+        index=frame.index,
+        dtype=float,
+    )
+    frame["viscosity"] = frame["final_signal"]
+    frame["relative_component"] = pd.Series(range(len(frame)), index=frame.index, dtype=float)
+
+    base_params = {
+        "setup": "zone_reclaim_retest",
+        "level": 0.0,
+        "tolerance": 0.5,
+        "hold_bars": 2,
+        "lookback": 3,
+        "parent_context_window": 3,
+        "parent_lookback": 3,
+        "parent_relative_window": 1,
+        "parent_min_prior_signal": 1.0,
+        "parent_hold_tolerance": 0.1,
+        "parent_max_pressure_distance": 0.1,
+        "parent_min_relative_slope": -1.0,
+        "parent_min_signal_slope": -1.0,
+        "timeframe": "1d",
+    }
+    active_variant = RuleVariant(
+        variant_id="test.parent_context.active",
+        family_id="parent_context_bullish_setup",
+        direction="positive",
+        detector="parent_context_bullish_setup",
+        params={**base_params, "parent_mode": "active"},
+    )
+    absent_variant = RuleVariant(
+        variant_id="test.parent_context.absent",
+        family_id="parent_context_bullish_setup",
+        direction="positive",
+        detector="parent_context_bullish_setup",
+        params={**base_params, "parent_mode": "absent", "parent_min_prior_signal": 3.0},
+    )
+
+    active_mask = detect_variant_events(frame, active_variant)
+    absent_mask = detect_variant_events(frame, absent_variant)
+
+    assert active_mask.any()
+    assert absent_mask.any()
+
+
+def test_compression_warning_bullish_setup_splits_active_and_absent_warning() -> None:
+    frame = _analysis_frame(periods=20)
+    frame["final_signal"] = pd.Series(
+        [-0.4, -0.2, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] + [0.9] * 10,
+        index=frame.index,
+        dtype=float,
+    )
+    frame["viscosity"] = 0.0
+    frame["compression_score"] = 100.0
+    frame["relative_component"] = pd.Series(range(len(frame)), index=frame.index, dtype=float)
+
+    base_params = {
+        "setup": "zone_reclaim_retest",
+        "level": 0.0,
+        "tolerance": 0.5,
+        "hold_bars": 2,
+        "lookback": 3,
+        "warning_context_window": 3,
+        "warning_min_compression": 70.0,
+        "warning_trigger": "zero_reclaim",
+        "warning_relative_window": 1,
+        "warning_min_relative_slope": -1.0,
+        "timeframe": "1d",
+    }
+    active_variant = RuleVariant(
+        variant_id="test.compression_warning.active",
+        family_id="compression_warning_bullish_setup",
+        direction="negative",
+        detector="compression_warning_bullish_setup",
+        params={**base_params, "warning_mode": "active"},
+    )
+    absent_variant = RuleVariant(
+        variant_id="test.compression_warning.absent",
+        family_id="compression_warning_bullish_setup",
+        direction="positive",
+        detector="compression_warning_bullish_setup",
+        params={**base_params, "warning_mode": "absent", "warning_min_compression": 200.0},
+    )
+
+    active_mask = detect_variant_events(frame, active_variant)
+    absent_mask = detect_variant_events(frame, absent_variant)
+
+    assert active_mask.any()
+    assert absent_mask.any()
+
+
+def test_leader_pullback_component_can_ablate_parent_ingredients() -> None:
+    frame = _analysis_frame()
+    base_params = {
+        "lookback": 5,
+        "relative_window": 3,
+        "min_prior_signal": 0.5,
+        "hold_tolerance": 0.5,
+        "max_pressure_distance": 1.0,
+        "min_relative_slope": -0.5,
+        "min_signal_slope": -0.5,
+        "warning_mode": "ignore",
+        "timeframe": "1d",
+    }
+    full = RuleVariant(
+        variant_id="test.leader_pullback_component.full",
+        family_id="leader_pullback_component",
+        direction="negative",
+        detector="leader_pullback_component",
+        params=base_params,
+    )
+    prior_only = RuleVariant(
+        variant_id="test.leader_pullback_component.prior_only",
+        family_id="leader_pullback_component",
+        direction="negative",
+        detector="leader_pullback_component",
+        params={
+            **base_params,
+            "require_near_viscosity": False,
+            "require_signal_slope_floor": False,
+            "require_relative_slope_floor": False,
+        },
+    )
+    no_prior = RuleVariant(
+        variant_id="test.leader_pullback_component.no_prior",
+        family_id="leader_pullback_component",
+        direction="negative",
+        detector="leader_pullback_component",
+        params={**base_params, "require_prior_strength": False},
+    )
+
+    full_mask = detect_variant_events(frame, full)
+    prior_only_mask = detect_variant_events(frame, prior_only)
+    no_prior_mask = detect_variant_events(frame, no_prior)
+
+    assert full_mask.any()
+    assert prior_only_mask.sum() >= full_mask.sum()
+    assert no_prior_mask.sum() >= full_mask.sum()
+
+
 def test_lower_high_rollover_optional_feature_filters() -> None:
     frame = _analysis_frame()
     base_variant = RuleVariant(
@@ -448,6 +855,7 @@ def test_run_grammar_search_builds_ranked_outputs(tmp_path) -> None:
                 "forward_return_30": 0.25,
                 "forward_relative_return_30": 0.12,
                 "max_drawdown_30": -0.03,
+                "max_favorable_excursion_30": 0.18,
             },
             {
                 "symbol": "BBB",
@@ -472,6 +880,7 @@ def test_run_grammar_search_builds_ranked_outputs(tmp_path) -> None:
                 "forward_return_30": 0.22,
                 "forward_relative_return_30": 0.11,
                 "max_drawdown_30": -0.04,
+                "max_favorable_excursion_30": 0.16,
             },
             {
                 "symbol": "CCC",
@@ -496,6 +905,7 @@ def test_run_grammar_search_builds_ranked_outputs(tmp_path) -> None:
                 "forward_return_30": 0.21,
                 "forward_relative_return_30": 0.10,
                 "max_drawdown_30": -0.02,
+                "max_favorable_excursion_30": 0.14,
             },
         ]
     )
@@ -505,6 +915,8 @@ def test_run_grammar_search_builds_ranked_outputs(tmp_path) -> None:
     row = summary[summary["variant_id"] == variants[0].variant_id].iloc[0]
     assert row["sample_size"] == 3
     assert row["classification"] == "useful"
+    assert row["median_max_favorable_excursion"] == 0.16
+    assert round(row["median_mfe_mae_ratio"], 3) == 5.333
 
 
 def test_grammar_search_meta_summaries_build_review_outputs(tmp_path) -> None:
@@ -556,6 +968,68 @@ def test_grammar_search_meta_summaries_build_review_outputs(tmp_path) -> None:
     assert "review_outcome" in queue.columns
     assert queue.loc[queue["timeframe"] == "4h", "review_outcome_column"].iloc[0] == "forward_relative_return_180"
     assert "validation_status" in validation.columns
+
+
+def test_time_split_validation_can_use_stable_timeframe_cutoff() -> None:
+    ranked = pd.DataFrame(
+        [
+            {
+                "variant_id": "test.variant",
+                "family_id": "test",
+                "timeframe": "1d",
+                "direction": "negative",
+                "classification": "useful",
+                "rank_score": 1.0,
+            }
+        ]
+    )
+    records = pd.DataFrame(
+        [
+            {
+                "variant_id": "test.variant",
+                "symbol": "AAA",
+                "date": pd.Timestamp("2024-01-01"),
+                "timeframe": "1d",
+                "event_cluster_id": "2024-01",
+                "forward_relative_return_30": -0.10,
+            },
+            {
+                "variant_id": "test.variant",
+                "symbol": "BBB",
+                "date": pd.Timestamp("2024-01-02"),
+                "timeframe": "1d",
+                "event_cluster_id": "2024-01",
+                "forward_relative_return_30": -0.08,
+            },
+            {
+                "variant_id": "test.variant",
+                "symbol": "CCC",
+                "date": pd.Timestamp("2024-01-03"),
+                "timeframe": "1d",
+                "event_cluster_id": "2024-01",
+                "forward_relative_return_30": -0.06,
+            },
+            {
+                "variant_id": "test.variant",
+                "symbol": "DDD",
+                "date": pd.Timestamp("2024-01-04"),
+                "timeframe": "1d",
+                "event_cluster_id": "2024-01",
+                "forward_relative_return_30": -0.04,
+            },
+        ]
+    )
+
+    validation = time_split_validation(
+        ranked,
+        records,
+        min_validation_sample=2,
+        timeframe_cutoffs={"1d": pd.Timestamp("2024-01-02")},
+    )
+
+    row = validation.iloc[0]
+    assert row["split_sample_size_validation"] == 2
+    assert row["validation_status"] == "time_split_supported"
 
 
 def test_run_grammar_search_uses_analysis_frames(tmp_path) -> None:

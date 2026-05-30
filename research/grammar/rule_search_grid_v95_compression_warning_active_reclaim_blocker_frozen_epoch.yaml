@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_warning_active_reclaim_blocker_frozen
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Frozen active compression-warning lower-threshold compression reclaim blocker from epoch 34.
+    parameter_grid:
+      setup: [compression_reclaim]
+      warning_mode: [active]
+      min_compression: [40.0, 55.0]
+      trigger: [viscosity_reclaim]
+      relative_window: [5]
+      min_relative_slope: [0.02]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]

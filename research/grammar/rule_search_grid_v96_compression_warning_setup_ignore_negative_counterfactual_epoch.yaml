@@ -1,0 +1,56 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_warning_setup_ignore_failed_weakness_negative
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Failed-weakness reclaim baseline with compression-warning context ignored.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [ignore]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_setup_ignore_zone_negative
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Zone reclaim/retest baseline with compression-warning context ignored.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      warning_mode: [ignore]
+      level: [-1.5, 0.0]
+      tolerance: [0.15, 0.3]
+      hold_bars: [3, 5]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_setup_ignore_reclaim_negative
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Compression reclaim baseline with compression-warning context ignored.
+    parameter_grid:
+      setup: [compression_reclaim]
+      warning_mode: [ignore]
+      min_compression: [40.0, 55.0]
+      trigger: [viscosity_reclaim]
+      relative_window: [5, 8]
+      min_relative_slope: [-0.02, 0.02]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]

@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: relative_strength_leads_price_parent_absent
+    direction: positive
+    detector: rotation_reclaim_setup
+    description: Relative strength improves before price fully breaks out, excluding late-leader pullback risk.
+    parameter_grid:
+      setup_mode: [relative_leads_price]
+      lookback: [13, 20]
+      relative_window: [5]
+      trigger: [none, viscosity_reclaim]
+      max_price_return: [0.1, 0.2]
+      min_relative_return: [0.05, 0.1]
+      below_high_margin: [0.0, 0.02]
+      min_relative_slope: [0.03]
+      min_signal_slope: [-0.02, 0.0]
+      min_gradient_slope: [-0.05]
+      exclude_late_leader_pullback: [true]
+      parent_context_window: [20]

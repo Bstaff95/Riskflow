@@ -1,0 +1,29 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: raw_pullback_flat_to_fading_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Tests whether flatter or fading signal slope is the core no-chase ingredient.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.1, -0.05, 0.0]
+      warning_mode: [ignore]
+
+  - family_id: raw_pullback_relative_still_strong_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Tests whether no-chase risk persists even while short-term relative slope remains strong.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5, 8]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.03, 0.06]
+      min_signal_slope: [-0.05, 0.0]
+      warning_mode: [ignore]

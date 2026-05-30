@@ -1,0 +1,29 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: raw_pullback_mild_leader_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Tests whether the no-chase signal begins on only mild prior leadership.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [0.75, 1.0]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25, 0.4]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [ignore]
+
+  - family_id: raw_pullback_extended_leader_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Tests whether stronger prior leadership increases no-chase risk.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.5, 2.0]
+      hold_tolerance: [0.05, 0.1, 0.25]
+      max_pressure_distance: [0.15, 0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [ignore]

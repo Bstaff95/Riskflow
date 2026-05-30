@@ -1,0 +1,15 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_warning_cleared_relative_reclaim_permission
+    direction: positive
+    detector: warning_cleared_reclaim
+    description: Warning clears, relative repair is positive, and viscosity reclaims.
+    parameter_grid:
+      warning_lookback: [20]
+      warning_context_window: [8]
+      clearance_window: [8, 13]
+      relative_window: [5, 8]
+      min_relative_slope: [0.02, 0.05]
+      trigger: [viscosity_reclaim]
+      max_signal: [1.0]
+      min_recent_signal_low: [-1.5, -1.0]

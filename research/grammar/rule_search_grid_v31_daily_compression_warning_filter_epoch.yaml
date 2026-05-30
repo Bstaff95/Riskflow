@@ -1,0 +1,23 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_daily_compression_reclaim
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Compression reclaim with warning absence and improving relative pressure.
+    parameter_grid:
+      setup: [compression_reclaim]
+      warning_mode: [absent]
+      min_compression: [50.0, 60.0, 65.0]
+      trigger: [zero_reclaim, viscosity_reclaim]
+      relative_window: [8, 13]
+      min_relative_slope: [0.02]
+      lookback: [20]
+      warning_context_window: [5, 8]
+
+  - family_id: daily_compression_reclaim_baseline
+    direction: positive
+    detector: compression_reclaim
+    description: Compression reclaim baseline without warning filtering.
+    parameter_grid:
+      min_compression: [50.0, 60.0, 65.0]
+      trigger: [zero_reclaim, viscosity_reclaim]

@@ -1,0 +1,22 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_fresh_relative_compression_breakout_permission
+    direction: positive
+    detector: fresh_relative_compression_breakout
+    description: Fresh relative repair from compression before price extension, with standard warning absent.
+    parameter_grid:
+      relative_window: [5, 8]
+      gradient_window: [5, 8]
+      compression_window: [20]
+      price_lookback: [20]
+      min_compression: [55.0, 70.0]
+      min_relative_slope: [0.02, 0.05]
+      min_gradient_slope: [0.0, 0.02]
+      min_signal: [-1.0]
+      max_signal: [0.75, 1.25]
+      max_prior_signal: [1.25]
+      below_high_margin: [0.02]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]

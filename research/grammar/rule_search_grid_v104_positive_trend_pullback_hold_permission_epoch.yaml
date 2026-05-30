@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_trend_pullback_hold_permission
+    direction: positive
+    detector: trend_pullback_hold
+    description: Prior leader pullback holding near viscosity with relative repair and no standard warning.
+    parameter_grid:
+      lookback: [20, 34]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.15, 0.3]
+      max_pressure_distance: [0.35]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]

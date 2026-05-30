@@ -1,0 +1,18 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_warning_active_zone_blocker_frozen
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Frozen active compression-warning zone reclaim/retest blocker from epoch 34.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      warning_mode: [active]
+      level: [0.0]
+      tolerance: [0.15]
+      hold_bars: [3, 5]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]

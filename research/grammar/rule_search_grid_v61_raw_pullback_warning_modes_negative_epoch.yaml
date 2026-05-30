@@ -1,0 +1,63 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: raw_pullback_warning_ignore_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Parent pullback no-chase signal without warning gating.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [ignore]
+
+  - family_id: raw_pullback_warning_active_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Parent pullback no-chase signal while warning context is active.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: raw_pullback_warning_absent_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Parent pullback no-chase signal when warning context is absent.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: raw_pullback_warning_cleared_negative
+    direction: negative
+    detector: trend_pullback_hold
+    description: Parent pullback no-chase signal after warning context recently cleared.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]

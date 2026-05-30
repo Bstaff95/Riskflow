@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -21,6 +22,8 @@ from .config import UniverseConfig, load_universe_config
 from .data_loader import load_universe_ohlcv
 from .grammar_search import (
     GRAMMAR_SEARCH_MODEL,
+    expand_rule_variants,
+    load_rule_search_grid,
     run_grammar_search,
     strict_baseline_referee,
     timeframe_cooldown,
@@ -45,7 +48,16 @@ DEFAULT_CONCEPT_SCOREBOARD_PATH = Path("research/lab_loop/concept_scoreboard.yam
 
 TERMINAL_STATUSES = {"promoted", "demoted", "archived", "failed", "blocked_by_evidence"}
 RUNNABLE_STATUSES = {"new", "encoded", "tested", "tested_needs_fresh_data", "needs_encoding"}
-BRANCH_DECISIONS = {"promote", "refine", "broaden", "pair", "invert", "archive", "agent_review"}
+BRANCH_DECISIONS = {
+    "promote",
+    "refine",
+    "broaden",
+    "pair",
+    "invert",
+    "archive",
+    "agent_review",
+    "rerun_required",
+}
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class LabLoopOptions:
     resume: bool = False
     dry_run: bool = False
     auto_refine: bool = True
+    auto_gate_followups: bool = True
 
 
 def utc_now_iso() -> str:
@@ -124,7 +137,14 @@ def load_lab_queue(path: str | Path = DEFAULT_QUEUE_PATH) -> dict[str, Any]:
     return data
 
 
-def validate_lab_queue(data: dict[str, Any]) -> list[str]:
+def validate_lab_queue(
+    data: dict[str, Any],
+    *,
+    validate_sources: bool = False,
+    max_source_variants: int | None = None,
+    source_timeframes: tuple[str, ...] = ("1d", "12h", "4h", "1h"),
+    source_root: str | Path = Path("."),
+) -> list[str]:
     errors: list[str] = []
     if data.get("model") != "riskflow_lab_loop_hypothesis_queue_v0":
         errors.append("model must be riskflow_lab_loop_hypothesis_queue_v0")
@@ -157,6 +177,24 @@ def validate_lab_queue(data: dict[str, Any]) -> list[str]:
         primitives = item.get("measurable_primitives", [])
         if primitives is not None and not isinstance(primitives, list):
             errors.append(f"{label}.measurable_primitives must be a list")
+        if validate_sources and item.get("source"):
+            source = Path(str(item["source"]))
+            source_path = source if source.is_absolute() else Path(source_root) / source
+            if not source_path.exists():
+                errors.append(f"{label}.source does not exist: {source}")
+            else:
+                try:
+                    specs = load_rule_search_grid(source_path)
+                except Exception as exc:
+                    errors.append(f"{label}.source invalid grammar grid {source}: {exc}")
+                else:
+                    if max_source_variants is not None and item.get("status") in {"new", "encoded"}:
+                        variant_count = len(expand_rule_variants(specs, timeframes=source_timeframes))
+                        if variant_count > max_source_variants:
+                            errors.append(
+                                f"{label}.source expands to {variant_count} variants; "
+                                f"limit is {max_source_variants}"
+                            )
     return errors
 
 
@@ -184,7 +222,7 @@ def data_fingerprint(data_dir: str | Path, timeframes: tuple[str, ...]) -> str:
         for path in sorted(root.glob(f"*_{timeframe}.csv")):
             stat = path.stat()
             rows.append(f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}")
-    return str(abs(hash("|".join(rows))))
+    return hashlib.sha256("|".join(rows).encode("utf-8")).hexdigest()[:16]
 
 
 def select_next_hypothesis(queue: dict[str, Any], state: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -219,6 +257,294 @@ def select_next_hypothesis(queue: dict[str, Any], state: dict[str, Any] | None =
 def is_executable_hypothesis(hypothesis: dict[str, Any]) -> bool:
     source = hypothesis.get("source")
     return bool(source) and Path(str(source)).suffix.lower() in {".yaml", ".yml"}
+
+
+def _safe_slug(value: str, *, max_length: int = 72) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_").lower()
+    return (slug or "item")[:max_length]
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _frozen_parameter_grid(params: dict[str, Any], updates: dict[str, Any] | None = None) -> dict[str, list[Any]]:
+    frozen = {key: value for key, value in params.items() if key != "timeframe"}
+    if updates:
+        frozen.update(updates)
+    return {key: _as_list(value) for key, value in frozen.items()}
+
+
+def _best_gate_candidate(ranked: pd.DataFrame, strict_referee: pd.DataFrame) -> pd.Series | None:
+    candidates = strict_survivor_rows(strict_referee)
+    if candidates.empty:
+        return None
+    candidate = candidates.iloc[0]
+    if "variant_id" in candidate and "variant_id" in ranked.columns:
+        match = ranked[ranked["variant_id"] == candidate["variant_id"]]
+        if not match.empty:
+            return match.iloc[0]
+    return candidate if "params" in candidate else None
+
+
+def build_gate_grid(
+    row: pd.Series,
+    *,
+    family_suffix: str,
+    direction: str,
+    param_updates: dict[str, Any] | None = None,
+    description: str,
+) -> dict[str, Any]:
+    params = parse_params(row.get("params"))
+    detector = str(row.get("detector", ""))
+    family_id = _safe_slug(f"{row.get('family_id', 'family')}_{family_suffix}", max_length=96)
+    return {
+        "model": GRAMMAR_SEARCH_MODEL,
+        "families": [
+            {
+                "family_id": family_id,
+                "direction": direction,
+                "detector": detector,
+                "description": description,
+                "parameter_grid": _frozen_parameter_grid(params, param_updates),
+            }
+        ],
+    }
+
+
+def _gate_spec(
+    *,
+    name: str,
+    track: str,
+    direction: str,
+    stage: str,
+    hypothesis: str,
+    param_updates: dict[str, Any] | None = None,
+    entry_lag_bars: int | None = None,
+    cooldown_bars: int | None = None,
+    timeframes: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "name": name,
+        "track": track,
+        "direction": direction,
+        "stage": stage,
+        "hypothesis": hypothesis,
+        "param_updates": param_updates or {},
+    }
+    if entry_lag_bars is not None:
+        spec["entry_lag_bars"] = int(entry_lag_bars)
+    if cooldown_bars is not None:
+        spec["cooldown_bars"] = int(cooldown_bars)
+    if timeframes is not None:
+        spec["timeframes"] = list(timeframes)
+    return spec
+
+
+def gate_followup_specs(row: pd.Series, *, base_timeframes: tuple[str, ...]) -> list[dict[str, Any]]:
+    detector = str(row.get("detector", ""))
+    direction = str(row.get("direction", "positive"))
+    opposite_direction = "negative" if direction == "positive" else "positive"
+    primary_timeframe = str(row.get("timeframe", "")) or (base_timeframes[0] if base_timeframes else "1d")
+    primary_timeframes = (primary_timeframe,)
+
+    specs: list[dict[str, Any]] = [
+        _gate_spec(
+            name="validation_lag0",
+            track=str(row.get("track", "warning")) if "track" in row else ("warning" if direction == "negative" else "bullish_setup"),
+            direction=direction,
+            stage="validation",
+            hypothesis="Same frozen rule shape with entry lag 0.",
+            entry_lag_bars=0,
+            timeframes=primary_timeframes,
+        ),
+        _gate_spec(
+            name="validation_lag2",
+            track=str(row.get("track", "warning")) if "track" in row else ("warning" if direction == "negative" else "bullish_setup"),
+            direction=direction,
+            stage="validation",
+            hypothesis="Same frozen rule shape with entry lag 2.",
+            entry_lag_bars=2,
+            timeframes=primary_timeframes,
+        ),
+        _gate_spec(
+            name="validation_cooldown60",
+            track=str(row.get("track", "warning")) if "track" in row else ("warning" if direction == "negative" else "bullish_setup"),
+            direction=direction,
+            stage="validation",
+            hypothesis="Same frozen rule shape with 60-bar cooldown stress.",
+            cooldown_bars=60,
+            timeframes=primary_timeframes,
+        ),
+        _gate_spec(
+            name="validation_cooldown180",
+            track=str(row.get("track", "warning")) if "track" in row else ("warning" if direction == "negative" else "bullish_setup"),
+            direction=direction,
+            stage="validation",
+            hypothesis="Same frozen rule shape with 180-bar cooldown stress.",
+            cooldown_bars=180,
+            timeframes=primary_timeframes,
+        ),
+        _gate_spec(
+            name="direction_flip_counterfactual",
+            track="warning" if opposite_direction == "negative" else "bullish_setup",
+            direction=opposite_direction,
+            stage="attribution",
+            hypothesis="Same frozen rule shape with opposite direction to check whether the sign is specific.",
+            timeframes=primary_timeframes,
+        ),
+    ]
+
+    if detector == "compression_warning_bullish_setup":
+        specs.extend(
+            [
+                _gate_spec(
+                    name="setup_ignore_negative",
+                    track="warning",
+                    direction="negative",
+                    stage="attribution",
+                    hypothesis="Setup-alone negative baseline with compression-warning context ignored.",
+                    param_updates={"warning_mode": "ignore"},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="setup_ignore_positive",
+                    track="bullish_setup",
+                    direction="positive",
+                    stage="attribution",
+                    hypothesis="Setup-alone positive baseline with compression-warning context ignored.",
+                    param_updates={"warning_mode": "ignore"},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="warning_absent_negative",
+                    track="warning",
+                    direction="negative",
+                    stage="attribution",
+                    hypothesis="Warning-absent negative control for the same setup.",
+                    param_updates={"warning_mode": "absent"},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="warning_absent_positive",
+                    track="bullish_setup",
+                    direction="positive",
+                    stage="attribution",
+                    hypothesis="Warning-absent positive permission test for the same setup.",
+                    param_updates={"warning_mode": "absent"},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="warning_cleared_negative",
+                    track="warning",
+                    direction="negative",
+                    stage="attribution",
+                    hypothesis="Warning-cleared negative control for reset attribution.",
+                    param_updates={"warning_mode": "cleared"},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="warning_cleared_positive",
+                    track="bullish_setup",
+                    direction="positive",
+                    stage="attribution",
+                    hypothesis="Warning-cleared positive reset test for the same setup.",
+                    param_updates={"warning_mode": "cleared"},
+                    timeframes=primary_timeframes,
+                ),
+            ]
+        )
+    elif "require_warning_absent" in parse_params(row.get("params")):
+        specs.extend(
+            [
+                _gate_spec(
+                    name="warning_filter_off_positive",
+                    track="bullish_setup",
+                    direction="positive",
+                    stage="attribution",
+                    hypothesis="Same positive setup with warning-absent requirement disabled.",
+                    param_updates={"require_warning_absent": False},
+                    timeframes=primary_timeframes,
+                ),
+                _gate_spec(
+                    name="warning_filter_off_negative",
+                    track="warning",
+                    direction="negative",
+                    stage="attribution",
+                    hypothesis="Same setup with warning filter disabled and negative direction.",
+                    param_updates={"require_warning_absent": False},
+                    timeframes=primary_timeframes,
+                ),
+            ]
+        )
+
+    return specs
+
+
+def create_research_gate_followups(
+    *,
+    queue: dict[str, Any],
+    hypothesis: dict[str, Any],
+    ranked: pd.DataFrame,
+    strict_referee: pd.DataFrame,
+    options: LabLoopOptions,
+    session_id: str,
+    loop_number: int,
+    base_timeframes: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if hypothesis.get("research_gate_stage"):
+        return []
+    candidate = _best_gate_candidate(ranked, strict_referee)
+    if candidate is None or "params" not in candidate:
+        return []
+
+    existing_ids = {str(item.get("id")) for item in queue.get("queue", [])}
+    parent_id = str(hypothesis.get("id", "hypothesis"))
+    parent_root = root_hypothesis_id(parent_id)
+    children: list[dict[str, Any]] = []
+    for spec in gate_followup_specs(candidate, base_timeframes=base_timeframes):
+        child_id = _safe_slug(f"{parent_root}_{spec['name']}_l{loop_number:04d}", max_length=96)
+        if child_id in existing_ids:
+            continue
+        grid = build_gate_grid(
+            candidate,
+            family_suffix=f"{spec['name']}_l{loop_number:04d}",
+            direction=str(spec["direction"]),
+            param_updates=spec.get("param_updates", {}),
+            description=str(spec["hypothesis"]),
+        )
+        grid_path = options.generated_grid_dir / session_id / f"{child_id}.yaml"
+        atomic_write_yaml(grid_path, grid)
+        child = {
+            "id": child_id,
+            "track": spec["track"],
+            "status": "new",
+            "promotion_level": "L1_encoded",
+            "priority": int(hypothesis.get("priority", 100)) + 5 + len(children),
+            "parent_id": parent_id,
+            "generation": int(hypothesis.get("generation", 0) or 0) + 1,
+            "created_from": "research_gate_strict_survivor",
+            "research_gate_stage": spec["stage"],
+            "source": str(grid_path),
+            "hypothesis": spec["hypothesis"],
+            "measurable_primitives": list(hypothesis.get("measurable_primitives", [])) + [spec["stage"]],
+            "expected_outcome": "positive_forward_relative_return"
+            if spec["direction"] == "positive"
+            else "negative_forward_relative_return",
+            "next_action": "Run research-gate follow-up before any product translation.",
+        }
+        if "entry_lag_bars" in spec:
+            child["entry_lag_bars"] = spec["entry_lag_bars"]
+        if "cooldown_bars" in spec:
+            child["cooldown_bars"] = spec["cooldown_bars"]
+        if "timeframes" in spec:
+            child["timeframes"] = spec["timeframes"]
+        queue.setdefault("queue", []).append(child)
+        existing_ids.add(child_id)
+        children.append(child)
+    return children
 
 
 def load_analysis_frames_by_timeframe(
@@ -509,6 +835,15 @@ def analyze_recent_loops(history: list[dict[str, Any]], *, checkpoint_interval: 
     promoted = decision_counts.get("promote", 0)
     refined = decision_counts.get("refine", 0)
     archived_or_failed = decision_counts.get("archive", 0) + decision_counts.get("failed", 0)
+    bullish_entries = [entry for entry in recent if str(entry.get("track", "")) == "bullish_setup"]
+    bullish_evidence = [
+        entry
+        for entry in bullish_entries
+        if str(entry.get("decision", "")) in {"promote", "refine"} and int(entry.get("useful_count", 0) or 0) > 0
+    ]
+    warning_promotes = [
+        entry for entry in recent if str(entry.get("track", "")) == "warning" and str(entry.get("decision", "")) == "promote"
+    ]
     error_total = sum(int(entry.get("errors", 0) or 0) for entry in recent)
     total_survivors = sum(int(entry.get("survivor_count", 0) or 0) for entry in recent)
     max_generation = max((int(entry.get("generation", 0) or 0) for entry in recent), default=0)
@@ -535,6 +870,12 @@ def analyze_recent_loops(history: list[dict[str, Any]], *, checkpoint_interval: 
         interventions.append("boost_bullish_setup_track")
     if "warning" in track_counts and "bullish_setup" not in track_counts:
         not_doing_well.append("Recent learning is skewed toward avoiding bad trades, not finding best long setups.")
+    if bullish_entries and not bullish_evidence:
+        not_doing_well.append("Bullish setup concepts were tested but produced no useful setup evidence.")
+        interventions.append("broaden_bullish_setup_search")
+    if warning_promotes and bullish_entries and not bullish_evidence:
+        not_doing_well.append("Warnings are dominating discoveries; convert them into filters while exploring new long setup families.")
+        interventions.append("translate_warning_to_setup_filters")
     if "gradient_translation" in track_counts:
         mission_questions.append("Gradient translation is being touched, but should remain evidence-gated.")
     if dominant_root_share >= 0.8 and loop_count >= 3:
@@ -595,6 +936,7 @@ def apply_checkpoint_interventions(
     *,
     completed_hypothesis_ids: set[str],
     latest_child_id: str | None,
+    max_actions: int = 40,
 ) -> list[str]:
     actions: list[str] = []
     interventions = set(checkpoint.get("interventions", []))
@@ -609,7 +951,11 @@ def apply_checkpoint_interventions(
         for track, count in dict(checkpoint.get("track_counts", {})).items()
         if count == int(checkpoint.get("loop_count", 0) or 0)
     }
+    truncated = False
     for item in queue.get("queue", []):
+        if len(actions) >= max_actions:
+            truncated = True
+            break
         item_id = str(item.get("id", ""))
         if item_id in completed_hypothesis_ids:
             continue
@@ -676,6 +1022,8 @@ def apply_checkpoint_interventions(
             actions.append(f"boosted non-executable alternative {item_id} priority {old_priority}->{item['priority']}")
     if not actions:
         actions.append("no queue intervention available; all alternatives were completed, terminal, or non-actionable")
+    elif truncated:
+        actions.append(f"checkpoint action cap reached at {max_actions}; remaining queue items were left unchanged")
     return actions
 
 
@@ -865,14 +1213,47 @@ def concept_root_from_entry(entry: dict[str, Any]) -> str:
 
 
 def _best_report_row(ranked: pd.DataFrame, strict: pd.DataFrame) -> dict[str, Any]:
-    source = strict if not strict.empty else ranked
+    if not strict.empty and "strict_survivor" in strict.columns:
+        strict_survivors = strict[strict["strict_survivor"].eq(True)].copy()
+        source = strict_survivors if not strict_survivors.empty else ranked
+    else:
+        source = ranked
     if source.empty:
         return {}
+    if "classification" in source.columns:
+        classified = source[source["classification"].isin(["useful", "watchlist"])].copy()
+        if not classified.empty:
+            source = classified
     if "rank_score" in source.columns:
         scored = source.copy()
         scored["_rank_score_numeric"] = pd.to_numeric(scored["rank_score"], errors="coerce")
-        scored = scored.sort_values("_rank_score_numeric", ascending=False, na_position="last")
-        return scored.iloc[0].drop(labels=["_rank_score_numeric"], errors="ignore").to_dict()
+        scored["_validation_weight"] = scored.get("validation_status", pd.Series("", index=scored.index)).map(
+            {
+                "time_split_supported": 3,
+                "direction_supported_low_sample": 2,
+                "not_time_split_supported": 1,
+            }
+        ).fillna(0)
+        scored["_classification_weight"] = scored.get("classification", pd.Series("", index=scored.index)).map(
+            {"useful": 2, "watchlist": 1}
+        ).fillna(0)
+        for column in ("unique_event_clusters", "unique_symbols", "sample_size"):
+            values = scored[column] if column in scored.columns else pd.Series(0, index=scored.index)
+            scored[f"_{column}_numeric"] = pd.to_numeric(values, errors="coerce").fillna(0)
+        scored = scored.sort_values(
+            [
+                "_classification_weight",
+                "_validation_weight",
+                "_unique_event_clusters_numeric",
+                "_unique_symbols_numeric",
+                "_sample_size_numeric",
+                "_rank_score_numeric",
+            ],
+            ascending=False,
+            na_position="last",
+        )
+        helper_columns = [column for column in scored.columns if column.startswith("_")]
+        return scored.iloc[0].drop(labels=helper_columns, errors="ignore").to_dict()
     return source.iloc[0].to_dict()
 
 
@@ -935,7 +1316,9 @@ def summarize_epoch_concepts(entries: list[dict[str, Any]]) -> list[dict[str, An
 
 def decide_epoch_branch(concept: dict[str, Any]) -> str:
     decisions = dict(concept.get("decisions", {}))
-    if decisions.get("failed") or decisions.get("archive"):
+    if decisions.get("failed"):
+        return "rerun_required"
+    if decisions.get("archive"):
         return "archive"
     if int(concept.get("strict_survivors", 0) or 0) > 0:
         return "promote"
@@ -952,7 +1335,7 @@ def estimate_epoch_novelty(concept: dict[str, Any]) -> int:
         score += 2
     if concept.get("track") in {"bullish_setup", "mtf_context"}:
         score += 2
-    if concept.get("branch_decision") in {"pair", "invert", "agent_review"}:
+    if concept.get("branch_decision") in {"pair", "invert", "agent_review", "rerun_required"}:
         score += 2
     if int(concept.get("strict_survivors", 0) or 0) > 0:
         score += 1
@@ -1069,6 +1452,8 @@ def write_epoch_reports(
 def _branch_reason(concept: dict[str, Any]) -> str:
     if concept["branch_decision"] == "promote":
         return f"{concept['strict_survivors']} strict survivor row(s) found in this epoch."
+    if concept["branch_decision"] == "rerun_required":
+        return "Loop failed before evidence was generated; fix the source or runner issue and rerun."
     if concept["branch_decision"] == "agent_review":
         return "Useful/watchlist evidence exists, but repeated refinement needs supervisor review."
     if concept["branch_decision"] == "refine":
@@ -1082,6 +1467,8 @@ def _suggest_next_action(concept: dict[str, Any]) -> str:
     decision = concept["branch_decision"]
     if decision == "promote":
         return "Freeze the current rule shape and run validation/fresh-data checks before more refinement."
+    if decision == "rerun_required":
+        return "Fix the failure cause, validate the source grid, and rerun the same concept under a retry id."
     if decision == "agent_review":
         return "Codex should review evidence and decide whether to pair, invert, refine, or archive."
     if decision == "refine":
@@ -1184,11 +1571,33 @@ def update_concept_scoreboard(path: Path, concepts: list[dict[str, Any]]) -> Non
 def _promotion_from_branch_decision(decision: str) -> str:
     if decision == "promote":
         return "L3_strict_survivor"
+    if decision == "rerun_required":
+        return "rerun_required"
     if decision in {"refine", "agent_review", "pair", "invert"}:
         return "L2_discovered"
     if decision == "archive":
         return "archived"
     return "L1_encoded"
+
+
+def _hypothesis_timeframes(hypothesis: dict[str, Any], fallback: tuple[str, ...]) -> tuple[str, ...]:
+    raw = hypothesis.get("timeframes")
+    if raw is None:
+        return fallback
+    if isinstance(raw, str):
+        values = [raw]
+    else:
+        values = list(raw)
+    return tuple(normalize_timeframe(str(value)) for value in values)
+
+
+def _hypothesis_entry_lag(hypothesis: dict[str, Any], fallback: int) -> int:
+    return int(hypothesis.get("entry_lag_bars", fallback))
+
+
+def _hypothesis_cooldown(hypothesis: dict[str, Any], fallback: int | None) -> int | None:
+    value = hypothesis.get("cooldown_bars", fallback)
+    return int(value) if value is not None else None
 
 
 def run_lab_epoch(options: LabLoopOptions, *, epoch_size: int = 5) -> dict[str, Any]:
@@ -1339,18 +1748,31 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                 if not grid_path.exists():
                     raise FileNotFoundError(f"hypothesis source grid does not exist: {grid_path}")
                 shutil.copy2(grid_path, loop_dir / "hypothesis.yaml")
+                search_timeframes = _hypothesis_timeframes(hypothesis, normalized_timeframes)
+                missing_timeframes = sorted(set(search_timeframes) - set(normalized_timeframes))
+                if missing_timeframes:
+                    raise ValueError(
+                        f"hypothesis requests unloaded timeframe(s): {', '.join(missing_timeframes)}; "
+                        f"loaded timeframes are {', '.join(normalized_timeframes)}"
+                    )
+                search_entry_lag = _hypothesis_entry_lag(hypothesis, options.entry_lag_bars)
+                search_cooldown = _hypothesis_cooldown(hypothesis, options.cooldown_bars)
                 cooldowns = (
-                    {timeframe: int(options.cooldown_bars) for timeframe in normalized_timeframes}
-                    if options.cooldown_bars is not None
+                    {timeframe: int(search_cooldown) for timeframe in search_timeframes}
+                    if search_cooldown is not None
                     else None
                 )
+                search_analysis = {
+                    timeframe: analysis_by_timeframe.get(timeframe, {})
+                    for timeframe in search_timeframes
+                }
                 summary, records, ranked, family_summary, variants = run_grammar_search(
-                    analysis_by_timeframe,
+                    search_analysis,
                     grid_path=grid_path,
-                    timeframes=normalized_timeframes,
+                    timeframes=search_timeframes,
                     benchmark_name=universe.benchmark.name if universe is not None else "MEME_BASKET",
                     min_sample_size=options.min_sample_size,
-                    entry_lag_bars=options.entry_lag_bars,
+                    entry_lag_bars=search_entry_lag,
                     cooldown_bars_by_timeframe=cooldowns,
                 )
                 manifest = {
@@ -1358,11 +1780,11 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                     "search_model": GRAMMAR_SEARCH_MODEL,
                     "hypothesis_id": hypothesis.get("id"),
                     "source_grid": str(grid_path),
-                    "timeframes": list(normalized_timeframes),
+                    "timeframes": list(search_timeframes),
                     "min_sample_size": options.min_sample_size,
-                    "entry_lag_bars": options.entry_lag_bars,
+                    "entry_lag_bars": search_entry_lag,
                     "cooldown_bars_by_timeframe": cooldowns
-                    or {timeframe: timeframe_cooldown(timeframe) for timeframe in normalized_timeframes},
+                    or {timeframe: timeframe_cooldown(timeframe) for timeframe in search_timeframes},
                     "variant_count": len(variants),
                     "record_count": int(len(records)),
                     "started_at": state.get("updated_at"),
@@ -1384,8 +1806,8 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                     strict = strict_baseline_referee(
                         ranked,
                         records,
-                        analysis_by_timeframe,
-                        entry_lag_bars=options.entry_lag_bars,
+                        search_analysis,
+                        entry_lag_bars=search_entry_lag,
                         null_iterations=options.strict_null_iterations,
                         random_seed=options.strict_random_seed + loop_number,
                     )
@@ -1405,8 +1827,22 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                     if options.auto_refine
                     else None
                 )
-                if child:
-                    atomic_write_yaml(loop_dir / "next_hypotheses.yaml", {"queue": [child]})
+                children = [child] if child else []
+                if options.auto_gate_followups and decision.get("decision") == "promote":
+                    children.extend(
+                        create_research_gate_followups(
+                            queue=queue,
+                            hypothesis=hypothesis,
+                            ranked=ranked,
+                            strict_referee=strict,
+                            options=options,
+                            session_id=session_id,
+                            loop_number=loop_number,
+                            base_timeframes=search_timeframes,
+                        )
+                    )
+                if children:
+                    atomic_write_yaml(loop_dir / "next_hypotheses.yaml", {"queue": children})
                 else:
                     atomic_write_yaml(loop_dir / "next_hypotheses.yaml", {"queue": []})
                 write_loop_summary(

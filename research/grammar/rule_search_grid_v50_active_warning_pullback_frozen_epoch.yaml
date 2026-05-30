@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: active_warning_trend_pullback_frozen
+    direction: negative
+    detector: trend_pullback_hold
+    description: Frozen active-warning pullback invalidation shape from epoch 7 strict survivors.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0]
+      min_signal_slope: [-0.05]
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]

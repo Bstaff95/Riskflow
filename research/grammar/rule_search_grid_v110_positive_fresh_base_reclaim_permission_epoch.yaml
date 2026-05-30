@@ -1,0 +1,18 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_fresh_base_reclaim_permission
+    direction: positive
+    detector: rotation_reclaim_setup
+    description: Fresh base reclaim before obvious extension.
+    parameter_grid:
+      setup_mode: [fresh_base_reclaim]
+      lookback: [20, 34]
+      relative_window: [5]
+      trigger: [viscosity_reclaim]
+      min_relative_slope: [0.02, 0.04]
+      min_signal_slope: [0.0]
+      min_gradient_slope: [0.0]
+      max_prior_signal: [0.75, 1.0]
+      max_signal: [1.0]
+      min_compression: [40.0, 60.0]
+      exclude_late_leader_pullback: [true]

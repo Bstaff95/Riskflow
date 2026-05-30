@@ -114,6 +114,29 @@ Every epoch should follow the same order:
 7. Update the next epoch intentionally. Do not treat same-sample refinements as
    validation.
 
+## Research Gates
+
+A strict survivor does not move straight to product translation. The runner now
+appends research-gate follow-ups before more narrow optimization:
+
+- attribution gates: same setup positive and negative, warning active/absent/cleared
+  where applicable, and setup-only controls;
+- validation gates: same frozen rule shape at alternate entry lags and cooldowns;
+- direction gates: opposite-direction controls to confirm the sign of the edge.
+
+Runtime queue items may carry their own `timeframes`, `entry_lag_bars`, and
+`cooldown_bars` overrides. This lets a single epoch mix discovery, attribution,
+and validation tests without changing production formulas or TradingView
+defaults.
+
+Promotion meaning after this change:
+
+- strict survivor means "advance to gates";
+- attribution survivor means "the cause is clearer";
+- validation survivor means "candidate can move toward fresh-data review";
+- no candidate becomes gradient or indicator logic until it has passed those
+  gates and a Codex supervisor review.
+
 Open-ended `lab-loop run` remains available for controlled testing, but the
 preferred research mode is `lab-loop run-epoch`.
 
@@ -268,6 +291,40 @@ latest status file links the most recent checkpoint.
 
 Epoch reports live under each session's `epochs/` directory. The durable concept
 scoreboard lives at `research/lab_loop/concept_scoreboard.yaml`.
+
+Meta-supervised runs add a deterministic supervisor after each epoch. The
+supervisor is not an indicator change and does not modify production formulas.
+It reads the latest epoch, queue, state, and concept scoreboard, then writes
+auditable artifacts:
+
+- `supervisor_input.json`;
+- `supervisor_decisions.yaml`;
+- `queue_patch.yaml`;
+- `supervisor_summary.md`;
+- `research/lab_loop/evidence_ledger.yaml`.
+
+Use a dry-run first when changing supervisor policy:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop supervise-epoch --dry-run
+```
+
+Run repeated self-improving epochs:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop run-supervised \
+  --epochs 50 \
+  --epoch-size 5 \
+  --strict-referee \
+  --strict-null-iterations 1000 \
+  --timeframes 1d 12h 4h 1h \
+  --resume
+```
+
+The v1 supervisor is deterministic and auditable. It prioritizes strict-survivor
+validation gates, reserves space for bullish setup work when available, caps
+same-root dominance in the next epoch plan, cools over-deep non-validation
+lineages, and records evidence decisions without changing indicator behavior.
 
 Discovery:
 

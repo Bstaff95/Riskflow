@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: buyable_leader_pullback_reacceleration
+    direction: positive
+    detector: trend_pullback_hold
+    description: "Counterexample test: leader pullback becomes buyable only if signal slope and relative slope are already reaccelerating."
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.03, 0.06]
+      min_signal_slope: [0.0, 0.03]
+      warning_mode: [absent, cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]

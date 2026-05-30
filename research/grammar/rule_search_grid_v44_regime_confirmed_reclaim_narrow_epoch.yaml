@@ -1,0 +1,33 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: regime_confirmed_compression_reclaim_narrow
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Narrow retry of regime-confirmed compression reclaim after budget interruption.
+    parameter_grid:
+      relative_window: [5]
+      benchmark_window: [5]
+      min_relative_slope: [0.0]
+      min_benchmark_return: [0.03]
+      trigger: [zero_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      max_signal: [1.0]
+      min_compression: [65.0]
+
+  - family_id: regime_confirmed_deep_reset_reclaim_narrow
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Narrow retry of regime-confirmed deep reset reclaim after budget interruption.
+    parameter_grid:
+      relative_window: [5]
+      benchmark_window: [5]
+      min_relative_slope: [0.0]
+      min_benchmark_return: [0.03]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      max_signal: [0.5]
+      min_recent_signal_low: [-1.0]

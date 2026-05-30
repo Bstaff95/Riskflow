@@ -1,0 +1,35 @@
+model: riskflow_grammar_search_v0
+families:
+- family_id: positive_regime_reclaim_tf_transfer
+  direction: positive
+  detector: regime_confirmed_reclaim
+  description: Transfer test for the positive reclaim permission shape on intraday
+    bars.
+  parameter_grid:
+    relative_window:
+    - 5
+    - 8
+    benchmark_window:
+    - 5
+    - 8
+    min_relative_slope:
+    - 0.03
+    - 0.04
+    - 0.05
+    min_benchmark_return:
+    - 0.0
+    - 0.01
+    trigger:
+    - viscosity_reclaim
+    require_warning_absent:
+    - true
+    max_signal:
+    - 0.75
+    - 1.0
+    min_compression:
+    - 30.0
+    - 40.0
+    warning_lookback:
+    - 20
+    warning_context_window:
+    - 8

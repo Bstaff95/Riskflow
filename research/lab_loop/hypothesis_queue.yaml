@@ -133,7 +133,7 @@ queue:
     status: tested_needs_fresh_data
     promotion_level: L2_discovered
     priority: 6
-    source: research/grammar/rule_search_grid_v6_4h_lower_high_warning_candidate.yaml
+    source: research/grammar/rule_search_grid_v23_lower_high_epoch.yaml
     hypothesis: >
       Lower-high rollover after leadership marks fading pressure and future
       relative underperformance, with separate 4h and daily branches.
@@ -149,9 +149,10 @@ queue:
 
   - id: warning_pair_filter_invalidation_study
     track: warning
-    status: needs_encoding
+    status: new
     promotion_level: L0_registered
     priority: 7
+    source: research/grammar/rule_search_grid_v20_warning_filter_epoch.yaml
     hypothesis: >
       Relative failed breakout and lower-high rollover may be more valuable as
       entry blockers, no-chase filters, and invalidation states than as
@@ -168,9 +169,10 @@ queue:
 
   - id: bullish_reclaim_retest_hold_journey
     track: bullish_setup
-    status: needs_encoding
+    status: new
     promotion_level: L0_registered
     priority: 8
+    source: research/grammar/rule_search_grid_v21_reclaim_retest_hold_epoch.yaml
     hypothesis: >
       A reclaim is only actionable when the follow-up retest holds and downside
       does not re-accelerate.
@@ -191,9 +193,10 @@ queue:
 
   - id: bullish_fresh_leader_ignition
     track: bullish_setup
-    status: needs_encoding
+    status: new
     promotion_level: L0_registered
     priority: 9
+    source: research/grammar/rule_search_grid_v22_fresh_leader_ignition_epoch.yaml
     hypothesis: >
       The best long setup may appear when relative strength improves before
       price fully breaks out and before Riskflow reaches obvious extension.
@@ -208,9 +211,10 @@ queue:
 
   - id: mtf_disagreement_early_repair
     track: mtf_context
-    status: needs_encoding
+    status: new
     promotion_level: L0_registered
     priority: 10
+    source: research/grammar/rule_search_grid_v24_mtf_proxy_early_repair_epoch.yaml
     hypothesis: >
       Early opportunities may occur when 1h or 4h repairs while 12h or 1d
       still looks damaged, but only if higher-timeframe warning grammar is not

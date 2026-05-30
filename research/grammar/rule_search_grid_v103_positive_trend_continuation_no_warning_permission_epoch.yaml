@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_trend_continuation_no_warning_permission
+    direction: positive
+    detector: trend_continuation_no_warning
+    description: Trend continuation only when pressure acceptance, relative repair, and no standard warning align.
+    parameter_grid:
+      window: [10, 20]
+      relative_window: [5]
+      gradient_window: [5]
+      min_signal: [0.0, 0.5]
+      max_signal: [1.5]
+      min_time_above: [0.6, 0.8]
+      min_relative_slope: [0.02]
+      min_gradient_slope: [0.0]
+      max_pressure_distance: [0.35, 0.75]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]

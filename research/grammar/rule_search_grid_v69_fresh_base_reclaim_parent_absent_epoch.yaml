@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: fresh_base_reclaim_parent_absent
+    direction: positive
+    detector: rotation_reclaim_setup
+    description: Fresh base reclaim from non-extended prior signal with late-leader pullback excluded.
+    parameter_grid:
+      setup_mode: [fresh_base_reclaim]
+      lookback: [13, 20]
+      relative_window: [5]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      max_prior_signal: [0.5, 1.0]
+      max_signal: [1.0]
+      min_compression: [40.0, 60.0]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.02, 0.0]
+      min_gradient_slope: [-0.05]
+      exclude_late_leader_pullback: [true]
+      parent_context_window: [20]

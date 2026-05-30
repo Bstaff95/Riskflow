@@ -1,0 +1,30 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_fresh_leader_ignition
+    direction: positive
+    detector: fresh_leader_ignition
+    description: Fresh relative leadership before extension, requiring no active warning context.
+    parameter_grid:
+      relative_window: [8]
+      min_relative_slope: [0.03, 0.05]
+      max_signal: [0.5, 0.75]
+      min_gradient_slope: [0.03]
+      price_lookback: [13]
+      below_high_margin: [0.02, 0.04]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: raw_fresh_leader_ignition_baseline
+    direction: positive
+    detector: fresh_leader_ignition
+    description: Raw fresh-leader baseline for warning-gated comparison.
+    parameter_grid:
+      relative_window: [8]
+      min_relative_slope: [0.03, 0.05]
+      max_signal: [0.5, 0.75]
+      min_gradient_slope: [0.03]
+      price_lookback: [13]
+      below_high_margin: [0.02, 0.04]
+      trigger: [viscosity_reclaim]

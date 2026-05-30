@@ -1,0 +1,31 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_failed_weakness_path_breadth
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Failed-weakness reclaim retested for breadth and MFE path quality.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [absent]
+      lookback: [10, 13, 20]
+      zone_max: [-1.5, -2.0]
+      low_tolerance: [0.25, 0.4]
+      min_slope: [0.0, 0.05]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim]
+      warning_context_window: [5, 8]
+      warning_lookback: [20]
+
+  - family_id: failed_weakness_path_breadth_baseline
+    direction: positive
+    detector: failed_weakness_reclaim
+    description: Failed-weakness reclaim baseline for path-quality comparison.
+    parameter_grid:
+      lookback: [10, 13, 20]
+      zone_max: [-1.5, -2.0]
+      low_tolerance: [0.25, 0.4]
+      min_slope: [0.0, 0.05]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim]

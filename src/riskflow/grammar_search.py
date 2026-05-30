@@ -16,6 +16,7 @@ from .research_outcomes import (
     entry_date_at,
     event_cluster_id,
     forward_max_drawdown,
+    forward_max_favorable_excursion,
     forward_relative_return,
     forward_return,
     hit_rate_or_nan,
@@ -246,6 +247,155 @@ def _fast_slow_pressure_gap(frame: pd.DataFrame, signal: pd.Series, viscosity: p
     )
 
 
+def _warning_context_mask(
+    signal: pd.Series,
+    viscosity: pd.Series,
+    relative: pd.Series,
+    gradient: pd.Series,
+    *,
+    lookback: int,
+    context_window: int,
+) -> pd.Series:
+    lower_high = (
+        _lower_high_mask(
+            signal,
+            lookback=lookback,
+            recent_window=max(3, context_window),
+            min_prior_high=1.0,
+            min_lower_high_gap=0.2,
+        )
+        & (signal.diff() < 0.0)
+        & (gradient.diff() < 0.0)
+    )
+    relative_failed = _relative_failed_breakout_mask(
+        relative,
+        lookback=lookback,
+        fail_window=max(2, context_window),
+        min_breakout_margin=0.0,
+    ) & _loss_trigger(signal, viscosity, "viscosity_loss")
+    return (_recent(lower_high, context_window) | _recent(relative_failed, context_window)).fillna(False)
+
+
+def _leader_pullback_parent_mask(
+    signal: pd.Series,
+    viscosity: pd.Series,
+    relative: pd.Series,
+    *,
+    lookback: int,
+    relative_window: int,
+    min_prior_signal: float,
+    hold_tolerance: float,
+    max_pressure_distance: float,
+    min_relative_slope: float,
+    min_signal_slope: float,
+) -> pd.Series:
+    prior_signal_high = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+    relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+    pressure = signal - viscosity
+    holding = (pressure >= -hold_tolerance) & (pressure.abs() <= max_pressure_distance)
+    return (
+        (prior_signal_high >= min_prior_signal)
+        & holding
+        & (signal.diff() >= min_signal_slope)
+        & (relative_slope >= min_relative_slope)
+    ).fillna(False)
+
+
+def _leader_pullback_context_mask(
+    signal: pd.Series,
+    viscosity: pd.Series,
+    relative: pd.Series,
+    params: dict[str, Any],
+    *,
+    context_window: int,
+) -> pd.Series:
+    parent = _leader_pullback_parent_mask(
+        signal,
+        viscosity,
+        relative,
+        lookback=int(params.get("parent_lookback", params.get("lookback", 20))),
+        relative_window=int(params.get("parent_relative_window", params.get("relative_window", 5))),
+        min_prior_signal=float(params.get("parent_min_prior_signal", 1.0)),
+        hold_tolerance=float(params.get("parent_hold_tolerance", 0.25)),
+        max_pressure_distance=float(params.get("parent_max_pressure_distance", 0.25)),
+        min_relative_slope=float(params.get("parent_min_relative_slope", 0.0)),
+        min_signal_slope=float(params.get("parent_min_signal_slope", -0.05)),
+    )
+    return _recent(parent, context_window)
+
+
+def _compression_reclaim_context_mask(
+    signal: pd.Series,
+    viscosity: pd.Series,
+    relative: pd.Series,
+    compression: pd.Series,
+    params: dict[str, Any],
+    *,
+    context_window: int,
+) -> pd.Series:
+    relative_window = int(params.get("warning_relative_window", params.get("relative_window", 8)))
+    relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+    warning = (
+        (compression >= float(params.get("warning_min_compression", 70.0)))
+        & _reclaim_trigger(signal, viscosity, str(params.get("warning_trigger", "viscosity_reclaim")))
+        & (relative_slope >= float(params.get("warning_min_relative_slope", -0.02)))
+    )
+    return _recent(warning.fillna(False), context_window)
+
+
+def _bullish_setup_mask(
+    signal: pd.Series,
+    viscosity: pd.Series,
+    relative: pd.Series,
+    compression: pd.Series,
+    params: dict[str, Any],
+) -> pd.Series:
+    setup = str(params.get("setup", "failed_weakness_reclaim"))
+    lookback = int(params.get("lookback", 13))
+    trigger = str(params.get("trigger", "viscosity_reclaim"))
+
+    if setup == "zone_reclaim_retest":
+        level = float(params.get("level", 0.0))
+        tolerance = float(params.get("tolerance", 0.15))
+        hold_bars = int(params.get("hold_bars", 3))
+        reclaim = _crosses_above(signal, level)
+        recent_reclaim = _recent(reclaim, hold_bars + 1)
+        return (
+            recent_reclaim
+            & signal.between(level - tolerance, level + tolerance)
+            & (signal >= level - tolerance)
+            & (signal.diff() >= 0.0)
+        ).fillna(False)
+
+    if setup == "compression_reclaim":
+        min_compression = float(params.get("min_compression", 60.0))
+        min_relative_slope = float(params.get("min_relative_slope", -0.02))
+        relative_window = int(params.get("relative_window", 5))
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        return (
+            (compression >= min_compression)
+            & _reclaim_trigger(signal, viscosity, trigger)
+            & (relative_slope >= min_relative_slope)
+        ).fillna(False)
+
+    zone_max = float(params.get("zone_max", -1.5))
+    low_tolerance = float(params.get("low_tolerance", 0.25))
+    min_slope = float(params.get("min_slope", 0.0))
+    relative_slope_min = float(params.get("relative_slope_min", -0.05))
+    recent_window = int(params.get("recent_window", 8))
+    weakness = _failed_weakness_mask(
+        signal,
+        relative,
+        lookback=lookback,
+        zone_max=zone_max,
+        low_tolerance=low_tolerance,
+        min_slope=min_slope,
+        relative_slope_min=relative_slope_min,
+    )
+    recent_weakness = weakness.shift(1).astype("boolean").fillna(False).astype(bool)
+    return (_recent(recent_weakness, recent_window) & _reclaim_trigger(signal, viscosity, trigger)).fillna(False)
+
+
 def detect_variant_events(frame: pd.DataFrame, variant: RuleVariant) -> pd.Series:
     signal = _as_numeric(frame, "final_signal")
     viscosity = _as_numeric(frame, "viscosity")
@@ -323,6 +473,78 @@ def detect_variant_events(frame: pd.DataFrame, variant: RuleVariant) -> pd.Serie
         recent_weakness = weakness.shift(1).astype("boolean").fillna(False).astype(bool)
         return (_recent(recent_weakness, recent_window) & _reclaim_trigger(signal, viscosity, trigger)).fillna(False)
 
+    if detector == "rotation_reclaim_setup":
+        mode = str(params.get("setup_mode", "post_underperformance"))
+        lookback = int(params.get("lookback", 20))
+        relative_window = int(params.get("relative_window", 5))
+        trigger = str(params.get("trigger", "viscosity_reclaim"))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        min_signal_slope = float(params.get("min_signal_slope", 0.0))
+        min_gradient_slope = float(params.get("min_gradient_slope", -0.05))
+        target = _as_numeric(frame, "target")
+        benchmark = _as_numeric(frame, "benchmark")
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        signal_slope = (signal - signal.shift(relative_window)) / max(1, relative_window)
+        gradient_slope = (gradient - gradient.shift(relative_window)) / max(1, relative_window)
+        target_return = target.pct_change(lookback, fill_method=None)
+        benchmark_return = benchmark.pct_change(lookback, fill_method=None)
+        relative_return = target_return - benchmark_return
+        prior_signal_high = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+        prior_signal_low = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).min()
+        price_high = target.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+        trigger_mask = (
+            pd.Series(True, index=frame.index, dtype=bool)
+            if trigger == "none"
+            else _reclaim_trigger(signal, viscosity, trigger)
+        )
+        mask = (
+            trigger_mask
+            & (relative_slope >= min_relative_slope)
+            & (signal_slope >= min_signal_slope)
+            & (gradient_slope >= min_gradient_slope)
+        )
+
+        if mode == "fresh_base_reclaim":
+            max_prior_signal = float(params.get("max_prior_signal", 1.0))
+            max_signal = float(params.get("max_signal", 1.0))
+            min_compression = float(params.get("min_compression", 0.0))
+            mask &= (prior_signal_high <= max_prior_signal) & (signal <= max_signal) & (compression >= min_compression)
+        elif mode == "relative_leads_price":
+            max_price_return = float(params.get("max_price_return", 0.15))
+            min_relative_return = float(params.get("min_relative_return", 0.05))
+            below_high_margin = float(params.get("below_high_margin", 0.02))
+            mask &= (
+                (target_return <= max_price_return)
+                & (relative_return >= min_relative_return)
+                & (target <= price_high * (1.0 - below_high_margin))
+            )
+        else:
+            min_prior_relative_return = float(params.get("min_prior_relative_return", -0.20))
+            min_signal_repair = float(params.get("min_signal_repair", 0.15))
+            max_signal = float(params.get("max_signal", 1.0))
+            mask &= (
+                (relative_return <= min_prior_relative_return)
+                & (signal >= prior_signal_low + min_signal_repair)
+                & (signal <= max_signal)
+            )
+
+        if bool(params.get("exclude_late_leader_pullback", True)):
+            parent = _leader_pullback_parent_mask(
+                signal,
+                viscosity,
+                relative,
+                lookback=int(params.get("parent_lookback", 20)),
+                relative_window=int(params.get("parent_relative_window", 5)),
+                min_prior_signal=float(params.get("parent_min_prior_signal", 1.0)),
+                hold_tolerance=float(params.get("parent_hold_tolerance", 0.25)),
+                max_pressure_distance=float(params.get("parent_max_pressure_distance", 0.25)),
+                min_relative_slope=float(params.get("parent_min_relative_slope", 0.0)),
+                min_signal_slope=float(params.get("parent_min_signal_slope", -0.05)),
+            )
+            parent_context_window = int(params.get("parent_context_window", lookback))
+            mask &= ~_recent(parent, parent_context_window)
+        return mask.fillna(False)
+
     if detector == "zone_reclaim_retest":
         level = float(params.get("level", 0.0))
         tolerance = float(params.get("tolerance", 0.15))
@@ -335,6 +557,112 @@ def detect_variant_events(frame: pd.DataFrame, variant: RuleVariant) -> pd.Serie
         near_level = signal.between(level - tolerance, level + tolerance)
         holding = signal >= level - tolerance
         return (recent_reclaim & near_level & holding & (signal.diff() >= 0.0)).fillna(False)
+
+    if detector == "warning_absent_bullish_setup":
+        warning_mode = str(params.get("warning_mode", "absent"))
+        context_window = int(params.get("warning_context_window", 8))
+        lookback = int(params.get("lookback", 13))
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=max(lookback, int(params.get("warning_lookback", lookback))),
+            context_window=context_window,
+        )
+        setup_mask = _bullish_setup_mask(signal, viscosity, relative, compression, params)
+        if warning_mode == "active":
+            return (setup_mask & warning).fillna(False)
+        if warning_mode == "cleared":
+            prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), context_window)
+            return (setup_mask & ~warning & prior_warning).fillna(False)
+        return (setup_mask & ~warning).fillna(False)
+
+    if detector == "parent_context_bullish_setup":
+        parent_mode = str(params.get("parent_mode", "absent"))
+        context_window = int(params.get("parent_context_window", params.get("context_window", 20)))
+        setup_mask = _bullish_setup_mask(signal, viscosity, relative, compression, params)
+        parent_context = _leader_pullback_context_mask(
+            signal,
+            viscosity,
+            relative,
+            params,
+            context_window=context_window,
+        )
+        if parent_mode == "active":
+            return (setup_mask & parent_context).fillna(False)
+        if parent_mode == "cleared":
+            prior_parent = _recent(parent_context.shift(1).astype("boolean").fillna(False).astype(bool), context_window)
+            return (setup_mask & ~parent_context & prior_parent).fillna(False)
+        if parent_mode == "ignore":
+            return setup_mask.fillna(False)
+        return (setup_mask & ~parent_context).fillna(False)
+
+    if detector == "compression_warning_bullish_setup":
+        warning_mode = str(params.get("warning_mode", "absent"))
+        context_window = int(params.get("warning_context_window", params.get("context_window", 20)))
+        setup_mask = _bullish_setup_mask(signal, viscosity, relative, compression, params)
+        warning_context = _compression_reclaim_context_mask(
+            signal,
+            viscosity,
+            relative,
+            compression,
+            params,
+            context_window=context_window,
+        )
+        if warning_mode == "active":
+            return (setup_mask & warning_context).fillna(False)
+        if warning_mode == "cleared":
+            prior_warning = _recent(warning_context.shift(1).astype("boolean").fillna(False).astype(bool), context_window)
+            return (setup_mask & ~warning_context & prior_warning).fillna(False)
+        if warning_mode == "ignore":
+            return setup_mask.fillna(False)
+        return (setup_mask & ~warning_context).fillna(False)
+
+    if detector == "warning_context":
+        warning_mode = str(params.get("warning_mode", "active"))
+        lookback = int(params.get("warning_lookback", params.get("lookback", 20)))
+        context_window = int(params.get("warning_context_window", params.get("context_window", 8)))
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=lookback,
+            context_window=context_window,
+        )
+        if warning_mode == "cleared":
+            clearance_window = int(params.get("clearance_window", context_window))
+            prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), clearance_window)
+            mask = prior_warning & ~warning
+        elif warning_mode == "absent":
+            mask = ~warning
+        else:
+            mask = warning
+
+        min_signal = params.get("min_signal")
+        max_signal = params.get("max_signal")
+        min_prior_signal = params.get("min_prior_signal")
+        max_pressure_distance = params.get("max_pressure_distance")
+        min_relative_slope = params.get("min_relative_slope")
+        max_relative_slope = params.get("max_relative_slope")
+        relative_window = int(params.get("relative_window", context_window))
+        if min_signal is not None:
+            mask &= signal >= float(min_signal)
+        if max_signal is not None:
+            mask &= signal <= float(max_signal)
+        if min_prior_signal is not None:
+            prior_signal_high = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+            mask &= prior_signal_high >= float(min_prior_signal)
+        if max_pressure_distance is not None:
+            mask &= (signal - viscosity).abs() <= float(max_pressure_distance)
+        if min_relative_slope is not None or max_relative_slope is not None:
+            relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+            if min_relative_slope is not None:
+                mask &= relative_slope >= float(min_relative_slope)
+            if max_relative_slope is not None:
+                mask &= relative_slope <= float(max_relative_slope)
+        return mask.fillna(False)
 
     if detector == "curvature_from_low_zone":
         zone_max = float(params.get("zone_max", -1.0))
@@ -675,6 +1003,281 @@ def detect_variant_events(frame: pd.DataFrame, variant: RuleVariant) -> pd.Serie
         trigger = str(params.get("trigger", "viscosity_reclaim"))
         return ((compression >= min_compression) & _reclaim_trigger(signal, viscosity, trigger)).fillna(False)
 
+    if detector == "fresh_leader_ignition":
+        relative_window = int(params.get("relative_window", 5))
+        min_relative_slope = float(params.get("min_relative_slope", 0.03))
+        max_signal = float(params.get("max_signal", 1.0))
+        min_gradient_slope = float(params.get("min_gradient_slope", 0.0))
+        price_lookback = int(params.get("price_lookback", 20))
+        below_high_margin = float(params.get("below_high_margin", 0.02))
+        trigger = str(params.get("trigger", "zero_reclaim"))
+        require_warning_absent = bool(params.get("require_warning_absent", False))
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        gradient_slope = (gradient - gradient.shift(relative_window)) / max(1, relative_window)
+        target = _as_numeric(frame, "target")
+        prior_high = target.shift(1).rolling(price_lookback, min_periods=max(3, price_lookback // 2)).max()
+        below_recent_high = target <= prior_high * (1.0 - below_high_margin)
+        mask = (
+            (relative_slope >= min_relative_slope)
+            & (gradient_slope >= min_gradient_slope)
+            & (signal <= max_signal)
+            & below_recent_high
+            & _reclaim_trigger(signal, viscosity, trigger)
+        )
+        if require_warning_absent:
+            warning = _warning_context_mask(
+                signal,
+                viscosity,
+                relative,
+                gradient,
+                lookback=int(params.get("warning_lookback", 20)),
+                context_window=int(params.get("warning_context_window", 8)),
+            )
+            mask &= ~warning
+        return mask.fillna(False)
+
+    if detector == "fresh_relative_compression_breakout":
+        relative_window = int(params.get("relative_window", 5))
+        gradient_window = int(params.get("gradient_window", 5))
+        compression_window = int(params.get("compression_window", 20))
+        price_lookback = int(params.get("price_lookback", 20))
+        min_compression = float(params.get("min_compression", 60.0))
+        min_relative_slope = float(params.get("min_relative_slope", 0.03))
+        min_gradient_slope = float(params.get("min_gradient_slope", 0.0))
+        min_signal = float(params.get("min_signal", -1.0))
+        max_signal = float(params.get("max_signal", 1.0))
+        max_prior_signal = params.get("max_prior_signal")
+        below_high_margin = float(params.get("below_high_margin", 0.02))
+        trigger = str(params.get("trigger", "viscosity_reclaim"))
+        require_warning_absent = bool(params.get("require_warning_absent", True))
+
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        gradient_slope = (gradient - gradient.shift(gradient_window)) / max(1, gradient_window)
+        compression_context = compression.shift(1).rolling(
+            compression_window,
+            min_periods=max(3, compression_window // 2),
+        ).max() >= min_compression
+        target = _as_numeric(frame, "target")
+        prior_high = target.shift(1).rolling(price_lookback, min_periods=max(3, price_lookback // 2)).max()
+        not_price_extended = target <= prior_high * (1.0 - below_high_margin)
+        mask = (
+            compression_context
+            & signal.between(min_signal, max_signal)
+            & (relative_slope >= min_relative_slope)
+            & (gradient_slope >= min_gradient_slope)
+            & not_price_extended
+            & _reclaim_trigger(signal, viscosity, trigger)
+        )
+        if max_prior_signal is not None:
+            prior_signal_high = signal.shift(1).rolling(
+                price_lookback,
+                min_periods=max(3, price_lookback // 2),
+            ).max()
+            mask &= prior_signal_high <= float(max_prior_signal)
+        if require_warning_absent:
+            warning = _warning_context_mask(
+                signal,
+                viscosity,
+                relative,
+                gradient,
+                lookback=int(params.get("warning_lookback", 20)),
+                context_window=int(params.get("warning_context_window", 8)),
+            )
+            mask &= ~warning
+        return mask.fillna(False)
+
+    if detector == "warning_cleared_reclaim":
+        warning_lookback = int(params.get("warning_lookback", 20))
+        warning_context_window = int(params.get("warning_context_window", 8))
+        clearance_window = int(params.get("clearance_window", 8))
+        relative_window = int(params.get("relative_window", 5))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        trigger = str(params.get("trigger", "viscosity_reclaim"))
+        max_signal = params.get("max_signal")
+        min_recent_signal_low = params.get("min_recent_signal_low")
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=warning_lookback,
+            context_window=warning_context_window,
+        )
+        prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), clearance_window)
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        mask = prior_warning & ~warning & _reclaim_trigger(signal, viscosity, trigger) & (
+            relative_slope >= min_relative_slope
+        )
+        if max_signal is not None:
+            mask &= signal <= float(max_signal)
+        if min_recent_signal_low is not None:
+            recent_low = signal.shift(1).rolling(clearance_window, min_periods=max(2, clearance_window // 2)).min()
+            mask &= recent_low <= float(min_recent_signal_low)
+        return mask.fillna(False)
+
+    if detector == "regime_confirmed_reclaim":
+        relative_window = int(params.get("relative_window", 5))
+        benchmark_window = int(params.get("benchmark_window", 5))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        min_benchmark_return = float(params.get("min_benchmark_return", 0.0))
+        trigger = str(params.get("trigger", "viscosity_reclaim"))
+        require_warning_absent = bool(params.get("require_warning_absent", True))
+        max_signal = params.get("max_signal")
+        min_compression = params.get("min_compression")
+        min_recent_signal_low = params.get("min_recent_signal_low")
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        benchmark = _as_numeric(frame, "benchmark")
+        benchmark_return = benchmark.pct_change(benchmark_window, fill_method=None)
+        mask = (
+            _reclaim_trigger(signal, viscosity, trigger)
+            & (relative_slope >= min_relative_slope)
+            & (benchmark_return >= min_benchmark_return)
+        )
+        if max_signal is not None:
+            mask &= signal <= float(max_signal)
+        if min_compression is not None:
+            mask &= compression >= float(min_compression)
+        if min_recent_signal_low is not None:
+            recent_low = signal.shift(1).rolling(relative_window * 2, min_periods=max(2, relative_window)).min()
+            mask &= recent_low <= float(min_recent_signal_low)
+        if require_warning_absent:
+            warning = _warning_context_mask(
+                signal,
+                viscosity,
+                relative,
+                gradient,
+                lookback=int(params.get("warning_lookback", 20)),
+                context_window=int(params.get("warning_context_window", 8)),
+            )
+            mask &= ~warning
+        return mask.fillna(False)
+
+    if detector == "trend_continuation_no_warning":
+        window = int(params.get("window", 10))
+        relative_window = int(params.get("relative_window", 5))
+        gradient_window = int(params.get("gradient_window", 5))
+        min_signal = float(params.get("min_signal", 0.0))
+        max_signal = params.get("max_signal")
+        min_time_above = float(params.get("min_time_above", 0.6))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        min_gradient_slope = float(params.get("min_gradient_slope", 0.0))
+        max_pressure_distance = params.get("max_pressure_distance")
+        warning_mode = str(params.get("warning_mode", "absent"))
+        time_above = (signal > viscosity).astype(float).rolling(window, min_periods=max(2, window // 2)).mean()
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        gradient_slope = (gradient - gradient.shift(gradient_window)) / max(1, gradient_window)
+        mask = (
+            (signal >= min_signal)
+            & (signal > viscosity)
+            & (time_above >= min_time_above)
+            & (relative_slope >= min_relative_slope)
+            & (gradient_slope >= min_gradient_slope)
+        )
+        if max_signal is not None:
+            mask &= signal <= float(max_signal)
+        if max_pressure_distance is not None:
+            mask &= (signal - viscosity).abs() <= float(max_pressure_distance)
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=int(params.get("warning_lookback", 20)),
+            context_window=int(params.get("warning_context_window", 8)),
+        )
+        if warning_mode == "cleared":
+            prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), window)
+            mask &= prior_warning & ~warning
+        elif warning_mode == "active":
+            mask &= warning
+        elif warning_mode != "ignore":
+            mask &= ~warning
+        return mask.fillna(False)
+
+    if detector == "trend_pullback_hold":
+        lookback = int(params.get("lookback", 20))
+        relative_window = int(params.get("relative_window", 5))
+        min_prior_signal = float(params.get("min_prior_signal", 0.75))
+        hold_tolerance = float(params.get("hold_tolerance", 0.15))
+        max_pressure_distance = float(params.get("max_pressure_distance", 0.35))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        warning_mode = str(params.get("warning_mode", "absent"))
+        prior_signal_high = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        pressure = signal - viscosity
+        holding = (pressure >= -hold_tolerance) & (pressure.abs() <= max_pressure_distance)
+        mask = (
+            (prior_signal_high >= min_prior_signal)
+            & holding
+            & (signal.diff() >= float(params.get("min_signal_slope", -0.05)))
+            & (relative_slope >= min_relative_slope)
+        )
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=int(params.get("warning_lookback", 20)),
+            context_window=int(params.get("warning_context_window", 8)),
+        )
+        if warning_mode == "cleared":
+            prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), lookback)
+            mask &= prior_warning & ~warning
+        elif warning_mode == "active":
+            mask &= warning
+        elif warning_mode != "ignore":
+            mask &= ~warning
+        return mask.fillna(False)
+
+    if detector == "leader_pullback_component":
+        lookback = int(params.get("lookback", 20))
+        relative_window = int(params.get("relative_window", 5))
+        min_prior_signal = float(params.get("min_prior_signal", 0.75))
+        hold_tolerance = float(params.get("hold_tolerance", 0.15))
+        max_pressure_distance = float(params.get("max_pressure_distance", 0.35))
+        min_relative_slope = float(params.get("min_relative_slope", 0.0))
+        min_signal_slope = float(params.get("min_signal_slope", -0.05))
+        max_prior_signal = params.get("max_prior_signal")
+        max_signal = params.get("max_signal")
+        min_signal = params.get("min_signal")
+        warning_mode = str(params.get("warning_mode", "ignore"))
+
+        prior_signal_high = signal.shift(1).rolling(lookback, min_periods=max(3, lookback // 2)).max()
+        relative_slope = (relative - relative.shift(relative_window)) / max(1, relative_window)
+        pressure = signal - viscosity
+        mask = pd.Series(True, index=frame.index, dtype=bool)
+        if bool(params.get("require_prior_strength", True)):
+            mask &= prior_signal_high >= min_prior_signal
+        if max_prior_signal is not None:
+            mask &= prior_signal_high <= float(max_prior_signal)
+        if bool(params.get("require_near_viscosity", True)):
+            mask &= (pressure >= -hold_tolerance) & (pressure.abs() <= max_pressure_distance)
+        if bool(params.get("require_signal_slope_floor", True)):
+            mask &= signal.diff() >= min_signal_slope
+        if bool(params.get("require_relative_slope_floor", True)):
+            mask &= relative_slope >= min_relative_slope
+        if min_signal is not None:
+            mask &= signal >= float(min_signal)
+        if max_signal is not None:
+            mask &= signal <= float(max_signal)
+
+        warning = _warning_context_mask(
+            signal,
+            viscosity,
+            relative,
+            gradient,
+            lookback=int(params.get("warning_lookback", lookback)),
+            context_window=int(params.get("warning_context_window", 8)),
+        )
+        if warning_mode == "cleared":
+            prior_warning = _recent(warning.shift(1).astype("boolean").fillna(False).astype(bool), lookback)
+            mask &= prior_warning & ~warning
+        elif warning_mode == "active":
+            mask &= warning
+        elif warning_mode != "ignore":
+            mask &= ~warning
+        return mask.fillna(False)
+
     return pd.Series(False, index=frame.index, dtype=bool)
 
 
@@ -706,6 +1309,11 @@ def _variant_records_for_asset(
         )
     drawdown_horizon = max(horizons)
     metric_frame[f"max_drawdown_{drawdown_horizon}"] = forward_max_drawdown(target, drawdown_horizon, entry_lag_bars)
+    metric_frame[f"max_favorable_excursion_{drawdown_horizon}"] = forward_max_favorable_excursion(
+        target,
+        drawdown_horizon,
+        entry_lag_bars,
+    )
 
     records: list[dict[str, Any]] = []
     params_json = json.dumps(variant.params, sort_keys=True)
@@ -842,6 +1450,7 @@ def summarize_grammar_search_records(
         primary = horizons[-2]
         secondary = horizons[-1]
         drawdown_column = f"max_drawdown_{secondary}"
+        favorable_column = f"max_favorable_excursion_{secondary}"
         row: dict[str, Any] = {
             "variant_id": variant.variant_id,
             "family_id": variant.family_id,
@@ -870,6 +1479,13 @@ def summarize_grammar_search_records(
         row["median_forward_relative_return_secondary"] = row[f"median_forward_relative_return_{secondary}"]
         row["hit_rate_forward_relative_return_primary"] = row[f"hit_rate_forward_relative_return_{primary}"]
         row["median_max_drawdown"] = median_or_nan(variant_records.get(drawdown_column, pd.Series(dtype=float)))
+        row["median_max_favorable_excursion"] = median_or_nan(
+            variant_records.get(favorable_column, pd.Series(dtype=float))
+        )
+        if row["median_max_drawdown"] and not np.isnan(row["median_max_drawdown"]) and row["median_max_drawdown"] < 0.0:
+            row["median_mfe_mae_ratio"] = row["median_max_favorable_excursion"] / abs(row["median_max_drawdown"])
+        else:
+            row["median_mfe_mae_ratio"] = np.nan
         first_half, second_half = split_half_medians(variant_records, f"forward_relative_return_{secondary}")
         row["first_half_median_forward_relative_return_secondary"] = first_half
         row["second_half_median_forward_relative_return_secondary"] = second_half
@@ -1053,6 +1669,7 @@ def time_split_validation(
     records: pd.DataFrame,
     *,
     min_validation_sample: int = 10,
+    timeframe_cutoffs: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     if ranked.empty or records.empty:
         return pd.DataFrame()
@@ -1065,8 +1682,16 @@ def time_split_validation(
         return ranked.copy()
 
     cutoffs = outcome_records.groupby("timeframe")["date"].quantile(0.5).to_dict()
+    if timeframe_cutoffs:
+        cutoffs.update(
+            {
+                str(timeframe).strip().lower(): pd.Timestamp(cutoff)
+                for timeframe, cutoff in timeframe_cutoffs.items()
+                if pd.notna(cutoff)
+            }
+        )
     outcome_records["time_split"] = [
-        "validation" if row.date > cutoffs[row.timeframe] else "discovery"
+        "validation" if row.date > cutoffs.get(row.timeframe, row.date) else "discovery"
         for row in outcome_records.itertuples()
     ]
 
@@ -1146,17 +1771,6 @@ def strict_baseline_referee(
     if null_iterations < 1:
         raise ValueError("null_iterations must be >= 1")
 
-    validation = time_split_validation(
-        ranked,
-        records,
-        min_validation_sample=min_validation_sample,
-    )
-    validation_status = (
-        validation.set_index("variant_id")["validation_status"].to_dict()
-        if not validation.empty and "validation_status" in validation.columns
-        else {}
-    )
-
     eligible_by_timeframe: dict[str, pd.DataFrame] = {}
     for timeframe, analysis_frames in analysis_frames_by_timeframe.items():
         horizon = timeframe_horizons(timeframe)[-1]
@@ -1181,6 +1795,23 @@ def strict_baseline_referee(
             if not part.empty:
                 parts.append(part)
         eligible_by_timeframe[timeframe] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+    timeframe_cutoffs = {
+        timeframe: pd.to_datetime(eligible["date"], errors="coerce").dropna().quantile(0.5)
+        for timeframe, eligible in eligible_by_timeframe.items()
+        if not eligible.empty and "date" in eligible.columns
+    }
+    validation = time_split_validation(
+        ranked,
+        records,
+        min_validation_sample=min_validation_sample,
+        timeframe_cutoffs=timeframe_cutoffs,
+    )
+    validation_status = (
+        validation.set_index("variant_id")["validation_status"].to_dict()
+        if not validation.empty and "validation_status" in validation.columns
+        else {}
+    )
 
     rng = np.random.default_rng(random_seed)
     rows: list[dict[str, Any]] = []

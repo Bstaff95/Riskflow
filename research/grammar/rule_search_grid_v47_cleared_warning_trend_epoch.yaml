@@ -1,0 +1,34 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: cleared_warning_trend_continuation
+    direction: positive
+    detector: trend_continuation_no_warning
+    description: Trend continuation after warning context recently cleared.
+    parameter_grid:
+      window: [10, 20]
+      relative_window: [5]
+      gradient_window: [5]
+      min_signal: [0.0, 0.5]
+      max_signal: [1.0, 1.5]
+      min_time_above: [0.5]
+      min_relative_slope: [0.0, 0.03]
+      min_gradient_slope: [0.0]
+      warning_mode: [cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: cleared_warning_trend_pullback_hold
+    direction: positive
+    detector: trend_pullback_hold
+    description: Pullback hold after warning context recently cleared.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25, 0.5]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]

@@ -1,0 +1,52 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_warning_active_zone_reclaim_blocker
+    direction: negative
+    detector: compression_warning_bullish_setup
+    description: Zone reclaim/retest while recent compression-reclaim warning is active.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      warning_mode: [active]
+      level: [-1.5, 0.0]
+      tolerance: [0.15, 0.3]
+      hold_bars: [3, 5]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_absent_zone_reclaim_allowed
+    direction: positive
+    detector: compression_warning_bullish_setup
+    description: Zone reclaim/retest when recent compression-reclaim warning is absent.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      warning_mode: [absent]
+      level: [-1.5, 0.0]
+      tolerance: [0.15, 0.3]
+      hold_bars: [3, 5]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]
+
+  - family_id: compression_warning_cleared_zone_reclaim_reset
+    direction: positive
+    detector: compression_warning_bullish_setup
+    description: Zone reclaim/retest after recent compression-reclaim warning clears.
+    parameter_grid:
+      setup: [zone_reclaim_retest]
+      warning_mode: [cleared]
+      level: [-1.5, 0.0]
+      tolerance: [0.15, 0.3]
+      hold_bars: [3, 5]
+      lookback: [20]
+      warning_context_window: [20]
+      warning_min_compression: [70.0]
+      warning_trigger: [viscosity_reclaim]
+      warning_relative_window: [8]
+      warning_min_relative_slope: [-0.02]

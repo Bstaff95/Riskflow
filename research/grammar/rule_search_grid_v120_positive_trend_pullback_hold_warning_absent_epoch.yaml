@@ -1,0 +1,33 @@
+model: riskflow_grammar_search_v0
+families:
+- family_id: positive_trend_pullback_hold_warning_absent_path
+  direction: positive
+  detector: trend_pullback_hold
+  description: Warning-absent pullback-hold path after prior strength, testing entries
+    near viscosity instead of fresh breakouts.
+  parameter_grid:
+    lookback:
+    - 13
+    - 20
+    relative_window:
+    - 5
+    min_prior_signal:
+    - 0.75
+    - 1.0
+    hold_tolerance:
+    - 0.2
+    - 0.35
+    max_pressure_distance:
+    - 0.4
+    min_relative_slope:
+    - 0.0
+    - 0.03
+    min_signal_slope:
+    - -0.05
+    - 0.0
+    warning_mode:
+    - absent
+    warning_lookback:
+    - 20
+    warning_context_window:
+    - 8

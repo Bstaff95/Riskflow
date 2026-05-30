@@ -1,0 +1,10 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: bullish_divergence_reclaim
+    direction: positive
+    detector: divergence_reclaim
+    description: Bullish divergence followed by viscosity or zero reclaim.
+    parameter_grid:
+      divergence: [bullish]
+      recent_window: [8, 13, 20]
+      confirm: [viscosity_reclaim, zero_reclaim]

@@ -1,0 +1,70 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: parent_active_failed_weakness_reclaim_blocker
+    direction: negative
+    detector: parent_context_bullish_setup
+    description: Failed-weakness reclaim while the leader-pullback no-chase parent is active.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      parent_mode: [active]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_absent_failed_weakness_reclaim_allowed
+    direction: positive
+    detector: parent_context_bullish_setup
+    description: Failed-weakness reclaim only when the leader-pullback no-chase parent is absent.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      parent_mode: [absent]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_ignore_failed_weakness_reclaim_baseline
+    direction: positive
+    detector: parent_context_bullish_setup
+    description: Failed-weakness reclaim baseline without parent no-chase gating.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      parent_mode: [ignore]
+      lookback: [13, 20]
+      zone_max: [-2.0, -1.5]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [0.0]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]

@@ -1,0 +1,32 @@
+model: riskflow_grammar_search_v0
+families:
+- family_id: positive_regime_confirmed_reclaim_delayed_permission
+  direction: positive
+  detector: regime_confirmed_reclaim
+  description: Frozen positive reclaim permission shape focused on the branch that
+    survived lag2 and cooldown60 gates.
+  parameter_grid:
+    relative_window:
+    - 5
+    benchmark_window:
+    - 5
+    min_relative_slope:
+    - 0.04
+    - 0.05
+    - 0.06
+    min_benchmark_return:
+    - 0.0
+    - 0.02
+    trigger:
+    - viscosity_reclaim
+    require_warning_absent:
+    - true
+    max_signal:
+    - 0.75
+    - 1.0
+    min_compression:
+    - 40.0
+    warning_lookback:
+    - 20
+    warning_context_window:
+    - 8

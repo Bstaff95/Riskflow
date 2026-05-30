@@ -61,6 +61,33 @@ def forward_max_drawdown(
     return pd.Series(output, index=close.index)
 
 
+def forward_max_favorable_excursion(
+    close: pd.Series,
+    horizon: int,
+    entry_lag_bars: int = 0,
+) -> pd.Series:
+    if horizon < 1:
+        raise ValueError("horizon must be >= 1")
+    if entry_lag_bars < 0:
+        raise ValueError("entry_lag_bars must be >= 0")
+
+    values = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
+    output = np.full(len(values), np.nan, dtype=float)
+    for idx in range(len(values)):
+        entry_position = idx + entry_lag_bars
+        if entry_position >= len(values):
+            continue
+        current = values[entry_position]
+        if np.isnan(current) or current == 0.0:
+            continue
+        future = values[entry_position + 1 : entry_position + horizon + 1]
+        future = future[~np.isnan(future)]
+        if len(future) == 0:
+            continue
+        output[idx] = float(max(np.max(future / current - 1.0), 0.0))
+    return pd.Series(output, index=close.index)
+
+
 def entry_date_at(index: pd.Index, position: int, entry_lag_bars: int) -> object:
     entry_position = position + entry_lag_bars
     return index[entry_position] if entry_position < len(index) else pd.NaT

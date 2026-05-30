@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: post_underperformance_rotation_reclaim
+    direction: positive
+    detector: rotation_reclaim_setup
+    description: Post-underperformance rotation reclaim with late-leader pullback excluded.
+    parameter_grid:
+      setup_mode: [post_underperformance]
+      lookback: [20, 30]
+      relative_window: [5]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      min_prior_relative_return: [-0.3, -0.2]
+      min_signal_repair: [0.1, 0.25]
+      max_signal: [1.0]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.02]
+      min_gradient_slope: [-0.05]
+      exclude_late_leader_pullback: [true]
+      parent_context_window: [20]

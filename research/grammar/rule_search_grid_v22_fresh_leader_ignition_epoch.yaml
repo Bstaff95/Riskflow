@@ -1,0 +1,27 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: fresh_leader_ignition_zero_reclaim
+    direction: positive
+    detector: fresh_leader_ignition
+    description: Relative strength improves before price fully breaks out, then signal reclaims zero.
+    parameter_grid:
+      relative_window: [5, 8]
+      min_relative_slope: [0.01, 0.03, 0.05]
+      max_signal: [0.5, 1.0]
+      min_gradient_slope: [0.0, 0.03]
+      price_lookback: [13, 20]
+      below_high_margin: [0.0, 0.02]
+      trigger: [zero_reclaim]
+
+  - family_id: fresh_leader_ignition_viscosity_reclaim
+    direction: positive
+    detector: fresh_leader_ignition
+    description: Relative strength improves before price fully breaks out, then signal reclaims viscosity.
+    parameter_grid:
+      relative_window: [5, 8]
+      min_relative_slope: [0.01, 0.03, 0.05]
+      max_signal: [0.5, 1.0]
+      min_gradient_slope: [0.0, 0.03]
+      price_lookback: [13, 20]
+      below_high_margin: [0.0, 0.02]
+      trigger: [viscosity_reclaim]

@@ -1,0 +1,14 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: failed_breakdown_reclaim
+    direction: positive
+    detector: failed_weakness_reclaim
+    description: Failed low-zone breakdown followed by viscosity or zero reclaim.
+    parameter_grid:
+      lookback: [13, 20]
+      zone_max: [-1.5, -1.0]
+      low_tolerance: [0.25]
+      min_slope: [0.0]
+      relative_slope_min: [0.0, 0.03]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]

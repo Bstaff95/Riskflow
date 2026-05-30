@@ -1,0 +1,14 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_post_reset_reclaim_permission
+    direction: positive
+    detector: post_reset_reclaim
+    description: Former hot leader resets below pressure, then reclaims with relative repair.
+    parameter_grid:
+      prior_window: [20, 34]
+      hot_level: [1.0, 1.5]
+      reset_level: [0.5, 1.0]
+      reset_window: [8, 13]
+      require_below_viscosity: [true]
+      trigger: [viscosity_reclaim]
+      relative_slope_min: [0.0, 0.03]

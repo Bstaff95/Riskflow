@@ -1,0 +1,11 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: low_zone_curvature_repair
+    direction: positive
+    detector: curvature_from_low_zone
+    description: Low-zone signal curvature repair before full extension.
+    parameter_grid:
+      zone_max: [-1.5, -1.0]
+      slope_window: [3, 5]
+      accel_min: [0.0, 0.03]
+      confirm_below: [0.0, 0.5]

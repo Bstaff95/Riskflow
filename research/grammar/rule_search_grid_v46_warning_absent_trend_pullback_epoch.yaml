@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_trend_pullback_hold
+    direction: positive
+    detector: trend_pullback_hold
+    description: Pullback holds near viscosity after prior strength while warning context is absent.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5, 8]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25, 0.5]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]

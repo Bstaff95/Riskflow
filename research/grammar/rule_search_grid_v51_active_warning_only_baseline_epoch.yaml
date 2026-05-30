@@ -1,0 +1,28 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: active_warning_leader_context_baseline
+    direction: negative
+    detector: warning_context
+    description: Active warning context after prior leadership, without requiring trend pullback hold.
+    parameter_grid:
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      min_prior_signal: [1.0, 1.5]
+      min_signal: [-0.5, 0.0]
+      max_signal: [2.5]
+      relative_window: [5]
+      max_relative_slope: [0.05]
+
+  - family_id: active_warning_near_viscosity_baseline
+    direction: negative
+    detector: warning_context
+    description: Active warning context near viscosity, without prior trend-pullback constraints.
+    parameter_grid:
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      min_prior_signal: [1.0]
+      max_pressure_distance: [0.25, 0.5]
+      relative_window: [5]
+      max_relative_slope: [0.05]

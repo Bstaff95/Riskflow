@@ -1,0 +1,21 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: unextended_viscosity_pullback_counterexample
+    direction: positive
+    detector: leader_pullback_component
+    description: Tests whether near-viscosity pullbacks are constructive when prior leadership was not extended.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      max_prior_signal: [0.5, 0.75, 1.0]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [0.0, 0.03]
+      require_prior_strength: [false]
+      require_near_viscosity: [true]
+      require_signal_slope_floor: [true]
+      require_relative_slope_floor: [true]
+      warning_mode: [ignore, absent]
+      warning_lookback: [20]
+      warning_context_window: [8]

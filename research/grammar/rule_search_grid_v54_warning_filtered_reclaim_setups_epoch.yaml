@@ -1,0 +1,46 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_compression_reclaim_filter
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Compression reclaim only when active warning context is absent.
+    parameter_grid:
+      setup: [compression_reclaim]
+      min_compression: [60.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      min_relative_slope: [0.0, 0.03]
+      relative_window: [5]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: warning_active_compression_reclaim_invalidation
+    direction: negative
+    detector: warning_absent_bullish_setup
+    description: Compression reclaim while active warning context remains present.
+    parameter_grid:
+      setup: [compression_reclaim]
+      min_compression: [60.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      min_relative_slope: [0.0]
+      relative_window: [5]
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: warning_absent_failed_weakness_reclaim_filter
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Failed-weakness reclaim only when active warning context is absent.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      lookback: [13, 20]
+      zone_max: [-1.5, -1.0]
+      low_tolerance: [0.25]
+      min_slope: [0.0]
+      relative_slope_min: [0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]

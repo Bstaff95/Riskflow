@@ -44,6 +44,13 @@ from .lab_loop import (
     select_next_hypothesis,
     validate_lab_queue,
 )
+from .lab_supervisor import (
+    DEFAULT_EVIDENCE_LEDGER_PATH,
+    DEFAULT_SUPERVISOR_POLICY_PATH,
+    SupervisorOptions,
+    run_supervised_epochs,
+    supervise_latest_epoch,
+)
 from .reports import (
     export_event_study_reports,
     export_flow_graph_reports,
@@ -1162,7 +1169,12 @@ def lab_loop_command(args: argparse.Namespace) -> int:
     if action == "validate-queue":
         try:
             data = load_lab_queue(args.queue)
-            errors = validate_lab_queue(data)
+            max_source_variants = 500 if Path(args.queue).name == "runtime_queue.yaml" else None
+            errors = validate_lab_queue(
+                data,
+                validate_sources=True,
+                max_source_variants=max_source_variants,
+            )
         except Exception as exc:
             print(f"Lab loop queue validation failed: {exc}")
             return 1
@@ -1198,7 +1210,35 @@ def lab_loop_command(args: argparse.Namespace) -> int:
         print(f"Source: {hypothesis.get('source', '')}")
         return 0
 
-    if action in {"run", "run-epoch"}:
+    if action == "supervise-epoch":
+        options = SupervisorOptions(
+            state_path=Path(args.state),
+            runtime_queue_path=Path(args.runtime_queue),
+            concept_scoreboard_path=Path(args.concept_scoreboard),
+            evidence_ledger_path=Path(args.evidence_ledger),
+            policy_path=Path(args.supervisor_policy),
+            epoch_size=args.epoch_size,
+            apply=not args.dry_run,
+            max_generation=args.max_generation,
+            max_same_root_per_epoch=args.max_same_root_per_epoch,
+            min_bullish_share=args.min_bullish_share,
+            validation_share=args.validation_share,
+            reseed_when_empty=args.reseed_when_empty,
+            max_reseed_per_epoch=args.max_reseed_per_epoch,
+        )
+        try:
+            result = supervise_latest_epoch(options)
+        except Exception as exc:
+            print(f"Lab loop supervise-epoch failed: {exc}")
+            return 1
+        print(f"Meta-supervisor status: {'applied' if options.apply else 'dry-run'}")
+        print(f"Epoch: {result['decision'].get('epoch')}")
+        print(f"Next slots: {len(result['decision'].get('next_epoch_slots', []))}")
+        print(f"Actions: {len(result.get('actions', []))}")
+        print(f"Summary: {result['artifacts'].get('supervisor_summary')}")
+        return 0
+
+    if action in {"run", "run-epoch", "run-supervised"}:
         options = LabLoopOptions(
             queue_path=Path(args.queue),
             runtime_queue_path=Path(args.runtime_queue),
@@ -1220,9 +1260,33 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             resume=args.resume,
             dry_run=args.dry_run,
             auto_refine=args.auto_refine if action == "run" else False,
+            auto_gate_followups=args.auto_gate_followups,
         )
         try:
-            state = run_lab_epoch(options, epoch_size=args.epoch_size) if action == "run-epoch" else run_lab_loop(options)
+            if action == "run-supervised":
+                state = run_supervised_epochs(
+                    options,
+                    SupervisorOptions(
+                        state_path=Path(args.state),
+                        runtime_queue_path=Path(args.runtime_queue),
+                        concept_scoreboard_path=Path(args.concept_scoreboard),
+                        evidence_ledger_path=Path(args.evidence_ledger),
+                        policy_path=Path(args.supervisor_policy),
+                        epoch_size=args.epoch_size,
+                        apply=args.apply_supervisor,
+                        max_generation=args.max_generation,
+                        max_same_root_per_epoch=args.max_same_root_per_epoch,
+                        min_bullish_share=args.min_bullish_share,
+                        validation_share=args.validation_share,
+                        reseed_when_empty=args.reseed_when_empty,
+                        max_reseed_per_epoch=args.max_reseed_per_epoch,
+                        generated_grid_dir=options.generated_grid_dir,
+                    ),
+                    epochs=args.epochs,
+                    epoch_size=args.epoch_size,
+                )
+            else:
+                state = run_lab_epoch(options, epoch_size=args.epoch_size) if action == "run-epoch" else run_lab_loop(options)
         except Exception as exc:
             print(f"Lab loop {action} failed: {exc}")
             return 1
@@ -1230,7 +1294,7 @@ def lab_loop_command(args: argparse.Namespace) -> int:
         print(f"Session: {state.get('session_id')}")
         print(f"Completed this run: {state.get('completed_this_run')}")
         print(f"Last completed loop: {state.get('last_completed_loop')}")
-        if action == "run-epoch":
+        if action in {"run-epoch", "run-supervised"}:
             print(f"Epoch summary: {state.get('last_epoch', {}).get('summary', '')}")
         print(f"Latest status: {Path(args.report_root) / 'latest_status.md'}")
         return 0
@@ -1736,6 +1800,55 @@ def build_parser() -> argparse.ArgumentParser:
             help="Durable concept scoreboard YAML.",
         )
 
+    def add_lab_loop_supervisor_args(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--evidence-ledger",
+            default=str(DEFAULT_EVIDENCE_LEDGER_PATH),
+            help="Durable meta-supervisor evidence ledger YAML.",
+        )
+        command.add_argument(
+            "--supervisor-policy",
+            default=str(DEFAULT_SUPERVISOR_POLICY_PATH),
+            help="Optional meta-supervisor policy YAML path.",
+        )
+        command.add_argument(
+            "--max-generation",
+            type=int,
+            default=3,
+            help="Cool non-validation hypotheses deeper than this lineage generation.",
+        )
+        command.add_argument(
+            "--max-same-root-per-epoch",
+            type=int,
+            default=2,
+            help="Maximum planned next-epoch slots from one concept root.",
+        )
+        command.add_argument(
+            "--min-bullish-share",
+            type=float,
+            default=0.35,
+            help="Minimum next-epoch slot share for bullish setup tests when eligible.",
+        )
+        command.add_argument(
+            "--validation-share",
+            type=float,
+            default=0.30,
+            help="Minimum next-epoch slot share reserved for validation gates.",
+        )
+        command.add_argument(
+            "--max-reseed-per-epoch",
+            type=int,
+            default=5,
+            help="Maximum runnable hypotheses the supervisor can create when the queue is exhausted.",
+        )
+        command.add_argument(
+            "--no-reseed",
+            dest="reseed_when_empty",
+            action="store_false",
+            help="Do not create bounded supervisor reseeds when the runnable queue is exhausted.",
+        )
+        command.set_defaults(reseed_when_empty=True)
+
     def add_lab_loop_execution_args(command: argparse.ArgumentParser) -> None:
         command.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
         command.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
@@ -1760,6 +1873,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
         command.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+        command.add_argument(
+            "--no-auto-gates",
+            dest="auto_gate_followups",
+            action="store_false",
+            help="Do not append attribution/validation gate follow-ups after strict survivor promotions.",
+        )
+        command.set_defaults(auto_gate_followups=True)
 
     lab_run = lab_subparsers.add_parser("run", help="Run autonomous lab-loop iterations.")
     add_lab_loop_common(lab_run)
@@ -1779,6 +1899,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_lab_loop_execution_args(lab_epoch)
     lab_epoch.add_argument("--epoch-size", type=int, default=5, help="Completed loops in this supervised epoch.")
     lab_epoch.set_defaults(func=lab_loop_command)
+
+    lab_supervise = lab_subparsers.add_parser("supervise-epoch", help="Run the meta-supervisor on the latest epoch.")
+    add_lab_loop_common(lab_supervise)
+    add_lab_loop_supervisor_args(lab_supervise)
+    lab_supervise.add_argument("--epoch-size", type=int, default=5, help="Planned next epoch size.")
+    lab_supervise.add_argument("--dry-run", action="store_true", help="Write supervisor artifacts without mutating queue.")
+    lab_supervise.set_defaults(func=lab_loop_command)
+
+    lab_run_supervised = lab_subparsers.add_parser(
+        "run-supervised",
+        help="Run repeated epochs and apply the deterministic meta-supervisor after each epoch.",
+    )
+    add_lab_loop_common(lab_run_supervised)
+    add_lab_loop_execution_args(lab_run_supervised)
+    add_lab_loop_supervisor_args(lab_run_supervised)
+    lab_run_supervised.add_argument("--epochs", type=int, default=1, help="Number of epochs to run.")
+    lab_run_supervised.add_argument("--epoch-size", type=int, default=5, help="Completed loops per epoch.")
+    lab_run_supervised.add_argument(
+        "--no-apply-supervisor",
+        dest="apply_supervisor",
+        action="store_false",
+        help="Write supervisor artifacts but do not mutate the runtime queue.",
+    )
+    lab_run_supervised.set_defaults(apply_supervisor=True)
+    lab_run_supervised.set_defaults(func=lab_loop_command)
 
     lab_status = lab_subparsers.add_parser("status", help="Print latest lab-loop state.")
     add_lab_loop_common(lab_status)

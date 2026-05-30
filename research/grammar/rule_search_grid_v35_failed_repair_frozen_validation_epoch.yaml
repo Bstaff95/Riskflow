@@ -1,0 +1,24 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: failed_repair_baseline_breakout_frozen_validation
+    direction: negative
+    detector: failed_baseline_breakout_warning
+    description: Frozen failed-repair warning shape from epoch 4 strict survivors.
+    parameter_grid:
+      lookback: [13, 20]
+      recent_window: [5]
+      context_window: [8]
+      min_prior_signal_high: [0.0, 0.5]
+      min_lower_high_gap: [0.1, 0.25]
+      require_gradient_fade: [true]
+
+  - family_id: failed_repair_zero_rejection_frozen_validation
+    direction: negative
+    detector: zero_rejection_warning
+    description: Zero-line rejection branch of failed-repair warning for breadth comparison.
+    parameter_grid:
+      lookback: [5, 8]
+      level: [0.0]
+      tolerance: [0.15, 0.3]
+      require_below_viscosity: [true]
+      max_compression: [70.0, 90.0]

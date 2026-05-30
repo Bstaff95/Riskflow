@@ -1,0 +1,19 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: active_warning_continuation_negative_control
+    direction: negative
+    detector: trend_continuation_no_warning
+    description: Active warning during trend continuation without pullback-hold structure.
+    parameter_grid:
+      window: [10, 20]
+      relative_window: [5]
+      gradient_window: [5]
+      min_signal: [0.5]
+      max_signal: [1.5]
+      min_time_above: [0.6]
+      min_relative_slope: [0.0, 0.03]
+      min_gradient_slope: [0.0]
+      max_pressure_distance: [0.5]
+      warning_mode: [active]
+      warning_lookback: [20]
+      warning_context_window: [8]

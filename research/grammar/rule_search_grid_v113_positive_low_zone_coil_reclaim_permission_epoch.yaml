@@ -1,0 +1,13 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_low_zone_coil_reclaim_permission
+    direction: positive
+    detector: low_zone_coil_reclaim
+    description: Low-zone coil resolves through viscosity reclaim.
+    parameter_grid:
+      coil_window: [12, 20]
+      range_max: [0.5, 0.7]
+      std_max: [0.25, 0.35]
+      zone_max: [-1.5, -1.0]
+      recent_window: [8, 13]
+      trigger: [viscosity_reclaim]

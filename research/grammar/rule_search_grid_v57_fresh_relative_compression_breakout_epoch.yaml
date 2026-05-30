@@ -1,0 +1,43 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: fresh_relative_compression_breakout_neutral_base
+    direction: positive
+    detector: fresh_relative_compression_breakout
+    description: Fresh relative leadership emergence from compression while not extended.
+    parameter_grid:
+      relative_window: [5]
+      gradient_window: [5]
+      compression_window: [20]
+      price_lookback: [20]
+      min_compression: [60.0, 70.0]
+      min_relative_slope: [0.03, 0.05]
+      min_gradient_slope: [0.0]
+      min_signal: [-0.5]
+      max_signal: [1.0]
+      max_prior_signal: [1.5]
+      below_high_margin: [0.02]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: fresh_relative_compression_breakout_early_base
+    direction: positive
+    detector: fresh_relative_compression_breakout
+    description: Earlier fresh-leadership attempt from lower signal base.
+    parameter_grid:
+      relative_window: [5]
+      gradient_window: [3]
+      compression_window: [20]
+      price_lookback: [20]
+      min_compression: [60.0]
+      min_relative_slope: [0.03]
+      min_gradient_slope: [0.0]
+      min_signal: [-1.0]
+      max_signal: [0.5]
+      max_prior_signal: [1.0]
+      below_high_margin: [0.02, 0.05]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]

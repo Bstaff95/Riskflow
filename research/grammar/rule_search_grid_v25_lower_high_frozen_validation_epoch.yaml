@@ -1,0 +1,27 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: lower_high_rollover_frozen_pressure_validation
+    direction: negative
+    detector: lower_high_rollover
+    description: Frozen lower-high pressure-filter shape from epoch 2; rerun as validation/stress, not discovery.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5]
+      min_prior_high: [1.5, 2.0]
+      min_lower_high_gap: [0.2, 0.35]
+      require_below_viscosity: [true]
+      max_relative_slope: [-0.05, 0.0]
+      max_pressure_area_balance: [5.0]
+      max_time_above_viscosity_10: [5.0]
+
+  - family_id: lower_high_rollover_frozen_broad_validation
+    direction: negative
+    detector: lower_high_rollover
+    description: Broader lower-high validation row to compare against the pressure-filtered frozen shape.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5, 8]
+      min_prior_high: [1.5]
+      min_lower_high_gap: [0.25, 0.4]
+      require_below_viscosity: [false, true]
+      max_relative_slope: [-0.05, 0.0]

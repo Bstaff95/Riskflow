@@ -1,0 +1,21 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: late_leader_reacceleration_success
+    direction: positive
+    detector: leader_pullback_component
+    description: Tests whether true slope reacceleration can rescue an otherwise dangerous late-leader pullback.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.03, 0.06]
+      min_signal_slope: [0.0, 0.03]
+      require_prior_strength: [true]
+      require_near_viscosity: [true]
+      require_signal_slope_floor: [true]
+      require_relative_slope_floor: [true]
+      warning_mode: [absent, cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]

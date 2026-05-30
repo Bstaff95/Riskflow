@@ -1,0 +1,24 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: failed_repair_zero_rejection_warning
+    direction: negative
+    detector: zero_rejection_warning
+    description: "Inversion of failed reclaim/retest evidence: zero test/reclaim failure as a warning."
+    parameter_grid:
+      lookback: [5, 8]
+      level: [0.0]
+      tolerance: [0.15, 0.3]
+      require_below_viscosity: [true]
+      max_compression: [70.0, 90.0]
+
+  - family_id: failed_repair_baseline_breakout_warning
+    direction: negative
+    detector: failed_baseline_breakout_warning
+    description: Reclaim attempt followed by lower high and viscosity loss as failed-repair warning.
+    parameter_grid:
+      lookback: [13, 20]
+      recent_window: [5, 8]
+      context_window: [8, 13]
+      min_prior_signal_high: [0.0, 0.5]
+      min_lower_high_gap: [0.1, 0.25]
+      require_gradient_fade: [false, true]

@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_regime_confirmed_reclaim_permission
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Reclaim only after relative repair and constructive basket regime, with standard warning absent.
+    parameter_grid:
+      relative_window: [5, 8]
+      benchmark_window: [5, 8]
+      min_relative_slope: [0.02, 0.05]
+      min_benchmark_return: [0.0, 0.02]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      max_signal: [1.0]
+      min_compression: [40.0, 60.0]
+      warning_lookback: [20]
+      warning_context_window: [8]

@@ -1,0 +1,32 @@
+model: riskflow_grammar_search_v0
+families:
+- family_id: positive_fresh_leader_ignition_no_warning_path
+  direction: positive
+  detector: fresh_leader_ignition
+  description: Fresh relative leader ignition while price is not extended and warning
+    context is absent.
+  parameter_grid:
+    relative_window:
+    - 5
+    - 8
+    min_relative_slope:
+    - 0.03
+    - 0.05
+    max_signal:
+    - 0.75
+    - 1.0
+    min_gradient_slope:
+    - 0.0
+    price_lookback:
+    - 20
+    below_high_margin:
+    - 0.02
+    - 0.05
+    trigger:
+    - viscosity_reclaim
+    require_warning_absent:
+    - true
+    warning_lookback:
+    - 20
+    warning_context_window:
+    - 8

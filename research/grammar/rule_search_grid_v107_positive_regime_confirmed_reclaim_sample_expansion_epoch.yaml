@@ -1,0 +1,17 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: positive_regime_confirmed_reclaim_sample_expansion
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Sample-expanded daily regime-confirmed reclaim permission.
+    parameter_grid:
+      relative_window: [5, 8]
+      benchmark_window: [5]
+      min_relative_slope: [0.03, 0.04]
+      min_benchmark_return: [0.0, 0.01]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      max_signal: [1.0, 1.25]
+      min_compression: [20.0, 40.0]
+      warning_lookback: [20]
+      warning_context_window: [8]

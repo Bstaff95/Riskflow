@@ -1,0 +1,22 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: fresh_relative_compression_breakout_relaxed
+    direction: positive
+    detector: fresh_relative_compression_breakout
+    description: Relaxed base-expansion test for non-hot compression breakouts.
+    parameter_grid:
+      relative_window: [5, 8]
+      gradient_window: [5]
+      compression_window: [13, 20]
+      price_lookback: [20]
+      min_compression: [50.0, 60.0]
+      min_relative_slope: [0.02]
+      min_gradient_slope: [-0.01, 0.0]
+      min_signal: [-0.75]
+      max_signal: [1.0]
+      max_prior_signal: [1.5]
+      below_high_margin: [0.0]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]

@@ -1,0 +1,48 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: regime_confirmed_viscosity_reclaim
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Reclaim only when relative pressure and the broader basket are improving.
+    parameter_grid:
+      relative_window: [5, 8]
+      benchmark_window: [5, 8]
+      min_relative_slope: [0.0, 0.03]
+      min_benchmark_return: [0.0, 0.03]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      max_signal: [0.5, 1.0]
+
+  - family_id: regime_confirmed_compression_reclaim
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Compression reclaim gated by basket confirmation and warning absence.
+    parameter_grid:
+      relative_window: [5, 8]
+      benchmark_window: [5, 8]
+      min_relative_slope: [0.0, 0.03]
+      min_benchmark_return: [0.0, 0.03]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      max_signal: [0.5, 1.0]
+      min_compression: [55.0, 65.0]
+
+  - family_id: regime_confirmed_deep_reset_reclaim
+    direction: positive
+    detector: regime_confirmed_reclaim
+    description: Deep reset reclaim gated by basket confirmation and warning absence.
+    parameter_grid:
+      relative_window: [5, 8]
+      benchmark_window: [5, 8]
+      min_relative_slope: [0.0, 0.03]
+      min_benchmark_return: [0.0, 0.03]
+      trigger: [viscosity_reclaim]
+      require_warning_absent: [true]
+      warning_lookback: [20]
+      warning_context_window: [8]
+      max_signal: [0.5, 1.0]
+      min_recent_signal_low: [-0.5, -1.0]

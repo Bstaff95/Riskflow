@@ -1,0 +1,64 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: parent_active_compression_reclaim_blocker
+    direction: negative
+    detector: parent_context_bullish_setup
+    description: Compression reclaim while the leader-pullback no-chase parent is active.
+    parameter_grid:
+      setup: [compression_reclaim]
+      parent_mode: [active]
+      min_compression: [55.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      relative_window: [5, 8]
+      min_relative_slope: [-0.02, 0.02]
+      lookback: [20]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_absent_compression_reclaim_allowed
+    direction: positive
+    detector: parent_context_bullish_setup
+    description: Compression reclaim only when the leader-pullback no-chase parent is absent.
+    parameter_grid:
+      setup: [compression_reclaim]
+      parent_mode: [absent]
+      min_compression: [55.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      relative_window: [5, 8]
+      min_relative_slope: [-0.02, 0.02]
+      lookback: [20]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]
+
+  - family_id: parent_ignore_compression_reclaim_baseline
+    direction: positive
+    detector: parent_context_bullish_setup
+    description: Compression reclaim baseline without parent no-chase gating.
+    parameter_grid:
+      setup: [compression_reclaim]
+      parent_mode: [ignore]
+      min_compression: [55.0, 70.0]
+      trigger: [viscosity_reclaim, zero_reclaim]
+      relative_window: [5, 8]
+      min_relative_slope: [-0.02, 0.02]
+      lookback: [20]
+      parent_context_window: [20]
+      parent_lookback: [20]
+      parent_relative_window: [5]
+      parent_min_prior_signal: [1.0]
+      parent_hold_tolerance: [0.25]
+      parent_max_pressure_distance: [0.25]
+      parent_min_relative_slope: [0.0]
+      parent_min_signal_slope: [-0.05]

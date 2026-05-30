@@ -1,0 +1,24 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: stale_strength_acceptance_failure_frozen
+    direction: negative
+    detector: failed_strength_acceptance
+    description: Frozen stale-strength warning branch from epoch 5.
+    parameter_grid:
+      acceptance_window: [8, 13]
+      min_recent_time_above: [0.5, 0.65]
+      min_prior_signal: [0.5, 1.0]
+      trigger: [viscosity_loss]
+      max_relative_slope: [-0.05, 0.0]
+
+  - family_id: late_cycle_relative_exhaustion_frozen
+    direction: negative
+    detector: late_cycle_leader_exhaustion_warning
+    description: Frozen late-cycle relative exhaustion branch from epoch 5.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5, 8]
+      context_window: [5, 8]
+      signal_high_level: [1.0, 1.5]
+      min_relative_prior_high: [0.3, 0.5]
+      min_relative_lower_high_gap: [0.05]

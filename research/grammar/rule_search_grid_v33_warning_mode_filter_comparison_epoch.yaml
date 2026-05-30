@@ -1,0 +1,31 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: compression_reclaim_warning_mode_comparison
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Compare compression reclaim outcomes when warnings are absent, active, or recently cleared.
+    parameter_grid:
+      setup: [compression_reclaim]
+      warning_mode: [absent, active, cleared]
+      min_compression: [55.0, 65.0]
+      trigger: [zero_reclaim]
+      relative_window: [8, 13]
+      min_relative_slope: [0.02]
+      lookback: [20]
+      warning_context_window: [5, 8]
+
+  - family_id: failed_weakness_warning_mode_comparison
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Compare failed-weakness reclaim outcomes when warnings are absent, active, or recently cleared.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      warning_mode: [absent, active, cleared]
+      lookback: [13, 20]
+      zone_max: [-1.5, -2.0]
+      low_tolerance: [0.25]
+      min_slope: [0.0, 0.05]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim]
+      warning_context_window: [5, 8]

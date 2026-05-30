@@ -1,0 +1,30 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: warning_absent_failed_weakness_reclaim_followup
+    direction: positive
+    detector: warning_absent_bullish_setup
+    description: Epoch 2 split follow-up for 4h failed weakness reclaim when warning context is absent.
+    parameter_grid:
+      setup: [failed_weakness_reclaim]
+      lookback: [10, 13, 16]
+      zone_max: [-2.0]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [-0.02, 0.03, 0.08]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim]
+      warning_context_window: [5, 8]
+      warning_lookback: [20]
+
+  - family_id: failed_weakness_reclaim_no_filter_baseline
+    direction: positive
+    detector: failed_weakness_reclaim
+    description: Baseline failed weakness reclaim without warning-absent filtering.
+    parameter_grid:
+      lookback: [10, 13, 16]
+      zone_max: [-2.0]
+      low_tolerance: [0.2, 0.35]
+      min_slope: [-0.02, 0.03, 0.08]
+      relative_slope_min: [-0.05, 0.0]
+      recent_window: [8]
+      trigger: [viscosity_reclaim]

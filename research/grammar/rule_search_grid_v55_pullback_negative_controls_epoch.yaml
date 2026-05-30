@@ -1,0 +1,47 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: raw_pullback_negative_control
+    direction: negative
+    detector: trend_pullback_hold
+    description: Negative-control test for generic pullbacks without warning gating.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [ignore]
+
+  - family_id: absent_warning_pullback_negative_control
+    direction: negative
+    detector: trend_pullback_hold
+    description: Negative-control test for pullbacks when warning context is absent.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [absent]
+      warning_lookback: [20]
+      warning_context_window: [8]
+
+  - family_id: cleared_warning_pullback_negative_control
+    direction: negative
+    detector: trend_pullback_hold
+    description: Negative-control test for pullbacks when warning context recently cleared.
+    parameter_grid:
+      lookback: [13, 20]
+      relative_window: [5]
+      min_prior_signal: [1.0, 1.5]
+      hold_tolerance: [0.1, 0.25]
+      max_pressure_distance: [0.25]
+      min_relative_slope: [0.0, 0.03]
+      min_signal_slope: [-0.05]
+      warning_mode: [cleared]
+      warning_lookback: [20]
+      warning_context_window: [8]

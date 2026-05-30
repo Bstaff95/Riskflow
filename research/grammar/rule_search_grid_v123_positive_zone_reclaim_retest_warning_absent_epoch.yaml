@@ -1,0 +1,27 @@
+model: riskflow_grammar_search_v0
+families:
+- family_id: positive_zone_reclaim_retest_warning_absent_path
+  direction: positive
+  detector: warning_absent_bullish_setup
+  description: Zone reclaim retest/hold path only when warning context is absent.
+  parameter_grid:
+    setup:
+    - zone_reclaim_retest
+    level:
+    - -1.5
+    - -1.0
+    - 0.0
+    tolerance:
+    - 0.1
+    - 0.2
+    - 0.35
+    hold_bars:
+    - 2
+    - 3
+    - 5
+    warning_mode:
+    - absent
+    warning_lookback:
+    - 20
+    warning_context_window:
+    - 8

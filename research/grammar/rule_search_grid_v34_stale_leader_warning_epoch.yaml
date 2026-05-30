@@ -1,0 +1,34 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: stale_strength_acceptance_failure
+    direction: negative
+    detector: failed_strength_acceptance
+    description: Elevated signal loses acceptance while relative pressure stops improving.
+    parameter_grid:
+      acceptance_window: [8, 13]
+      min_recent_time_above: [0.5, 0.65]
+      min_prior_signal: [0.5, 1.0]
+      trigger: [viscosity_loss]
+      max_relative_slope: [-0.05, 0.0]
+
+  - family_id: overbought_pressure_cross_down_stale_leader
+    direction: negative
+    detector: overbought_pressure_cross_down_warning
+    description: High-zone leader loses pressure confirmation as gradient fades.
+    parameter_grid:
+      context_window: [10, 20]
+      high_level: [1.0, 1.5]
+      loss_level: [0.5, 1.0]
+      min_gradient: [0.0, 0.05]
+
+  - family_id: late_cycle_relative_exhaustion
+    direction: negative
+    detector: late_cycle_leader_exhaustion_warning
+    description: Relative lower-high exhaustion while signal remains elevated.
+    parameter_grid:
+      lookback: [20]
+      recent_window: [5, 8]
+      context_window: [5, 8]
+      signal_high_level: [1.0, 1.5]
+      min_relative_prior_high: [0.3, 0.5]
+      min_relative_lower_high_gap: [0.05]

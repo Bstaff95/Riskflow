@@ -7,11 +7,13 @@ import pandas as pd
 import yaml
 
 from riskflow.lab_loop import (
+    BULLISH_POSITIVE_OBJECTIVE,
     LabLoopOptions,
     acquire_lock,
     analyze_recent_loops,
     apply_checkpoint_interventions,
     build_refinement_grid,
+    create_bullish_control_followups,
     create_research_gate_followups,
     data_fingerprint,
     decide_loop_outcome,
@@ -21,6 +23,7 @@ from riskflow.lab_loop import (
     run_lab_loop,
     safe_child_hypothesis_id,
     select_next_hypothesis,
+    summarize_bullish_evidence,
     summarize_epoch_concepts,
     validate_lab_queue,
 )
@@ -59,6 +62,32 @@ def test_validate_lab_queue_accepts_seed_shape() -> None:
     errors = validate_lab_queue(_queue())
 
     assert errors == []
+
+
+def test_validate_lab_queue_accepts_optional_bullish_contract_fields() -> None:
+    queue = _queue()
+    queue["queue"][1].update(
+        {
+            "claim_type": "bullish_entry",
+            "setup_class": "post_underperformance",
+            "required_controls": ["setup_only", "direction_flip"],
+            "path_objective": {"min_event_clusters": 12, "min_mfe_mae_ratio": 1.25},
+            "branch_budget": {"max_loops": 10, "max_generation": 2},
+        }
+    )
+
+    assert validate_lab_queue(queue) == []
+
+
+def test_validate_lab_queue_rejects_invalid_bullish_contract_fields() -> None:
+    queue = _queue()
+    queue["queue"][1]["claim_type"] = "maybe_bullish"
+    queue["queue"][1]["path_objective"] = ["bad"]
+
+    errors = validate_lab_queue(queue)
+
+    assert any("claim_type is invalid" in error for error in errors)
+    assert any("path_objective must be a mapping" in error for error in errors)
 
 
 def test_load_lab_queue_rejects_duplicate_ids(tmp_path: Path) -> None:
@@ -182,6 +211,124 @@ def test_decide_loop_outcome_refines_useful_non_strict() -> None:
 
     assert decision["decision"] == "refine"
     assert decision["promotion_level"] == "L2_discovered"
+
+
+def _bullish_ranked_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "variant_id": "v1",
+        "family_id": "bullish_family",
+        "direction": "positive",
+        "classification": "useful",
+        "rank_score": 12.0,
+        "sample_size": 48,
+        "unique_symbols": 14,
+        "unique_event_clusters": 16,
+        "validation_status": "time_split_supported",
+        "median_forward_relative_return_secondary": 0.08,
+        "hit_rate_forward_relative_return_primary": 0.62,
+        "median_max_drawdown": -0.10,
+        "median_max_favorable_excursion": 0.22,
+        "median_mfe_mae_ratio": 2.2,
+    }
+    row.update(overrides)
+    return row
+
+
+def _bullish_strict_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "variant_id": "v1",
+        "family_id": "bullish_family",
+        "timeframe": "1d",
+        "direction": "positive",
+        "classification": "useful",
+        "rank_score": 12.0,
+        "sample_size": 48,
+        "unique_symbols": 14,
+        "unique_event_clusters": 16,
+        "validation_status": "time_split_supported",
+        "terminal_outcome_column": "forward_relative_return_30",
+        "event_median_terminal_relative_return": 0.08,
+        "unconditional_median_terminal_relative_return": 0.01,
+        "same_cluster_median_terminal_relative_return": 0.02,
+        "directional_edge_vs_unconditional": 0.07,
+        "directional_edge_vs_cluster": 0.06,
+        "matched_null_p_value": 0.01,
+        "strict_survivor": True,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_bullish_positive_objective_rejects_negative_strict_survivors() -> None:
+    ranked = pd.DataFrame(
+        [
+            _bullish_ranked_row(
+                direction="negative",
+                median_forward_relative_return_secondary=-0.20,
+                hit_rate_forward_relative_return_primary=0.35,
+            )
+        ]
+    )
+    strict = pd.DataFrame(
+        [
+            _bullish_strict_row(
+                direction="negative",
+                event_median_terminal_relative_return=-0.20,
+                directional_edge_vs_unconditional=0.12,
+                directional_edge_vs_cluster=0.10,
+            )
+        ]
+    )
+
+    decision = decide_loop_outcome(
+        ranked,
+        strict,
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+        objective=BULLISH_POSITIVE_OBJECTIVE,
+    )
+
+    assert decision["decision"] == "failed_setup_blocker"
+    assert decision["survivor_count"] == 0
+    assert "points negative" in decision["reason"]
+
+
+def test_bullish_positive_objective_promotes_only_true_positive_path() -> None:
+    ranked = pd.DataFrame([_bullish_ranked_row()])
+    strict = pd.DataFrame([_bullish_strict_row()])
+
+    evidence = summarize_bullish_evidence(
+        ranked,
+        strict,
+        pd.DataFrame({"variant_id": ["v1"]}),
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+    )
+    decision = decide_loop_outcome(
+        ranked,
+        strict,
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+        objective=BULLISH_POSITIVE_OBJECTIVE,
+        bullish_evidence=evidence,
+    )
+
+    assert evidence["passes_bullish_contract"] is True
+    assert decision["decision"] == "promote"
+    assert decision["survivor_count"] == 1
+
+
+def test_bullish_positive_objective_demotes_weak_trade_path() -> None:
+    ranked = pd.DataFrame([_bullish_ranked_row(median_mfe_mae_ratio=0.8)])
+    strict = pd.DataFrame([_bullish_strict_row()])
+
+    decision = decide_loop_outcome(
+        ranked,
+        strict,
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+        objective=BULLISH_POSITIVE_OBJECTIVE,
+    )
+
+    assert decision["decision"] == "bullish_path_watchlist"
+    assert decision["survivor_count"] == 0
+    assert "MFE/MAE" in decision["reason"]
 
 
 def test_build_refinement_grid_mutates_numeric_params() -> None:
@@ -347,6 +494,58 @@ def test_create_research_gate_followups_skips_gate_children(tmp_path: Path) -> N
     )
 
     assert children == []
+
+
+def test_create_bullish_control_followups_is_bounded_and_tags_claims(tmp_path: Path) -> None:
+    queue = {"model": "riskflow_lab_loop_hypothesis_queue_v0", "queue": []}
+    hypothesis = {
+        "id": "bullish_parent",
+        "track": "bullish_setup",
+        "status": "new",
+        "priority": 10,
+        "claim_type": "bullish_entry",
+        "setup_class": "warning_cleared_reclaim",
+        "hypothesis": "candidate",
+        "measurable_primitives": ["viscosity_reclaim"],
+    }
+    queue["queue"].append(hypothesis)
+    params = {
+        "timeframe": "1d",
+        "setup": "compression_reclaim",
+        "warning_mode": "cleared",
+        "min_compression": 55.0,
+        "trigger": "viscosity_reclaim",
+        "warning_context_window": 20,
+    }
+    ranked = pd.DataFrame(
+        [
+            _bullish_ranked_row(
+                detector="compression_warning_bullish_setup",
+                timeframe="1d",
+                params=json.dumps(params),
+            )
+        ]
+    )
+    strict = pd.DataFrame([_bullish_strict_row()])
+    evidence = summarize_bullish_evidence(ranked, strict, hypothesis=hypothesis)
+
+    children = create_bullish_control_followups(
+        queue=queue,
+        hypothesis=hypothesis,
+        ranked=ranked,
+        strict_referee=strict,
+        options=LabLoopOptions(generated_grid_dir=tmp_path / "generated"),
+        session_id="session",
+        loop_number=11,
+        base_timeframes=("1d", "4h"),
+        bullish_evidence=evidence,
+        max_children=5,
+    )
+
+    assert 1 <= len(children) <= 5
+    assert {child["claim_type"] for child in children} <= {"control", "bullish_permission", "warning_blocker"}
+    assert any(child.get("entry_lag_bars") == 0 for child in children)
+    assert all(Path(child["source"]).exists() for child in children)
 
 
 def test_run_lab_loop_dry_run_writes_state_and_status(tmp_path: Path) -> None:

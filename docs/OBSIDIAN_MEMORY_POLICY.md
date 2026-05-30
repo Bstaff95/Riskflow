@@ -38,8 +38,24 @@ The Signal Grammar Lab should use Obsidian for:
 
 - human-reviewed chart cases
 - concept pages
+- setup-journey hypotheses
+- compact evidence summaries
 - grammar hubs
 - links between cases, concepts, and research questions
 
 Python remains the evidence engine. Obsidian stores the research memory, not the final proof.
 
+## Knowledge Graph Bridge
+
+Use `python3 -m riskflow obsidian-kg` to turn curated notes into a research graph.
+
+Allowed durable note types:
+
+- `case`: one chart/date/symbol/timeframe observation
+- `concept`: reusable visual or measurable Riskflow idea
+- `setup_journey`: staged setup hypothesis such as context -> repair -> trigger -> confirmation -> invalidation
+- `evidence_summary`: compact reviewed result pointing back to exact local CSV/YAML/report evidence
+
+Generated graph tables, compiled queues, and generated grammar grids remain outside the curated vault unless a human or Codex intentionally promotes a concise summary.
+
+Do not call a setup validated from Obsidian links alone. A bullish setup requires Python evidence, strict referee checks, controls, and promotion gates.

@@ -37,6 +37,9 @@ from .states import classify_state_frame
 
 
 LAB_LOOP_MODEL = "riskflow_lab_loop_runner_v0"
+BULLISH_POSITIVE_OBJECTIVE = "bullish-positive"
+GENERAL_OBJECTIVE = "general"
+LAB_OBJECTIVES = {GENERAL_OBJECTIVE, BULLISH_POSITIVE_OBJECTIVE}
 DEFAULT_QUEUE_PATH = Path("research/lab_loop/hypothesis_queue.yaml")
 DEFAULT_RUNTIME_QUEUE_PATH = Path("research/lab_loop/runtime_queue.yaml")
 DEFAULT_STATE_PATH = Path("research/lab_loop/lab_state.json")
@@ -48,6 +51,7 @@ DEFAULT_CONCEPT_SCOREBOARD_PATH = Path("research/lab_loop/concept_scoreboard.yam
 
 TERMINAL_STATUSES = {"promoted", "demoted", "archived", "failed", "blocked_by_evidence"}
 RUNNABLE_STATUSES = {"new", "encoded", "tested", "tested_needs_fresh_data", "needs_encoding"}
+CLAIM_TYPES = {"bullish_entry", "bullish_permission", "warning_blocker", "control"}
 BRANCH_DECISIONS = {
     "promote",
     "refine",
@@ -57,6 +61,8 @@ BRANCH_DECISIONS = {
     "archive",
     "agent_review",
     "rerun_required",
+    "failed_setup_blocker",
+    "bullish_path_watchlist",
 }
 
 
@@ -85,6 +91,7 @@ class LabLoopOptions:
     dry_run: bool = False
     auto_refine: bool = True
     auto_gate_followups: bool = True
+    objective: str = GENERAL_OBJECTIVE
 
 
 def utc_now_iso() -> str:
@@ -177,6 +184,38 @@ def validate_lab_queue(
         primitives = item.get("measurable_primitives", [])
         if primitives is not None and not isinstance(primitives, list):
             errors.append(f"{label}.measurable_primitives must be a list")
+        claim_type = item.get("claim_type")
+        if claim_type is not None and claim_type not in CLAIM_TYPES:
+            errors.append(f"{label}.claim_type is invalid")
+        if item.get("setup_class") is not None and not isinstance(item.get("setup_class"), str):
+            errors.append(f"{label}.setup_class must be a string")
+        if item.get("discovery_mode") is not None and item.get("discovery_mode") not in {
+            "new_family",
+            "discovery",
+            "control",
+            "refinement",
+            "validation",
+            "attribution",
+            "counterexample",
+        }:
+            errors.append(f"{label}.discovery_mode is invalid")
+        if item.get("primary_detector") is not None and not isinstance(item.get("primary_detector"), str):
+            errors.append(f"{label}.primary_detector must be a string")
+        novelty = item.get("novelty")
+        if novelty is not None and not isinstance(novelty, dict):
+            errors.append(f"{label}.novelty must be a mapping")
+        family_budget = item.get("family_budget")
+        if family_budget is not None and not isinstance(family_budget, dict):
+            errors.append(f"{label}.family_budget must be a mapping")
+        required_controls = item.get("required_controls")
+        if required_controls is not None and not isinstance(required_controls, list):
+            errors.append(f"{label}.required_controls must be a list")
+        path_objective = item.get("path_objective")
+        if path_objective is not None and not isinstance(path_objective, dict):
+            errors.append(f"{label}.path_objective must be a mapping")
+        branch_budget = item.get("branch_budget")
+        if branch_budget is not None and not isinstance(branch_budget, dict):
+            errors.append(f"{label}.branch_budget must be a mapping")
         if validate_sources and item.get("source"):
             source = Path(str(item["source"]))
             source_path = source if source.is_absolute() else Path(source_root) / source
@@ -547,6 +586,109 @@ def create_research_gate_followups(
     return children
 
 
+def _best_bullish_control_candidate(ranked: pd.DataFrame, strict_referee: pd.DataFrame) -> pd.Series | None:
+    strict = strict_survivor_rows(strict_referee)
+    if not strict.empty and "direction" in strict.columns:
+        positive = strict[strict["direction"].astype(str).eq("positive")]
+        if not positive.empty:
+            candidate = positive.iloc[0]
+            if "variant_id" in candidate and "variant_id" in ranked.columns:
+                match = ranked[ranked["variant_id"].astype(str).eq(str(candidate["variant_id"]))]
+                if not match.empty:
+                    return match.iloc[0]
+            return candidate if "params" in candidate else None
+    useful = _best_positive_useful_row(ranked)
+    return pd.Series(useful) if useful else None
+
+
+def create_bullish_control_followups(
+    *,
+    queue: dict[str, Any],
+    hypothesis: dict[str, Any],
+    ranked: pd.DataFrame,
+    strict_referee: pd.DataFrame,
+    options: LabLoopOptions,
+    session_id: str,
+    loop_number: int,
+    base_timeframes: tuple[str, ...],
+    bullish_evidence: dict[str, Any] | None = None,
+    max_children: int = 5,
+) -> list[dict[str, Any]]:
+    if hypothesis.get("track") != "bullish_setup" or hypothesis.get("research_gate_stage"):
+        return []
+    if bullish_evidence and not (
+        bullish_evidence.get("passes_bullish_contract") or int(bullish_evidence.get("positive_useful_rows", 0) or 0) > 0
+    ):
+        return []
+    candidate = _best_bullish_control_candidate(ranked, strict_referee)
+    if candidate is None or "params" not in candidate:
+        return []
+
+    preferred_names = {
+        "validation_lag0",
+        "validation_lag2",
+        "validation_cooldown60",
+        "direction_flip_counterfactual",
+        "setup_ignore_positive",
+        "warning_filter_off_positive",
+        "warning_absent_positive",
+        "warning_cleared_positive",
+    }
+    specs = [spec for spec in gate_followup_specs(candidate, base_timeframes=base_timeframes) if spec["name"] in preferred_names]
+    specs = specs[:max_children]
+
+    existing_ids = {str(item.get("id")) for item in queue.get("queue", [])}
+    parent_id = str(hypothesis.get("id", "hypothesis"))
+    parent_root = root_hypothesis_id(parent_id)
+    children: list[dict[str, Any]] = []
+    for spec in specs:
+        child_id = _safe_slug(f"{parent_root}_{spec['name']}_l{loop_number:04d}", max_length=96)
+        if child_id in existing_ids:
+            continue
+        grid = build_gate_grid(
+            candidate,
+            family_suffix=f"{spec['name']}_l{loop_number:04d}",
+            direction=str(spec["direction"]),
+            param_updates=spec.get("param_updates", {}),
+            description=str(spec["hypothesis"]),
+        )
+        grid_path = options.generated_grid_dir / session_id / f"{child_id}.yaml"
+        atomic_write_yaml(grid_path, grid)
+        direction = str(spec["direction"])
+        stage = str(spec["stage"])
+        claim_type = "control" if stage == "validation" else ("warning_blocker" if direction == "negative" else "bullish_permission")
+        child = {
+            "id": child_id,
+            "track": spec["track"],
+            "status": "new",
+            "promotion_level": "L1_encoded",
+            "priority": int(hypothesis.get("priority", 100)) + 5 + len(children),
+            "parent_id": parent_id,
+            "generation": int(hypothesis.get("generation", 0) or 0) + 1,
+            "created_from": "bullish_positive_control",
+            "claim_type": claim_type,
+            "setup_class": hypothesis.get("setup_class", ""),
+            "research_gate_stage": stage,
+            "source": str(grid_path),
+            "hypothesis": spec["hypothesis"],
+            "measurable_primitives": list(hypothesis.get("measurable_primitives", [])) + [stage, claim_type],
+            "expected_outcome": "positive_forward_relative_return"
+            if direction == "positive"
+            else "negative_forward_relative_return",
+            "next_action": "Run bounded bullish-positive control before more same-root refinement.",
+        }
+        if "entry_lag_bars" in spec:
+            child["entry_lag_bars"] = spec["entry_lag_bars"]
+        if "cooldown_bars" in spec:
+            child["cooldown_bars"] = spec["cooldown_bars"]
+        if "timeframes" in spec:
+            child["timeframes"] = spec["timeframes"]
+        queue.setdefault("queue", []).append(child)
+        existing_ids.add(child_id)
+        children.append(child)
+    return children
+
+
 def load_analysis_frames_by_timeframe(
     *,
     config_path: str | Path,
@@ -629,10 +771,287 @@ def strict_survivor_rows(strict_referee: pd.DataFrame) -> pd.DataFrame:
     return strict_referee[strict_referee["strict_survivor"] == True].copy()  # noqa: E712
 
 
-def decide_loop_outcome(ranked: pd.DataFrame, strict_referee: pd.DataFrame | None = None) -> dict[str, Any]:
+def _truthy_bool_series(series: pd.Series) -> pd.Series:
+    if series.dtype == bool:
+        return series.fillna(False)
+    return series.astype(str).str.lower().isin({"true", "1", "yes"})
+
+
+def _numeric_value(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _first_numeric(row: dict[str, Any], names: tuple[str, ...]) -> float | None:
+    for name in names:
+        number = _numeric_value(row.get(name))
+        if number is not None:
+            return number
+    return None
+
+
+def _ranked_match(ranked: pd.DataFrame, variant_id: str) -> dict[str, Any]:
+    if ranked.empty or "variant_id" not in ranked.columns:
+        return {}
+    match = ranked[ranked["variant_id"].astype(str).eq(str(variant_id))]
+    return match.iloc[0].to_dict() if not match.empty else {}
+
+
+def _best_positive_useful_row(ranked: pd.DataFrame) -> dict[str, Any]:
+    if ranked.empty or "direction" not in ranked.columns:
+        return {}
+    candidates = ranked[ranked["direction"].astype(str).eq("positive")].copy()
+    if "classification" in candidates.columns:
+        candidates = candidates[candidates["classification"].isin(["useful", "watchlist"])]
+    if candidates.empty:
+        return {}
+    if "rank_score" in candidates.columns:
+        candidates["_rank_score_numeric"] = pd.to_numeric(candidates["rank_score"], errors="coerce")
+        candidates = candidates.sort_values("_rank_score_numeric", ascending=False, na_position="last")
+        return candidates.iloc[0].drop(labels=["_rank_score_numeric"], errors="ignore").to_dict()
+    return candidates.iloc[0].to_dict()
+
+
+def _bullish_thresholds(hypothesis: dict[str, Any] | None) -> dict[str, float]:
+    path_objective = hypothesis.get("path_objective", {}) if isinstance(hypothesis, dict) else {}
+    if not isinstance(path_objective, dict):
+        path_objective = {}
+    max_mae = path_objective.get("max_mae", path_objective.get("max_median_drawdown", -0.35))
+    max_median_drawdown = -abs(float(max_mae)) if _numeric_value(max_mae) is not None else -0.35
+    def threshold(name: str, default: float) -> float:
+        value = _numeric_value(path_objective.get(name, default))
+        return default if value is None else value
+
+    return {
+        "min_sample_size": threshold("min_sample_size", 30),
+        "min_unique_symbols": threshold("min_unique_symbols", 12),
+        "min_event_clusters": threshold("min_event_clusters", 12),
+        "min_terminal_relative_return": threshold("min_terminal_relative_return", 0.0),
+        "min_edge_vs_unconditional": threshold("min_edge_vs_unconditional", 0.0),
+        "min_edge_vs_cluster": threshold("min_edge_vs_cluster", 0.0),
+        "min_hit_rate": threshold("min_hit_rate", 0.55),
+        "min_mfe_mae_ratio": threshold("min_mfe_mae_ratio", 1.25),
+        "max_median_drawdown": max_median_drawdown,
+    }
+
+
+def summarize_bullish_evidence(
+    ranked: pd.DataFrame,
+    strict_referee: pd.DataFrame | None = None,
+    records: pd.DataFrame | None = None,
+    *,
+    hypothesis: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize whether a bullish setup produced true positive trade evidence."""
+    strict_referee = strict_referee if strict_referee is not None else pd.DataFrame()
+    records = records if records is not None else pd.DataFrame()
+    thresholds = _bullish_thresholds(hypothesis)
+    strict = strict_survivor_rows(strict_referee)
+    positive_strict = (
+        strict[strict["direction"].astype(str).eq("positive")].copy()
+        if not strict.empty and "direction" in strict.columns
+        else pd.DataFrame()
+    )
+    negative_strict = (
+        strict[strict["direction"].astype(str).eq("negative")].copy()
+        if not strict.empty and "direction" in strict.columns
+        else pd.DataFrame()
+    )
+    positive_useful = (
+        ranked[
+            ranked.get("direction", pd.Series("", index=ranked.index)).astype(str).eq("positive")
+            & ranked.get("classification", pd.Series("", index=ranked.index)).isin(["useful", "watchlist"])
+        ].copy()
+        if not ranked.empty
+        else pd.DataFrame()
+    )
+
+    candidate: dict[str, Any] = {}
+    if not positive_strict.empty:
+        sorted_positive = positive_strict.copy()
+        if "matched_null_p_value" in sorted_positive.columns:
+            sorted_positive["_matched_null_p"] = pd.to_numeric(
+                sorted_positive["matched_null_p_value"], errors="coerce"
+            )
+            sorted_positive = sorted_positive.sort_values("_matched_null_p", ascending=True, na_position="last")
+        strict_row = sorted_positive.iloc[0].drop(labels=["_matched_null_p"], errors="ignore").to_dict()
+        candidate = {**_ranked_match(ranked, str(strict_row.get("variant_id", ""))), **strict_row}
+    elif not positive_useful.empty:
+        candidate = _best_positive_useful_row(ranked)
+
+    terminal_median = _first_numeric(
+        candidate,
+        (
+            "event_median_terminal_relative_return",
+            "median_forward_relative_return_secondary",
+            "median_forward_relative_return_30",
+        ),
+    )
+    edge_unconditional = _first_numeric(candidate, ("directional_edge_vs_unconditional",))
+    edge_cluster = _first_numeric(candidate, ("directional_edge_vs_cluster",))
+    p_value = _first_numeric(candidate, ("matched_null_p_value",))
+    sample_size = _first_numeric(candidate, ("sample_size",)) or 0.0
+    unique_symbols = _first_numeric(candidate, ("unique_symbols",)) or 0.0
+    event_clusters = _first_numeric(candidate, ("unique_event_clusters",)) or 0.0
+    hit_rate = _first_numeric(
+        candidate,
+        (
+            "hit_rate_forward_relative_return_primary",
+            "hit_rate_forward_relative_return_30",
+            "hit_rate_forward_relative_return_14",
+        ),
+    )
+    median_drawdown = _first_numeric(candidate, ("median_max_drawdown",))
+    median_mfe = _first_numeric(candidate, ("median_max_favorable_excursion",))
+    mfe_mae_ratio = _first_numeric(candidate, ("median_mfe_mae_ratio",))
+    validation_status = str(candidate.get("validation_status", ""))
+
+    failures: list[str] = []
+    if positive_strict.empty:
+        if not negative_strict.empty:
+            failures.append("strict survivor evidence points negative, so this is a blocker not a bullish setup")
+        elif not positive_useful.empty:
+            failures.append("positive rows exist but did not pass strict referee")
+        else:
+            failures.append("no useful positive-direction rows")
+    if positive_strict.empty:
+        passes_contract = False
+    else:
+        if terminal_median is None or terminal_median <= thresholds["min_terminal_relative_return"]:
+            failures.append("terminal relative median is not positive enough")
+        if edge_unconditional is None or edge_unconditional <= thresholds["min_edge_vs_unconditional"]:
+            failures.append("edge versus unconditional baseline is not positive")
+        if edge_cluster is None or edge_cluster <= thresholds["min_edge_vs_cluster"]:
+            failures.append("edge versus same-cluster baseline is not positive")
+        if p_value is None or p_value >= 0.05:
+            failures.append("matched-null p-value is not below 0.05")
+        if validation_status != "time_split_supported":
+            failures.append("time split is not supported")
+        if sample_size < thresholds["min_sample_size"]:
+            failures.append("sample size is below bullish threshold")
+        if unique_symbols < thresholds["min_unique_symbols"]:
+            failures.append("unique symbol count is below bullish threshold")
+        if event_clusters < thresholds["min_event_clusters"]:
+            failures.append("event cluster count is below bullish threshold")
+        if hit_rate is None or hit_rate < thresholds["min_hit_rate"]:
+            failures.append("positive hit rate is below bullish threshold")
+        if median_drawdown is not None and median_drawdown < thresholds["max_median_drawdown"]:
+            failures.append("median drawdown is too deep")
+        if median_mfe is None or median_mfe <= 0.0:
+            failures.append("median favorable excursion is not positive")
+        if mfe_mae_ratio is None or mfe_mae_ratio < thresholds["min_mfe_mae_ratio"]:
+            failures.append("MFE/MAE ratio is below bullish threshold")
+        passes_contract = not failures
+
+    return {
+        "model": "riskflow_bullish_evidence_v0",
+        "objective": BULLISH_POSITIVE_OBJECTIVE,
+        "hypothesis_id": hypothesis.get("id", "") if isinstance(hypothesis, dict) else "",
+        "track": hypothesis.get("track", "") if isinstance(hypothesis, dict) else "",
+        "claim_type": hypothesis.get("claim_type", "bullish_entry") if isinstance(hypothesis, dict) else "bullish_entry",
+        "setup_class": hypothesis.get("setup_class", "") if isinstance(hypothesis, dict) else "",
+        "strict_positive_survivors": int(len(positive_strict)),
+        "strict_negative_survivors": int(len(negative_strict)),
+        "positive_useful_rows": int(len(positive_useful)),
+        "candidate_variant_id": str(candidate.get("variant_id", "")),
+        "candidate_family_id": str(candidate.get("family_id", "")),
+        "candidate_timeframe": str(candidate.get("timeframe", "")),
+        "sample_size": int(sample_size),
+        "unique_symbols": int(unique_symbols),
+        "unique_event_clusters": int(event_clusters),
+        "terminal_median_relative_return": terminal_median,
+        "edge_vs_unconditional": edge_unconditional,
+        "edge_vs_cluster": edge_cluster,
+        "hit_rate": hit_rate,
+        "median_max_drawdown": median_drawdown,
+        "median_max_favorable_excursion": median_mfe,
+        "mfe_mae_ratio": mfe_mae_ratio,
+        "matched_null_p_value": p_value,
+        "validation_status": validation_status,
+        "passes_path_gate": bool(
+            median_mfe is not None
+            and median_mfe > 0.0
+            and (median_drawdown is None or median_drawdown >= thresholds["max_median_drawdown"])
+            and mfe_mae_ratio is not None
+            and mfe_mae_ratio >= thresholds["min_mfe_mae_ratio"]
+        ),
+        "passes_bullish_contract": bool(passes_contract),
+        "failure_reason": "; ".join(failures) if failures else "passed bullish-positive contract",
+        "thresholds": thresholds,
+        "record_count": int(len(records)),
+    }
+
+
+def decide_loop_outcome(
+    ranked: pd.DataFrame,
+    strict_referee: pd.DataFrame | None = None,
+    *,
+    hypothesis: dict[str, Any] | None = None,
+    records: pd.DataFrame | None = None,
+    objective: str = GENERAL_OBJECTIVE,
+    bullish_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     strict_referee = strict_referee if strict_referee is not None else pd.DataFrame()
     survivors = strict_survivor_rows(strict_referee)
     useful = useful_rows(ranked)
+    if (
+        objective == BULLISH_POSITIVE_OBJECTIVE
+        and isinstance(hypothesis, dict)
+        and hypothesis.get("track") == "bullish_setup"
+    ):
+        evidence = bullish_evidence or summarize_bullish_evidence(
+            ranked,
+            strict_referee,
+            records,
+            hypothesis=hypothesis,
+        )
+        positive_useful = int(evidence.get("positive_useful_rows", 0) or 0)
+        positive_survivors = int(evidence.get("strict_positive_survivors", 0) or 0)
+        negative_survivors = int(evidence.get("strict_negative_survivors", 0) or 0)
+        if evidence.get("passes_bullish_contract"):
+            return {
+                "decision": "promote",
+                "promotion_level": "L3_strict_survivor",
+                "status": "needs_agent_review",
+                "reason": f"{positive_survivors} strict bullish survivor(s) passed the bullish-positive contract",
+                "survivor_count": positive_survivors,
+                "useful_count": positive_useful,
+                "bullish_failure_reason": "",
+            }
+        if negative_survivors and not positive_survivors:
+            return {
+                "decision": "failed_setup_blocker",
+                "promotion_level": "L2_discovered",
+                "status": "blocked_by_evidence",
+                "reason": evidence.get("failure_reason", "bullish setup produced negative strict evidence"),
+                "survivor_count": 0,
+                "useful_count": positive_useful,
+                "bullish_failure_reason": evidence.get("failure_reason", ""),
+            }
+        if positive_survivors or positive_useful:
+            return {
+                "decision": "bullish_path_watchlist" if positive_survivors else "refine",
+                "promotion_level": "L2_discovered",
+                "status": "tested",
+                "reason": evidence.get("failure_reason", "positive evidence needs stronger path validation"),
+                "survivor_count": 0,
+                "useful_count": max(positive_useful, positive_survivors),
+                "bullish_failure_reason": evidence.get("failure_reason", ""),
+            }
+        return {
+            "decision": "archive",
+            "promotion_level": "L1_encoded",
+            "status": "archived",
+            "reason": evidence.get("failure_reason", "no positive bullish evidence"),
+            "survivor_count": 0,
+            "useful_count": 0,
+            "bullish_failure_reason": evidence.get("failure_reason", ""),
+        }
     if not survivors.empty:
         return {
             "decision": "promote",
@@ -809,6 +1228,9 @@ def loop_history_entry(
         "reason": decision.get("reason"),
         "survivor_count": int(decision.get("survivor_count", 0) or 0),
         "useful_count": int(decision.get("useful_count", 0) or 0),
+        "objective": decision.get("objective", ""),
+        "claim_type": hypothesis.get("claim_type", ""),
+        "bullish_failure_reason": decision.get("bullish_failure_reason", ""),
         "next_hypothesis_id": child.get("id") if child else "",
         "report_dir": str(report_dir),
         "errors": errors,
@@ -1076,6 +1498,7 @@ def write_loop_summary(
     strict_referee: pd.DataFrame,
     child: dict[str, Any] | None,
     warnings: list[str],
+    bullish_evidence: dict[str, Any] | None = None,
 ) -> None:
     top_columns = [
         "variant_id",
@@ -1124,6 +1547,17 @@ def write_loop_summary(
         "## Next Hypothesis",
         child.get("id") if child else "_None generated._",
     ]
+    if bullish_evidence:
+        lines.extend(
+            [
+                "",
+                "## Bullish Evidence",
+                f"Contract: {'passed' if bullish_evidence.get('passes_bullish_contract') else 'failed'}",
+                f"Positive strict survivors: {bullish_evidence.get('strict_positive_survivors', 0)}",
+                f"Negative strict survivors: {bullish_evidence.get('strict_negative_survivors', 0)}",
+                f"Failure reason: {bullish_evidence.get('failure_reason', '')}",
+            ]
+        )
     if warnings:
         lines.extend(["", "## Warnings", *[f"- {warning}" for warning in warnings[:25]]])
     atomic_write_text(path, "\n".join(lines) + "\n")
@@ -1351,8 +1785,11 @@ def _epoch_csv_rows(entries: list[dict[str, Any]]) -> pd.DataFrame:
                 "hypothesis_id": entry.get("hypothesis_id"),
                 "concept_id": concept_root_from_entry(entry),
                 "track": entry.get("track"),
+                "objective": entry.get("objective"),
+                "claim_type": entry.get("claim_type"),
                 "decision": entry.get("decision"),
                 "reason": entry.get("reason"),
+                "bullish_failure_reason": entry.get("bullish_failure_reason", ""),
                 "survivor_count": entry.get("survivor_count"),
                 "useful_count": entry.get("useful_count"),
                 "generation": entry.get("generation"),
@@ -1360,6 +1797,48 @@ def _epoch_csv_rows(entries: list[dict[str, Any]]) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _bullish_leaderboard_rows(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry.get("track") != "bullish_setup":
+            continue
+        report_dir = Path(str(entry.get("report_dir", "")))
+        evidence_path = report_dir / "bullish_evidence.yaml"
+        if not evidence_path.exists():
+            continue
+        try:
+            evidence = load_yaml_file(evidence_path)
+        except Exception:
+            continue
+        rows.append(
+            {
+                "loop_number": entry.get("loop_number"),
+                "hypothesis_id": entry.get("hypothesis_id"),
+                "claim_type": evidence.get("claim_type", ""),
+                "setup_class": evidence.get("setup_class", ""),
+                "decision": evidence.get("decision", entry.get("decision")),
+                "passes_bullish_contract": evidence.get("passes_bullish_contract", False),
+                "failure_reason": evidence.get("failure_reason", ""),
+                "candidate_variant_id": evidence.get("candidate_variant_id", ""),
+                "candidate_family_id": evidence.get("candidate_family_id", ""),
+                "timeframe": evidence.get("candidate_timeframe", ""),
+                "sample_size": evidence.get("sample_size", 0),
+                "unique_symbols": evidence.get("unique_symbols", 0),
+                "unique_event_clusters": evidence.get("unique_event_clusters", 0),
+                "terminal_median_relative_return": evidence.get("terminal_median_relative_return"),
+                "edge_vs_unconditional": evidence.get("edge_vs_unconditional"),
+                "edge_vs_cluster": evidence.get("edge_vs_cluster"),
+                "hit_rate": evidence.get("hit_rate"),
+                "mfe_mae_ratio": evidence.get("mfe_mae_ratio"),
+                "median_max_drawdown": evidence.get("median_max_drawdown"),
+                "matched_null_p_value": evidence.get("matched_null_p_value"),
+                "validation_status": evidence.get("validation_status", ""),
+                "report_dir": entry.get("report_dir"),
+            }
+        )
+    return rows
 
 
 def write_epoch_reports(
@@ -1380,6 +1859,8 @@ def write_epoch_reports(
     concepts = summarize_epoch_concepts(entries)
     concepts_df = pd.DataFrame(concepts)
     tested_df = _epoch_csv_rows(entries)
+    bullish_rows = _bullish_leaderboard_rows(entries)
+    bullish_df = pd.DataFrame(bullish_rows)
     branch_decisions = {
         "model": "riskflow_lab_loop_epoch_branch_decisions_v0",
         "epoch": epoch_id,
@@ -1427,12 +1908,15 @@ def write_epoch_reports(
         "useful_or_watchlist": sum(int(entry.get("useful_count", 0) or 0) for entry in entries),
         "tested_hypotheses_csv": str(epoch_dir / "tested_hypotheses.csv"),
         "concept_scoreboard_csv": str(epoch_dir / "concept_scoreboard.csv"),
+        "bullish_leaderboard_csv": str(epoch_dir / "bullish_leaderboard.csv") if bullish_rows else "",
         "branch_decisions_yaml": str(epoch_dir / "branch_decisions.yaml"),
         "next_epoch_suggestions_yaml": str(epoch_dir / "next_epoch_suggestions.yaml"),
     }
 
     tested_df.to_csv(epoch_dir / "tested_hypotheses.csv", index=False)
     concepts_df.to_csv(epoch_dir / "concept_scoreboard.csv", index=False)
+    if bullish_rows:
+        bullish_df.to_csv(epoch_dir / "bullish_leaderboard.csv", index=False)
     atomic_write_yaml(epoch_dir / "branch_decisions.yaml", branch_decisions)
     atomic_write_yaml(epoch_dir / "next_epoch_suggestions.yaml", suggestions)
     atomic_write_json(epoch_dir / "epoch_manifest.json", manifest)
@@ -1520,6 +2004,9 @@ def write_epoch_summary(
         "```json",
         json.dumps(decision_counts, indent=2, sort_keys=True),
         "```",
+        "",
+        "## Bullish Leaderboard",
+        manifest.get("bullish_leaderboard_csv") or "_No bullish-positive evidence file was generated in this epoch._",
         "",
         "## Next Epoch Suggestions",
         *suggestion_lines,
@@ -1631,6 +2118,8 @@ def run_lab_epoch(options: LabLoopOptions, *, epoch_size: int = 5) -> dict[str, 
 def run_lab_loop(options: LabLoopOptions) -> dict[str, Any]:
     if options.max_loops < 1:
         raise ValueError("max_loops must be >= 1")
+    if options.objective not in LAB_OBJECTIVES:
+        raise ValueError(f"objective must be one of {', '.join(sorted(LAB_OBJECTIVES))}")
 
     lock_token = acquire_lock(options.lock_path)
     try:
@@ -1655,6 +2144,7 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
             "started_at": state.get("started_at", utc_now_iso()),
             "updated_at": utc_now_iso(),
             "runner_version": LAB_LOOP_MODEL,
+            "objective": options.objective,
             "queue_path": str(options.queue_path),
             "runtime_queue_path": str(options.runtime_queue_path),
             "report_session_dir": str(report_session_dir),
@@ -1813,7 +2303,27 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                     )
                     strict.to_csv(loop_dir / "strict_referee.csv", index=False)
                 ranked.to_csv(loop_dir / "ranked.csv", index=False)
-                decision = decide_loop_outcome(ranked, strict)
+                bullish_evidence = None
+                if options.objective == BULLISH_POSITIVE_OBJECTIVE and hypothesis.get("track") == "bullish_setup":
+                    bullish_evidence = summarize_bullish_evidence(
+                        ranked,
+                        strict,
+                        records,
+                        hypothesis=hypothesis,
+                    )
+                decision = decide_loop_outcome(
+                    ranked,
+                    strict,
+                    hypothesis=hypothesis,
+                    records=records,
+                    objective=options.objective,
+                    bullish_evidence=bullish_evidence,
+                )
+                decision["objective"] = options.objective
+                if bullish_evidence is not None:
+                    bullish_evidence["decision"] = decision.get("decision")
+                    bullish_evidence["decision_reason"] = decision.get("reason")
+                    atomic_write_yaml(loop_dir / "bullish_evidence.yaml", bullish_evidence)
                 child = (
                     create_next_hypothesis(
                         queue=queue,
@@ -1825,22 +2335,40 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                         loop_number=loop_number,
                     )
                     if options.auto_refine
+                    and decision.get("decision") not in {"failed_setup_blocker"}
+                    and not (options.objective == BULLISH_POSITIVE_OBJECTIVE and hypothesis.get("track") == "bullish_setup")
                     else None
                 )
                 children = [child] if child else []
-                if options.auto_gate_followups and decision.get("decision") == "promote":
-                    children.extend(
-                        create_research_gate_followups(
-                            queue=queue,
-                            hypothesis=hypothesis,
-                            ranked=ranked,
-                            strict_referee=strict,
-                            options=options,
-                            session_id=session_id,
-                            loop_number=loop_number,
-                            base_timeframes=search_timeframes,
+                if options.auto_gate_followups:
+                    if options.objective == BULLISH_POSITIVE_OBJECTIVE and hypothesis.get("track") == "bullish_setup":
+                        if decision.get("decision") in {"promote", "refine", "bullish_path_watchlist"}:
+                            children.extend(
+                                create_bullish_control_followups(
+                                    queue=queue,
+                                    hypothesis=hypothesis,
+                                    ranked=ranked,
+                                    strict_referee=strict,
+                                    options=options,
+                                    session_id=session_id,
+                                    loop_number=loop_number,
+                                    base_timeframes=search_timeframes,
+                                    bullish_evidence=bullish_evidence,
+                                )
+                            )
+                    elif decision.get("decision") == "promote":
+                        children.extend(
+                            create_research_gate_followups(
+                                queue=queue,
+                                hypothesis=hypothesis,
+                                ranked=ranked,
+                                strict_referee=strict,
+                                options=options,
+                                session_id=session_id,
+                                loop_number=loop_number,
+                                base_timeframes=search_timeframes,
+                            )
                         )
-                    )
                 if children:
                     atomic_write_yaml(loop_dir / "next_hypotheses.yaml", {"queue": children})
                 else:
@@ -1853,6 +2381,7 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
                     strict_referee=strict,
                     child=child,
                     warnings=data_warnings,
+                    bullish_evidence=bullish_evidence,
                 )
 
             update_hypothesis(

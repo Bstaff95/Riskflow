@@ -117,6 +117,8 @@ The working research method is documented in `docs/VISUAL_INDICATOR_LEARNING_LOO
 
 The observation library is the Karpathy-style LLM wiki layer for this loop. Machine-readable records live under `research/observations/`; Obsidian synthesis pages live under `obsidian/wiki/`. Python remains the evidence engine, while Obsidian stores connected cases, pattern pages, concepts, and human notes.
 
+The Obsidian knowledge-graph bridge (`obsidian_kg.py`) makes that synthesis layer actionable without turning it into a proof engine. It parses curated case, concept, setup-journey, and evidence-summary notes, exports node/edge tables, validates required graph metadata, and compiles bullish setup journeys into lab-loop hypothesis queues plus generated grammar grids. The grammar lab still decides truth through CSV/YAML evidence, strict referee checks, and promotion gates.
+
 The next research layer is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`. It keeps the base oscillator frozen while translating human visual reads into grammar primitives such as `pressure_acceptance`, `failed_weakness`, `zone_reclaim_retest`, `oscillator_structure`, `divergence_quality`, and `curvature_intent`. The primitive registry lives in `research/grammar/primitive_registry.yaml`.
 
 The automated grammar-search layer is a research-only hypothesis generator. `grammar_search.py` expands structured rule families from `research/grammar/rule_search_grid.yaml` across selected timeframes, evaluates forward absolute and relative returns with Layer 7 outcome helpers, and exports ranked candidate variants for chart review. It also exports family/timeframe robustness, duplicate outcome clusters, focused chart-review queues, and time-split validation so top-ranked variants can be separated from more durable candidates. Use optional `grammar-search --strict-referee` for stricter baseline/null validation against same-timeframe, same-cluster, and matched random baselines. Follow-up learning-loop reports can add visual galleries and false-positive atlases for survivors. It does not change `core_signal_v0`, production state labels, setup scores, opportunity ranking, or TradingView defaults.
@@ -204,6 +206,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
 - `visual_review.py`: local chart-snapshot generation for visual breakout archeology.
 - `observation_library.py`: structured observation records and Obsidian wiki export for indicator-learning cases.
+- `obsidian_kg.py`: Obsidian research-graph parser, validator, index exporter, setup-journey queue compiler, and compact evidence-summary exporter.
 - `reports.py`: CSV, HTML, and Obsidian markdown export helpers.
 - `cli.py`: command-line entry points.
 
@@ -215,6 +218,8 @@ python3 -m riskflow event-study --config configs/meme_universe.yaml --timeframe 
 python3 -m riskflow signal-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow grammar-lab
+PYTHONPATH=src python3 -m riskflow obsidian-kg validate
+PYTHONPATH=src python3 -m riskflow obsidian-kg compile-queue --direction bullish
 python3 -m riskflow grammar-search --config configs/meme_universe.yaml --timeframes 1d 12h 4h 1h
 PYTHONPATH=src python3 -m riskflow lab-loop run --max-loops 100 --max-hours 4 --strict-referee --resume
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d

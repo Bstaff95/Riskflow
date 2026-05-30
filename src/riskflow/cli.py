@@ -36,6 +36,7 @@ from .lab_loop import (
     DEFAULT_REPORT_ROOT,
     DEFAULT_RUNTIME_QUEUE_PATH,
     DEFAULT_STATE_PATH,
+    LAB_OBJECTIVES,
     LabLoopOptions,
     lab_loop_status,
     load_lab_queue,
@@ -67,6 +68,18 @@ from .reports import (
 from .research_outcomes import HORIZONS
 from .mtf import MTF_LEADERBOARD_COLUMNS, RESEARCH_MTF_PRESET, append_mtf_context, normalize_timeframe
 from .mtf_research import run_mtf_research
+from .obsidian_kg import (
+    DEFAULT_KG_OUTPUT_DIR,
+    DEFAULT_OBSIDIAN_DIR,
+    DEFAULT_OBSIDIAN_GRID_DIR,
+    DEFAULT_OBSIDIAN_QUEUE_PATH,
+    build_knowledge_graph,
+    compile_setup_journey_queue,
+    export_evidence_summaries,
+    load_obsidian_notes,
+    validate_knowledge_graph,
+    write_knowledge_graph_outputs,
+)
 from .observation_library import export_observation_library
 from .resample import research_mtf_derivations, resample_universe
 from .score_research import run_score_research
@@ -944,6 +957,91 @@ def observation_library_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def obsidian_kg_command(args: argparse.Namespace) -> int:
+    try:
+        nodes = load_obsidian_notes(args.obsidian_dir)
+        graph = build_knowledge_graph(nodes)
+    except Exception as exc:
+        print(f"Obsidian KG load failed: {exc}")
+        return 1
+
+    if args.obsidian_kg_action == "validate":
+        result = validate_knowledge_graph(graph)
+        print(f"Obsidian KG nodes: {len(graph.nodes)}")
+        print(f"Obsidian KG edges: {len(graph.edges)}")
+        if result.errors:
+            print("Errors:")
+            for error in result.errors:
+                print(f"- {error}")
+        if result.warnings:
+            print("Warnings:")
+            for warning in result.warnings[: args.warning_limit]:
+                print(f"- {warning}")
+            if len(result.warnings) > args.warning_limit:
+                print(f"- ... {len(result.warnings) - args.warning_limit} more warnings")
+        if result.errors:
+            return 1
+        print("Obsidian KG valid")
+        return 0
+
+    if args.obsidian_kg_action == "index":
+        try:
+            paths = write_knowledge_graph_outputs(graph, args.output_dir)
+        except Exception as exc:
+            print(f"Obsidian KG index failed: {exc}")
+            return 1
+        print(f"Wrote Obsidian KG nodes CSV: {paths['nodes_csv']}")
+        print(f"Wrote Obsidian KG edges CSV: {paths['edges_csv']}")
+        print(f"Wrote Obsidian KG JSON: {paths['graph_json']}")
+        return 0
+
+    if args.obsidian_kg_action == "compile-queue":
+        result = validate_knowledge_graph(graph)
+        if result.errors:
+            print("Obsidian KG validation failed:")
+            for error in result.errors:
+                print(f"- {error}")
+            return 1
+        try:
+            compiled = compile_setup_journey_queue(
+                graph,
+                direction=args.direction,
+                output_queue=args.output_queue,
+                generated_grid_dir=args.generated_grid_dir,
+                min_source_cases=args.min_source_cases,
+            )
+        except Exception as exc:
+            print(f"Obsidian KG queue compile failed: {exc}")
+            return 1
+        queue = compiled["queue"]
+        print(f"Wrote Obsidian candidate queue: {compiled['queue_path']}")
+        print(f"Wrote generated grids under: {compiled['grid_dir']}")
+        print(f"Hypotheses: {len(queue.get('queue', []))}")
+        if result.warnings:
+            print(f"Warnings: {len(result.warnings)}")
+        return 0
+
+    if args.obsidian_kg_action == "export-evidence":
+        try:
+            paths = export_evidence_summaries(
+                args.session_dir,
+                obsidian_dir=args.obsidian_dir,
+                include_failed=args.include_failed,
+            )
+        except Exception as exc:
+            print(f"Obsidian KG evidence export failed: {exc}")
+            return 1
+        print(f"Wrote evidence summary notes: {len(paths)}")
+        for path in paths[: args.path_limit]:
+            print(f"Wrote: {path}")
+        if len(paths) > args.path_limit:
+            print(f"... {len(paths) - args.path_limit} more")
+        return 0
+
+    print(f"Unknown obsidian-kg action: {args.obsidian_kg_action}")
+    return 1
+
+
 def grammar_lab_command(args: argparse.Namespace) -> int:
     try:
         paths = export_grammar_lab(
@@ -1223,8 +1321,15 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             max_same_root_per_epoch=args.max_same_root_per_epoch,
             min_bullish_share=args.min_bullish_share,
             validation_share=args.validation_share,
+            min_new_bullish_roots=args.min_new_bullish_roots,
+            max_same_setup_class_per_epoch=args.max_same_setup_class_per_epoch,
+            weak_family_attempt_limit=args.weak_family_attempt_limit,
+            weak_family_cooldown_loops=args.weak_family_cooldown_loops,
+            max_non_contract_reseed_source_generation=args.max_non_contract_reseed_source_generation,
+            max_primitive_overlap=args.max_primitive_overlap,
             reseed_when_empty=args.reseed_when_empty,
             max_reseed_per_epoch=args.max_reseed_per_epoch,
+            objective=args.objective,
         )
         try:
             result = supervise_latest_epoch(options)
@@ -1261,6 +1366,7 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             auto_refine=args.auto_refine if action == "run" else False,
             auto_gate_followups=args.auto_gate_followups,
+            objective=args.objective,
         )
         try:
             if action == "run-supervised":
@@ -1278,9 +1384,16 @@ def lab_loop_command(args: argparse.Namespace) -> int:
                         max_same_root_per_epoch=args.max_same_root_per_epoch,
                         min_bullish_share=args.min_bullish_share,
                         validation_share=args.validation_share,
+                        min_new_bullish_roots=args.min_new_bullish_roots,
+                        max_same_setup_class_per_epoch=args.max_same_setup_class_per_epoch,
+                        weak_family_attempt_limit=args.weak_family_attempt_limit,
+                        weak_family_cooldown_loops=args.weak_family_cooldown_loops,
+                        max_non_contract_reseed_source_generation=args.max_non_contract_reseed_source_generation,
+                        max_primitive_overlap=args.max_primitive_overlap,
                         reseed_when_empty=args.reseed_when_empty,
                         max_reseed_per_epoch=args.max_reseed_per_epoch,
                         generated_grid_dir=options.generated_grid_dir,
+                        objective=args.objective,
                     ),
                     epochs=args.epochs,
                     epoch_size=args.epoch_size,
@@ -1616,6 +1729,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     observation_library.set_defaults(func=observation_library_command)
 
+    obsidian_kg = subparsers.add_parser(
+        "obsidian-kg",
+        help="Validate, index, compile, or export the Obsidian research knowledge graph.",
+    )
+    obsidian_kg_subparsers = obsidian_kg.add_subparsers(dest="obsidian_kg_action", required=True)
+
+    kg_validate = obsidian_kg_subparsers.add_parser("validate", help="Validate Obsidian KG notes and links.")
+    kg_validate.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
+    kg_validate.add_argument("--warning-limit", type=int, default=50, help="Maximum warnings to print.")
+    kg_validate.set_defaults(func=obsidian_kg_command)
+
+    kg_index = obsidian_kg_subparsers.add_parser("index", help="Export Obsidian KG node/edge tables.")
+    kg_index.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
+    kg_index.add_argument("--output-dir", default=str(DEFAULT_KG_OUTPUT_DIR), help="Generated KG output directory.")
+    kg_index.set_defaults(func=obsidian_kg_command)
+
+    kg_compile = obsidian_kg_subparsers.add_parser(
+        "compile-queue",
+        help="Compile setup-journey notes into a lab-loop hypothesis queue.",
+    )
+    kg_compile.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
+    kg_compile.add_argument("--direction", default="bullish", choices=["bullish"], help="Setup direction to compile.")
+    kg_compile.add_argument(
+        "--output-queue",
+        default=str(DEFAULT_OBSIDIAN_QUEUE_PATH),
+        help="Generated lab-loop queue YAML path.",
+    )
+    kg_compile.add_argument(
+        "--generated-grid-dir",
+        default=str(DEFAULT_OBSIDIAN_GRID_DIR),
+        help="Directory for generated grammar grids.",
+    )
+    kg_compile.add_argument(
+        "--min-source-cases",
+        type=int,
+        default=1,
+        help="Minimum linked source cases required before compiling a setup journey.",
+    )
+    kg_compile.set_defaults(func=obsidian_kg_command)
+
+    kg_export = obsidian_kg_subparsers.add_parser(
+        "export-evidence",
+        help="Export compact lab-loop bullish evidence summaries into Obsidian.",
+    )
+    kg_export.add_argument("session_dir", help="Lab-loop report session directory containing loop_* outputs.")
+    kg_export.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
+    kg_export.add_argument(
+        "--promoted-only",
+        dest="include_failed",
+        action="store_false",
+        help="Only export evidence summaries that passed the bullish contract.",
+    )
+    kg_export.add_argument("--path-limit", type=int, default=20, help="Maximum written paths to print.")
+    kg_export.set_defaults(include_failed=True)
+    kg_export.set_defaults(func=obsidian_kg_command)
+
     grammar_lab = subparsers.add_parser(
         "grammar-lab",
         help="Summarize Signal Grammar Lab primitive coverage and next review targets.",
@@ -1799,6 +1968,12 @@ def build_parser() -> argparse.ArgumentParser:
             default=str(DEFAULT_CONCEPT_SCOREBOARD_PATH),
             help="Durable concept scoreboard YAML.",
         )
+        command.add_argument(
+            "--objective",
+            choices=sorted(LAB_OBJECTIVES),
+            default="general",
+            help="Lab research objective. Use bullish-positive to require true positive setup evidence.",
+        )
 
     def add_lab_loop_supervisor_args(command: argparse.ArgumentParser) -> None:
         command.add_argument(
@@ -1834,6 +2009,42 @@ def build_parser() -> argparse.ArgumentParser:
             type=float,
             default=0.30,
             help="Minimum next-epoch slot share reserved for validation gates.",
+        )
+        command.add_argument(
+            "--min-new-bullish-roots",
+            type=int,
+            default=3,
+            help="Bullish-positive mode: minimum distinct new bullish roots to prefer per epoch when available.",
+        )
+        command.add_argument(
+            "--max-same-setup-class-per-epoch",
+            type=int,
+            default=1,
+            help="Bullish-positive mode: cap planned slots from one setup_class per epoch.",
+        )
+        command.add_argument(
+            "--weak-family-attempt-limit",
+            type=int,
+            default=3,
+            help="Bullish-positive mode: attempts without a contract pass before cooling a family.",
+        )
+        command.add_argument(
+            "--weak-family-cooldown-loops",
+            type=int,
+            default=25,
+            help="Bullish-positive mode: loop cooldown applied to weak families.",
+        )
+        command.add_argument(
+            "--max-non-contract-reseed-source-generation",
+            type=int,
+            default=0,
+            help="Bullish-positive mode: deepest non-contract generation allowed as a reseed source.",
+        )
+        command.add_argument(
+            "--max-primitive-overlap",
+            type=float,
+            default=0.70,
+            help="Bullish-positive mode: avoid adding discovery slots above this primitive Jaccard overlap.",
         )
         command.add_argument(
             "--max-reseed-per-epoch",

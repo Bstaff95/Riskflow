@@ -9,3 +9,7 @@ Good decision notes answer:
 - What alternatives did we reject?
 - What should future Codex sessions remember?
 
+For the grammar lab, also use this folder when a concept is promoted, demoted,
+merged as a duplicate, or archived.
+
+Do not store raw loop output here.

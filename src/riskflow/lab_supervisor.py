@@ -10,6 +10,7 @@ import pandas as pd
 import yaml
 
 from .lab_loop import (
+    BULLISH_POSITIVE_OBJECTIVE,
     TERMINAL_STATUSES,
     LabLoopOptions,
     atomic_write_json,
@@ -46,9 +47,16 @@ class SupervisorOptions:
     max_same_root_per_epoch: int = 2
     min_bullish_share: float = 0.35
     validation_share: float = 0.30
+    min_new_bullish_roots: int = 3
+    max_same_setup_class_per_epoch: int = 1
+    weak_family_attempt_limit: int = 3
+    weak_family_cooldown_loops: int = 25
+    max_non_contract_reseed_source_generation: int = 0
+    max_primitive_overlap: float = 0.70
     reseed_when_empty: bool = True
     max_reseed_per_epoch: int = 5
     generated_grid_dir: Path = Path("research/lab_loop/generated_grids")
+    objective: str = "general"
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -91,12 +99,23 @@ def _item_priority(item: dict[str, Any]) -> int:
         return 999
 
 
+def _item_max_generation(item: dict[str, Any], options: SupervisorOptions) -> int:
+    branch_budget = item.get("branch_budget", {})
+    if isinstance(branch_budget, dict):
+        try:
+            return int(branch_budget.get("max_generation", options.max_generation))
+        except (TypeError, ValueError):
+            return options.max_generation
+    return options.max_generation
+
+
 def _completed_ids(state: dict[str, Any]) -> set[str]:
     return {str(item) for item in state.get("completed_hypothesis_ids", [])}
 
 
 def _eligible_items(queue: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
     completed = _completed_ids(state)
+    active_loop_number = int(state.get("last_completed_loop", 0) or 0) + 1
     items: list[dict[str, Any]] = []
     for item in queue.get("queue", []):
         if str(item.get("id", "")) in completed:
@@ -105,6 +124,13 @@ def _eligible_items(queue: dict[str, Any], state: dict[str, Any]) -> list[dict[s
             continue
         if not is_executable_hypothesis(item):
             continue
+        cooldown_until = item.get("cooldown_until_loop")
+        if cooldown_until is not None:
+            try:
+                if int(cooldown_until) > active_loop_number:
+                    continue
+            except (TypeError, ValueError):
+                pass
         items.append(item)
     return items
 
@@ -136,6 +162,7 @@ def _score_item(
     promoted_roots: set[str],
     recent_tracks: dict[str, int],
     root_counts: dict[str, int],
+    weak_bullish_roots: set[str],
     options: SupervisorOptions,
 ) -> float:
     item_id = str(item.get("id", ""))
@@ -158,10 +185,25 @@ def _score_item(
         score += 200.0
         if recent_tracks.get("warning", 0) > recent_tracks.get("bullish_setup", 0):
             score += 200.0
+    if options.objective == BULLISH_POSITIVE_OBJECTIVE:
+        claim_type = str(item.get("claim_type", ""))
+        if track == "bullish_setup":
+            score += 500.0
+            if root in weak_bullish_roots:
+                score -= 2000.0
+            if _is_new_bullish_family(item):
+                score += 450.0
+        if claim_type == "bullish_entry":
+            score += 350.0
+        elif claim_type in {"control", "bullish_permission"}:
+            score += 250.0
+        elif claim_type == "warning_blocker":
+            score += 150.0
     if str(item.get("promotion_level", "")).startswith("L3"):
         score += 150.0
-    if generation > options.max_generation:
-        score -= 400.0 + (generation - options.max_generation) * 100.0
+    max_generation = _item_max_generation(item, options)
+    if generation > max_generation:
+        score -= 400.0 + (generation - max_generation) * 100.0
     if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
         score -= 300.0
     return score
@@ -177,6 +219,45 @@ def _stable_sorted(items: list[dict[str, Any]], scores: dict[str, float]) -> lis
             str(item.get("id", "")),
         ),
     )
+
+
+def _item_setup_class(item: dict[str, Any]) -> str:
+    return _slug_part(str(item.get("setup_class") or item.get("candidate_family_id") or _item_root(item)))
+
+
+def _item_discovery_mode(item: dict[str, Any]) -> str:
+    mode = str(item.get("discovery_mode", "")).strip()
+    if mode:
+        return mode
+    stage = str(item.get("research_gate_stage", "")).strip()
+    if stage:
+        return stage
+    return "new_family" if _item_generation(item) == 0 else "refinement"
+
+
+def _is_new_bullish_family(item: dict[str, Any]) -> bool:
+    if str(item.get("track", "")) != "bullish_setup":
+        return False
+    claim_type = str(item.get("claim_type", "bullish_entry") or "bullish_entry")
+    return claim_type in {"", "bullish_entry"} and _item_discovery_mode(item) in {"new_family", "discovery"}
+
+
+def _item_primitives(item: dict[str, Any]) -> set[str]:
+    values = item.get("measurable_primitives", [])
+    if not isinstance(values, list):
+        return set()
+    return {_slug_part(str(value)) for value in values if str(value).strip()}
+
+
+def _primitive_overlap(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_values = _item_primitives(left)
+    right_values = _item_primitives(right)
+    if not left_values or not right_values:
+        return 0.0
+    union = left_values | right_values
+    if not union:
+        return 0.0
+    return len(left_values & right_values) / len(union)
 
 
 def _slug_part(value: str) -> str:
@@ -242,20 +323,129 @@ def _entry_reseed_score(entry: dict[str, Any]) -> float:
     return score
 
 
+def _entry_bullish_evidence(entry: dict[str, Any]) -> dict[str, Any]:
+    evidence_path = Path(str(entry.get("report_dir", ""))) / "bullish_evidence.yaml"
+    if not evidence_path.exists():
+        return {}
+    return _read_yaml(evidence_path)
+
+
+def _bullish_contract_roots(state: dict[str, Any]) -> set[str]:
+    roots: set[str] = set()
+    for entry in state.get("loop_history", []):
+        if str(entry.get("track", "")) != "bullish_setup":
+            continue
+        evidence = _entry_bullish_evidence(entry)
+        if evidence.get("passes_bullish_contract"):
+            roots.add(_item_root({"id": entry.get("hypothesis_id", "")}))
+    return roots
+
+
+def _weak_bullish_roots(state: dict[str, Any], options: SupervisorOptions) -> dict[str, dict[str, Any]]:
+    if options.objective != BULLISH_POSITIVE_OBJECTIVE or options.weak_family_attempt_limit < 1:
+        return {}
+    contract_roots = _bullish_contract_roots(state)
+    attempts: dict[str, dict[str, Any]] = {}
+    for entry in state.get("loop_history", []):
+        if str(entry.get("track", "")) != "bullish_setup":
+            continue
+        root = _item_root({"id": entry.get("hypothesis_id", "")})
+        if root in contract_roots:
+            continue
+        evidence = _entry_bullish_evidence(entry)
+        if evidence.get("passes_bullish_contract"):
+            continue
+        record = attempts.setdefault(
+            root,
+            {
+                "attempts_without_contract": 0,
+                "latest_loop": 0,
+                "positive_useful_rows": 0,
+                "failure_modes": {},
+            },
+        )
+        record["attempts_without_contract"] += 1
+        record["latest_loop"] = max(int(record["latest_loop"]), int(entry.get("loop_number", 0) or 0))
+        record["positive_useful_rows"] += int(evidence.get("positive_useful_rows", 0) or 0)
+        failure = str(evidence.get("failure_reason") or entry.get("bullish_failure_reason") or entry.get("reason") or "")
+        if failure:
+            modes = record["failure_modes"]
+            modes[failure] = int(modes.get(failure, 0)) + 1
+
+    current_loop = int(state.get("last_completed_loop", 0) or 0)
+    weak: dict[str, dict[str, Any]] = {}
+    for root, record in attempts.items():
+        if int(record["attempts_without_contract"]) < options.weak_family_attempt_limit:
+            continue
+        weak[root] = {
+            **record,
+            "cooldown_until_loop": current_loop + options.weak_family_cooldown_loops,
+            "reason": (
+                f"{record['attempts_without_contract']} bullish attempts without a "
+                "bullish-positive contract pass"
+            ),
+        }
+    return weak
+
+
+def _bullish_reseed_score(entry: dict[str, Any]) -> float:
+    evidence = _entry_bullish_evidence(entry)
+    score = _entry_reseed_score(entry)
+
+    def numeric(key: str) -> float:
+        try:
+            value = evidence.get(key, 0)
+            return float(value if value is not None else 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    if evidence.get("passes_bullish_contract"):
+        score += 10000.0
+    if evidence.get("passes_path_gate"):
+        score += 1000.0
+    score += float(evidence.get("positive_useful_rows", 0) or 0) * 25.0
+    score += numeric("terminal_median_relative_return") * 500.0
+    score += numeric("mfe_mae_ratio") * 50.0
+    score += numeric("hit_rate") * 100.0
+    score += numeric("unique_event_clusters") * 10.0
+    if str(evidence.get("failure_reason", "")) == "no useful positive-direction rows":
+        score -= 1000.0
+    return score
+
+
+def _bullish_entry_can_reseed(entry: dict[str, Any], options: SupervisorOptions) -> bool:
+    if options.objective != BULLISH_POSITIVE_OBJECTIVE or str(entry.get("track", "")) != "bullish_setup":
+        return True
+    evidence = _entry_bullish_evidence(entry)
+    if not evidence:
+        return False
+    if evidence.get("passes_bullish_contract"):
+        return True
+    return bool(
+        evidence.get("passes_path_gate")
+        and int(evidence.get("positive_useful_rows", 0) or 0) > 0
+        and str(evidence.get("failure_reason", "")) != "no useful positive-direction rows"
+    )
+
+
 def _select_reseed_source_entries(state: dict[str, Any], options: SupervisorOptions) -> list[dict[str, Any]]:
-    latest = [entry for entry in _latest_epoch_entries(state) if _entry_has_reseed_evidence(entry)]
+    latest = [
+        entry
+        for entry in _latest_epoch_entries(state)
+        if _entry_has_reseed_evidence(entry) and _bullish_entry_can_reseed(entry, options)
+    ]
     latest_keys = {(entry.get("loop_number"), entry.get("hypothesis_id")) for entry in latest}
     archive = [
         entry
         for entry in state.get("loop_history", [])
         if _entry_has_reseed_evidence(entry)
+        and _bullish_entry_can_reseed(entry, options)
         and (entry.get("loop_number"), entry.get("hypothesis_id")) not in latest_keys
     ]
-    latest = sorted(latest, key=_entry_reseed_score, reverse=True)
-    archive = sorted(archive, key=_entry_reseed_score, reverse=True)
     selected: list[dict[str, Any]] = []
     selected_keys: set[tuple[Any, Any]] = set()
     root_counts: dict[str, int] = {}
+    weak_roots = set(_weak_bullish_roots(state, options))
 
     def add_entry(entry: dict[str, Any]) -> bool:
         if len(selected) >= options.max_reseed_per_epoch:
@@ -266,10 +456,52 @@ def _select_reseed_source_entries(state: dict[str, Any], options: SupervisorOpti
         root = _item_root({"id": entry.get("hypothesis_id", "")})
         if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
             return False
+        if options.objective == BULLISH_POSITIVE_OBJECTIVE and root in weak_roots:
+            return False
+        if (
+            options.objective == BULLISH_POSITIVE_OBJECTIVE
+            and str(entry.get("track", "")) == "bullish_setup"
+            and not _entry_bullish_evidence(entry).get("passes_bullish_contract")
+            and int(entry.get("generation", 0) or 0) > options.max_non_contract_reseed_source_generation
+        ):
+            return False
         selected.append(entry)
         selected_keys.add(key)
         root_counts[root] = root_counts.get(root, 0) + 1
         return True
+
+    if options.objective == BULLISH_POSITIVE_OBJECTIVE:
+        combined = [*latest, *archive]
+        bullish = sorted(
+            [entry for entry in combined if str(entry.get("track", "")) == "bullish_setup"],
+            key=_bullish_reseed_score,
+            reverse=True,
+        )
+        non_bullish = sorted(
+            [entry for entry in combined if str(entry.get("track", "")) != "bullish_setup"],
+            key=_entry_reseed_score,
+            reverse=True,
+        )
+        bullish_target = min(
+            len(bullish),
+            math.ceil(options.max_reseed_per_epoch * max(options.min_bullish_share, 0.70)),
+        )
+        for entry in bullish:
+            if sum(1 for item in selected if str(item.get("track", "")) == "bullish_setup") >= bullish_target:
+                break
+            add_entry(entry)
+        for entry in non_bullish:
+            if len(selected) >= options.max_reseed_per_epoch:
+                break
+            add_entry(entry)
+        for entry in bullish:
+            if len(selected) >= options.max_reseed_per_epoch:
+                break
+            add_entry(entry)
+        return selected
+
+    latest = sorted(latest, key=_entry_reseed_score, reverse=True)
+    archive = sorted(archive, key=_entry_reseed_score, reverse=True)
 
     for entry in latest:
         add_entry(entry)
@@ -341,9 +573,17 @@ def reseed_runtime_queue_from_recent_evidence(
         grid_path = options.generated_grid_dir / session_id / f"{child_id}.yaml"
         atomic_write_yaml(grid_path, grid)
         direction = str(candidate.get("direction", ""))
+        parent_track = str(parent.get("track") or entry.get("track") or "")
+        child_track = parent_track or ("warning" if direction == "negative" else "bullish_setup")
+        claim_type = str(parent.get("claim_type", "") or "")
+        if options.objective == BULLISH_POSITIVE_OBJECTIVE:
+            if child_track == "bullish_setup":
+                claim_type = claim_type or "bullish_entry"
+            elif child_track == "warning":
+                claim_type = claim_type or "warning_blocker"
         child = {
             "id": child_id,
-            "track": parent.get("track") or ("warning" if direction == "negative" else "bullish_setup"),
+            "track": child_track,
             "status": "new",
             "promotion_level": "L1_encoded",
             "priority": reseeded,
@@ -351,6 +591,7 @@ def reseed_runtime_queue_from_recent_evidence(
             "generation": generation,
             "created_from": "meta_supervisor_reseed",
             "research_gate_stage": "reseed",
+            "discovery_mode": "refinement",
             "source": str(grid_path),
             "hypothesis": f"Supervisor reseed from latest strict/useful evidence in {parent_id}.",
             "measurable_primitives": list(parent.get("measurable_primitives", [])) + ["supervisor_reseed"],
@@ -360,6 +601,11 @@ def reseed_runtime_queue_from_recent_evidence(
             "next_action": "Run as a bounded reseed because the runtime queue exhausted runnable evidence.",
             "supervisor_priority_reason": "reseeded from latest strict/useful evidence after queue exhaustion",
         }
+        if claim_type:
+            child["claim_type"] = claim_type
+        for key in ("setup_class", "path_objective", "branch_budget", "required_controls"):
+            if key in parent:
+                child[key] = parent[key]
         queue.setdefault("queue", []).append(child)
         existing_ids.add(child_id)
         actions.append(f"reseeded {child_id} from {parent_id}")
@@ -372,15 +618,18 @@ def _pick_epoch_slots(
     *,
     promoted_roots: set[str],
     recent_tracks: dict[str, int],
+    weak_bullish_roots: set[str],
     options: SupervisorOptions,
 ) -> list[dict[str, Any]]:
     root_counts: dict[str, int] = {}
+    setup_class_counts: dict[str, int] = {}
     scores = {
         str(item.get("id", "")): _score_item(
             item,
             promoted_roots=promoted_roots,
             recent_tracks=recent_tracks,
             root_counts=root_counts,
+            weak_bullish_roots=weak_bullish_roots,
             options=options,
         )
         for item in eligible
@@ -388,27 +637,110 @@ def _pick_epoch_slots(
     chosen: list[dict[str, Any]] = []
     chosen_ids: set[str] = set()
 
-    def add_from(candidates: list[dict[str, Any]], slots: int) -> None:
+    def can_add(candidate: dict[str, Any], *, enforce_setup_class: bool = False, enforce_overlap: bool = False) -> bool:
+        candidate_id = str(candidate.get("id", ""))
+        root = _item_root(candidate)
+        if candidate_id in chosen_ids:
+            return False
+        if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
+            return False
+        if options.objective == BULLISH_POSITIVE_OBJECTIVE and root in weak_bullish_roots:
+            return False
+        if enforce_setup_class and str(candidate.get("track", "")) == "bullish_setup":
+            setup_class = _item_setup_class(candidate)
+            if setup_class_counts.get(setup_class, 0) >= options.max_same_setup_class_per_epoch:
+                return False
+        if enforce_overlap and options.max_primitive_overlap < 1:
+            for item in chosen:
+                if _primitive_overlap(candidate, item) > options.max_primitive_overlap:
+                    return False
+        return True
+
+    def add_from(
+        candidates: list[dict[str, Any]],
+        slots: int,
+        *,
+        enforce_setup_class: bool = False,
+        enforce_overlap: bool = False,
+    ) -> None:
         for candidate in _stable_sorted(candidates, scores):
             if len(chosen) >= options.epoch_size or slots <= 0:
                 return
+            if not can_add(
+                candidate,
+                enforce_setup_class=enforce_setup_class,
+                enforce_overlap=enforce_overlap,
+            ):
+                continue
             candidate_id = str(candidate.get("id", ""))
             root = _item_root(candidate)
-            if candidate_id in chosen_ids:
-                continue
-            if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
-                continue
             chosen.append(candidate)
             chosen_ids.add(candidate_id)
             root_counts[root] = root_counts.get(root, 0) + 1
+            setup_class = _item_setup_class(candidate)
+            setup_class_counts[setup_class] = setup_class_counts.get(setup_class, 0) + 1
             slots -= 1
+
+    if options.objective == BULLISH_POSITIVE_OBJECTIVE:
+        bullish_entries = [
+            item
+            for item in eligible
+            if _is_new_bullish_family(item) and _item_root(item) not in weak_bullish_roots
+        ]
+        controls = [
+            item
+            for item in eligible
+            if str(item.get("claim_type", "")) in {"control", "bullish_permission", "warning_blocker"}
+            or str(item.get("research_gate_stage", "")) in {"attribution"}
+        ]
+        validations = [
+            item
+            for item in eligible
+            if str(item.get("research_gate_stage", "")) == "validation"
+            or (
+                str(item.get("track", "")) == "bullish_setup"
+                and str(item.get("claim_type", "")) in {"", "bullish_entry"}
+                and _item_generation(item) > 0
+            )
+        ]
+        add_from(
+            bullish_entries,
+            min(len(bullish_entries), options.min_new_bullish_roots),
+            enforce_setup_class=True,
+            enforce_overlap=True,
+        )
+        if len(chosen) < min(options.epoch_size, options.min_new_bullish_roots):
+            add_from(
+                bullish_entries,
+                min(len(bullish_entries), options.min_new_bullish_roots) - len(chosen),
+                enforce_setup_class=True,
+            )
+        add_from(validations, 1)
+        add_from(controls, 1, enforce_overlap=True)
+        bullish_floor = min(
+            len([item for item in eligible if str(item.get("track", "")) == "bullish_setup"]),
+            math.ceil(options.epoch_size * max(options.min_bullish_share, 0.70)),
+        )
+        current_bullish = sum(1 for item in chosen if str(item.get("track", "")) == "bullish_setup")
+        if current_bullish < bullish_floor:
+            bullish = [
+                item
+                for item in eligible
+                if str(item.get("track", "")) == "bullish_setup" and _item_root(item) not in weak_bullish_roots
+            ]
+            add_from(bullish, bullish_floor - current_bullish, enforce_setup_class=True)
+        add_from(eligible, options.epoch_size - len(chosen))
+        return chosen[: options.epoch_size]
 
     validation_slots = max(1, math.ceil(options.epoch_size * options.validation_share))
     validation = [item for item in eligible if str(item.get("research_gate_stage", "")) == "validation"]
     add_from(validation, validation_slots)
 
     bullish = [item for item in eligible if str(item.get("track", "")) == "bullish_setup"]
-    bullish_floor = min(len(bullish), math.ceil(options.epoch_size * options.min_bullish_share))
+    bullish_floor = min(
+        len(bullish),
+        math.ceil(options.epoch_size * options.min_bullish_share),
+    )
     current_bullish = sum(1 for item in chosen if str(item.get("track", "")) == "bullish_setup")
     add_from(bullish, max(0, bullish_floor - current_bullish))
 
@@ -436,6 +768,7 @@ def _queue_patch_for_caps(
     eligible: list[dict[str, Any]],
     slots: list[dict[str, Any]],
     *,
+    weak_bullish_roots: dict[str, dict[str, Any]],
     options: SupervisorOptions,
 ) -> list[dict[str, Any]]:
     slot_roots: dict[str, int] = {}
@@ -448,14 +781,27 @@ def _queue_patch_for_caps(
             continue
         root = _item_root(item)
         generation = _item_generation(item)
-        if generation > options.max_generation and str(item.get("research_gate_stage", "")) != "validation":
+        max_generation = _item_max_generation(item, options)
+        if root in weak_bullish_roots and options.objective == BULLISH_POSITIVE_OBJECTIVE:
+            weak = weak_bullish_roots[root]
+            patch.append(
+                {
+                    "type": "cool_family",
+                    "hypothesis_id": item.get("id"),
+                    "old_priority": _item_priority(item),
+                    "new_priority": _item_priority(item) + 500,
+                    "cooldown_until_loop": weak.get("cooldown_until_loop", 0),
+                    "reason": weak.get("reason", "bullish family cooled after repeated non-contract evidence"),
+                }
+            )
+        elif generation > max_generation and str(item.get("research_gate_stage", "")) != "validation":
             patch.append(
                 {
                     "type": "cool",
                     "hypothesis_id": item.get("id"),
                     "old_priority": _item_priority(item),
                     "new_priority": _item_priority(item) + 200,
-                    "reason": f"generation {generation} exceeds supervisor max_generation={options.max_generation}",
+                    "reason": f"generation {generation} exceeds supervisor max_generation={max_generation}",
                 }
             )
         elif slot_roots.get(root, 0) >= options.max_same_root_per_epoch and item not in slots:
@@ -480,15 +826,17 @@ def build_supervisor_decision(
     promoted_roots = {str(item.get("concept_id")) for item in decisions if item.get("decision") == "promote"}
     recent_tracks = _recent_track_counts(state)
     eligible = _eligible_items(queue, state)
+    weak_bullish_roots = _weak_bullish_roots(state, options)
     slots = _pick_epoch_slots(
         eligible,
         promoted_roots=promoted_roots,
         recent_tracks=recent_tracks,
+        weak_bullish_roots=set(weak_bullish_roots),
         options=options,
     )
     queue_patch = [
         *_queue_patch_for_slots(slots),
-        *_queue_patch_for_caps(eligible, slots, options=options),
+        *_queue_patch_for_caps(eligible, slots, weak_bullish_roots=weak_bullish_roots, options=options),
     ]
     concept_decisions = []
     concepts = scoreboard.get("concepts", {}) if isinstance(scoreboard.get("concepts", {}), dict) else {}
@@ -498,7 +846,9 @@ def build_supervisor_decision(
         strict = int(concept.get("strict_survivors", 0) or 0) if isinstance(concept, dict) else 0
         clusters = int(concept.get("event_clusters", 0) or 0) if isinstance(concept, dict) else 0
         branch_action = str(decision.get("decision", ""))
-        if branch_action == "promote":
+        if concept_id in weak_bullish_roots and options.objective == BULLISH_POSITIVE_OBJECTIVE:
+            action = "cool_weak_family"
+        elif branch_action == "promote":
             action = "validate"
         elif branch_action == "archive":
             action = "archive"
@@ -510,7 +860,7 @@ def build_supervisor_decision(
             {
                 "concept_id": concept_id,
                 "action": action,
-                "reason": decision.get("reason", ""),
+                "reason": weak_bullish_roots.get(concept_id, {}).get("reason", decision.get("reason", "")),
                 "evidence": {
                     "strict_survivors": strict,
                     "event_clusters": clusters,
@@ -528,13 +878,20 @@ def build_supervisor_decision(
         "epoch": state.get("last_epoch", {}).get("epoch", ""),
         "generated_at": utc_now_iso(),
         "apply": options.apply,
-        "objective": "validate_survivors_balance_tracks_cap_lineages",
+        "objective": options.objective,
         "policy": {
             "epoch_size": options.epoch_size,
             "max_generation": options.max_generation,
             "max_same_root_per_epoch": options.max_same_root_per_epoch,
             "min_bullish_share": options.min_bullish_share,
             "validation_share": options.validation_share,
+            "bullish_positive_mode": options.objective == BULLISH_POSITIVE_OBJECTIVE,
+            "min_new_bullish_roots": options.min_new_bullish_roots,
+            "max_same_setup_class_per_epoch": options.max_same_setup_class_per_epoch,
+            "weak_family_attempt_limit": options.weak_family_attempt_limit,
+            "weak_family_cooldown_loops": options.weak_family_cooldown_loops,
+            "max_non_contract_reseed_source_generation": options.max_non_contract_reseed_source_generation,
+            "max_primitive_overlap": options.max_primitive_overlap,
         },
         "inputs": {
             "state_path": str(options.state_path),
@@ -544,6 +901,7 @@ def build_supervisor_decision(
             "eligible_hypotheses": len(eligible),
             "recent_tracks": recent_tracks,
         },
+        "weak_bullish_roots": weak_bullish_roots,
         "concept_decisions": concept_decisions,
         "next_epoch_slots": [
             {
@@ -569,11 +927,14 @@ def apply_supervisor_decision(queue: dict[str, Any], decision: dict[str, Any]) -
         if item is None:
             continue
         patch_type = str(patch.get("type", ""))
-        if patch_type in {"schedule", "cool"}:
+        if patch_type in {"schedule", "cool", "cool_family"}:
             item["priority"] = int(patch.get("new_priority", item.get("priority", 999)))
             item["last_supervised_at"] = decision.get("generated_at")
-            item["supervisor_action"] = patch_type
+            item["supervisor_action"] = "cool_weak_family" if patch_type == "cool_family" else patch_type
             item["supervisor_priority_reason"] = patch.get("reason", "")
+            if "cooldown_until_loop" in patch:
+                item["cooldown_until_loop"] = int(patch.get("cooldown_until_loop", 0) or 0)
+                item["evidence_budget_status"] = "cooldown_weak_family"
             if "slot" in patch:
                 item["supervisor_next_epoch_slot"] = int(patch["slot"])
             actions.append(f"{patch_type} {hypothesis_id} priority {patch.get('old_priority')}->{item['priority']}")
@@ -583,6 +944,16 @@ def apply_supervisor_decision(queue: dict[str, Any], decision: dict[str, Any]) -
             item["supervisor_priority_reason"] = patch.get("reason", "")
             actions.append(f"tagged {hypothesis_id}: {patch.get('reason', '')}")
     return actions
+
+
+def _latest_bullish_evidence(state: dict[str, Any], concept_id: str) -> dict[str, Any]:
+    for entry in reversed(state.get("loop_history", [])):
+        if _item_root({"id": entry.get("hypothesis_id", "")}) != concept_id:
+            continue
+        evidence_path = Path(str(entry.get("report_dir", ""))) / "bullish_evidence.yaml"
+        if evidence_path.exists():
+            return _read_yaml(evidence_path)
+    return {}
 
 
 def update_evidence_ledger(
@@ -597,10 +968,17 @@ def update_evidence_ledger(
     if not isinstance(concepts, dict):
         concepts = {}
     scoreboard_concepts = scoreboard.get("concepts", {}) if isinstance(scoreboard.get("concepts", {}), dict) else {}
+    weak_bullish_roots = decision.get("weak_bullish_roots", {})
+    if not isinstance(weak_bullish_roots, dict):
+        weak_bullish_roots = {}
     for concept in decision.get("concept_decisions", []):
         concept_id = str(concept.get("concept_id", ""))
         source = scoreboard_concepts.get(concept_id, {}) if isinstance(scoreboard_concepts, dict) else {}
+        bullish_evidence = _latest_bullish_evidence(state, concept_id)
         prior = concepts.get(concept_id, {})
+        weak = weak_bullish_roots.get(concept_id, {})
+        if not isinstance(weak, dict):
+            weak = {}
         concepts[concept_id] = {
             **prior,
             "track": source.get("track", prior.get("track", "")) if isinstance(source, dict) else prior.get("track", ""),
@@ -623,6 +1001,23 @@ def update_evidence_ledger(
             "last_supervisor_reason": concept.get("reason", ""),
             "latest_epoch": decision.get("epoch", ""),
             "latest_loop": state.get("last_completed_loop", 0),
+            "claim_type": bullish_evidence.get("claim_type", prior.get("claim_type", "")),
+            "setup_class": bullish_evidence.get("setup_class", prior.get("setup_class", "")),
+            "path_gate": bullish_evidence.get("passes_path_gate", prior.get("path_gate", None)),
+            "bullish_contract": bullish_evidence.get(
+                "passes_bullish_contract",
+                prior.get("bullish_contract", None),
+            ),
+            "failure_mode": bullish_evidence.get("failure_reason", prior.get("failure_mode", "")),
+            "next_allowed_action": "validate_bullish_controls"
+            if bullish_evidence.get("passes_bullish_contract")
+            else ("needs_new_bullish_family" if weak else prior.get("next_allowed_action", "")),
+            "attempts_without_bullish_contract": weak.get(
+                "attempts_without_contract",
+                prior.get("attempts_without_bullish_contract", 0),
+            ),
+            "suspended_until_loop": weak.get("cooldown_until_loop", prior.get("suspended_until_loop", "")),
+            "retirement_reason": weak.get("reason", prior.get("retirement_reason", "")),
             "updated_at": decision.get("generated_at", utc_now_iso()),
         }
     atomic_write_yaml(
@@ -666,6 +1061,15 @@ def write_supervisor_artifacts(
         f"Generated: {decision.get('generated_at', '')}",
         f"Applied: {bool(decision.get('apply'))}",
         f"Objective: {decision.get('objective', '')}",
+        "",
+        "## Weak Bullish Families",
+        *(
+            [
+                f"- {root}: {details.get('reason', '')}; cooldown until loop {details.get('cooldown_until_loop', '')}"
+                for root, details in sorted(dict(decision.get("weak_bullish_roots", {})).items())
+            ]
+            or ["- None."]
+        ),
         "",
         "## Next Epoch Slots",
         *[

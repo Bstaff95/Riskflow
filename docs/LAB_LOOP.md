@@ -137,8 +137,86 @@ Promotion meaning after this change:
 - no candidate becomes gradient or indicator logic until it has passed those
   gates and a Codex supervisor review.
 
+## Bullish-Positive Objective
+
+Use `--objective bullish-positive` when the mission is to find actual long setup
+evidence rather than warnings found during bullish-looking tests.
+
+In this mode, a `bullish_setup` hypothesis cannot promote just because it found
+a strict survivor. It must pass a bullish evidence contract:
+
+- direction is `positive`;
+- terminal forward relative median is positive;
+- edge versus unconditional and same-cluster baselines is positive;
+- matched-null and time-split validation pass;
+- event diversity clears the bullish thresholds;
+- the path is tradeable, with positive MFE and acceptable MFE/MAE.
+
+If a bullish-looking setup produces strict negative evidence, the loop treats it
+as a failed setup blocker, not as a bullish promotion. Each bullish loop writes
+`bullish_evidence.yaml`, and each epoch with bullish evidence writes
+`bullish_leaderboard.csv`.
+
+Bullish queue items may add optional metadata:
+
+- `claim_type`: `bullish_entry`, `bullish_permission`, `warning_blocker`, or
+  `control`;
+- `setup_class`: a short family label, such as `post_underperformance`;
+- `path_objective`: local thresholds for event diversity, MAE, or MFE/MAE;
+- `branch_budget`: local lineage caps for the supervisor.
+
+When the runtime queue is exhausted under `--objective bullish-positive`, the
+supervisor reseeds bullish near-misses before warning-only branches. A near-miss
+can reseed only when it has a bullish evidence file, passes the path gate, and
+contains positive useful rows. It still does not promote unless the full bullish
+contract passes.
+
+The bullish supervisor now treats discovery as a portfolio. For a 5-loop epoch,
+it prefers three distinct new bullish setup roots, one control/blocker, and one
+validation or refinement slot when those candidates exist. A weak family that
+keeps producing path-gate-only evidence without a bullish contract pass is cooled
+instead of recursively reseeded. Non-contract children may seed one bounded
+follow-up from the original family, but later-generation near-misses must add a
+new setup class or wait for fresh evidence.
+
+Example:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-loop run-supervised \
+  --objective bullish-positive \
+  --epochs 20 \
+  --epoch-size 5 \
+  --strict-referee \
+  --strict-null-iterations 1000 \
+  --timeframes 1d 12h 4h 1h \
+  --resume
+```
+
 Open-ended `lab-loop run` remains available for controlled testing, but the
 preferred research mode is `lab-loop run-epoch`.
+
+## Obsidian Knowledge Graph Input
+
+Use Obsidian setup-journey notes when the lab needs new bullish hypotheses from
+human visual knowledge rather than another same-sample refinement.
+
+Workflow:
+
+```bash
+PYTHONPATH=src python3 -m riskflow obsidian-kg validate
+PYTHONPATH=src python3 -m riskflow obsidian-kg compile-queue --direction bullish
+PYTHONPATH=src python3 -m riskflow lab-loop run-supervised \
+  --objective bullish-positive \
+  --queue research/lab_loop/obsidian_candidate_queue.yaml \
+  --epochs 10 \
+  --epoch-size 5 \
+  --strict-referee
+```
+
+The compiler reads curated `setup_journey` notes and writes a normal lab-loop
+queue plus generated grammar grids. Each compiled journey includes full setup,
+trigger-only, permission, blocker-present, and direction-control tests. Obsidian
+chooses what to test; the Python evidence engine decides whether it is true.
 
 ## Agent Checkpoints
 

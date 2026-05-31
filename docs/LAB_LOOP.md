@@ -152,6 +152,17 @@ a strict survivor. It must pass a bullish evidence contract:
 - event diversity clears the bullish thresholds;
 - the path is tradeable, with positive MFE and acceptable MFE/MAE.
 
+The bullish contract is tiered so the lab can learn from asymmetric meme-coin
+paths without promoting them too early:
+
+- `blocker`: bullish-looking setup produced strict negative evidence;
+- `archive`: no useful positive rows or no tradeable path;
+- `path_watchlist`: path quality exists but strict validation is missing;
+- `asymmetric_candidate`: positive relative path and MFE/MAE are strong while
+  hit rate remains below the normal clean-entry threshold;
+- `strict_validated`: full bullish contract pass and the only tier that sets
+  `passes_bullish_contract: true`.
+
 If a bullish-looking setup produces strict negative evidence, the loop treats it
 as a failed setup blocker, not as a bullish promotion. Each bullish loop writes
 `bullish_evidence.yaml`, and each epoch with bullish evidence writes
@@ -170,6 +181,12 @@ supervisor reseeds bullish near-misses before warning-only branches. A near-miss
 can reseed only when it has a bullish evidence file, passes the path gate, and
 contains positive useful rows. It still does not promote unless the full bullish
 contract passes.
+
+Generated follow-ups carry canonical lineage metadata (`root_id`,
+`lineage_fingerprint`, and reseed signatures) so the supervisor can cool weak
+families and skip duplicate reseeds without relying on truncated IDs. A long run
+that stops with no runnable hypotheses should be treated as evidence exhaustion,
+not as permission to keep brute-forcing the same queue.
 
 The bullish supervisor now treats discovery as a portfolio. For a 5-loop epoch,
 it prefers three distinct new bullish setup roots, one control/blocker, and one
@@ -204,7 +221,10 @@ Workflow:
 
 ```bash
 PYTHONPATH=src python3 -m riskflow obsidian-kg validate
-PYTHONPATH=src python3 -m riskflow obsidian-kg compile-queue --direction bullish
+PYTHONPATH=src python3 -m riskflow obsidian-kg compile-queue \
+  --direction bullish \
+  --include-research-grammar \
+  --max-research-families 80
 PYTHONPATH=src python3 -m riskflow lab-loop run-supervised \
   --objective bullish-positive \
   --queue research/lab_loop/obsidian_candidate_queue.yaml \
@@ -217,6 +237,22 @@ The compiler reads curated `setup_journey` notes and writes a normal lab-loop
 queue plus generated grammar grids. Each compiled journey includes full setup,
 trigger-only, permission, blocker-present, and direction-control tests. Obsidian
 chooses what to test; the Python evidence engine decides whether it is true.
+When the vault has too few curated setup journeys, `--include-research-grammar`
+adds compact one-family bullish candidates from prior `research/grammar` grids
+so the supervisor has enough distinct setup classes to run broad discovery.
+
+For the current bullish-entry mission, prefer the targeted queue before another
+broad run:
+
+```bash
+PYTHONPATH=src python3 -m riskflow obsidian-kg compile-targeted-bullish-queue
+PYTHONPATH=src python3 -m riskflow lab-loop validate-queue \
+  --queue research/lab_loop/targeted_bullish_candidate_queue.yaml
+```
+
+This queue focuses on regime-confirmed reclaim, deeper reset reclaim,
+parent-context failed-weakness permission/blocker logic, and fresh-leader
+follow-up as a filter rather than a standalone long trigger.
 
 ## Agent Checkpoints
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -17,7 +18,9 @@ from .lab_loop import (
     atomic_write_text,
     atomic_write_yaml,
     build_refinement_grid,
+    canonical_hypothesis_root,
     is_executable_hypothesis,
+    lineage_fingerprint,
     load_lab_queue,
     load_lab_state,
     load_yaml_file,
@@ -55,6 +58,8 @@ class SupervisorOptions:
     max_primitive_overlap: float = 0.70
     reseed_when_empty: bool = True
     max_reseed_per_epoch: int = 5
+    max_reseeds_per_root: int = 2
+    max_reseed_signature_attempts: int = 1
     generated_grid_dir: Path = Path("research/lab_loop/generated_grids")
     objective: str = "general"
 
@@ -113,25 +118,86 @@ def _completed_ids(state: dict[str, Any]) -> set[str]:
     return {str(item) for item in state.get("completed_hypothesis_ids", [])}
 
 
-def _eligible_items(queue: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+def _entry_root(entry: dict[str, Any]) -> str:
+    return str(entry.get("root_hypothesis_id") or _item_root({"id": entry.get("hypothesis_id", "")}))
+
+
+def _eligibility_block_reason(
+    item: dict[str, Any],
+    state: dict[str, Any],
+    options: SupervisorOptions | None = None,
+    *,
+    weak_roots: set[str] | None = None,
+) -> str:
     completed = _completed_ids(state)
+    item_id = str(item.get("id", ""))
+    if item_id in completed:
+        return "completed"
+    if _is_terminal(item):
+        return "terminal"
+    if not is_executable_hypothesis(item):
+        return "missing_source"
     active_loop_number = int(state.get("last_completed_loop", 0) or 0) + 1
-    items: list[dict[str, Any]] = []
+    cooldown_until = item.get("cooldown_until_loop")
+    if cooldown_until is not None:
+        try:
+            if int(cooldown_until) > active_loop_number:
+                return "cooled"
+        except (TypeError, ValueError):
+            pass
+    if options is not None:
+        generation = _item_generation(item)
+        max_generation = _item_max_generation(item, options)
+        if generation > max_generation and str(item.get("research_gate_stage", "")) != "validation":
+            return "over_cap"
+        if (
+            options.objective == BULLISH_POSITIVE_OBJECTIVE
+            and weak_roots is not None
+            and _item_root(item) in weak_roots
+        ):
+            return "weak_family"
+    return "runnable"
+
+
+def runnable_inventory(
+    queue: dict[str, Any],
+    state: dict[str, Any],
+    options: SupervisorOptions | None = None,
+) -> dict[str, int]:
+    weak_roots = set(_weak_bullish_roots(state, options)) if options is not None else set()
+    counts = {
+        "runnable": 0,
+        "completed": 0,
+        "terminal": 0,
+        "cooled": 0,
+        "over_cap": 0,
+        "weak_family": 0,
+        "missing_source": 0,
+        "duplicate_signature": 0,
+    }
+    seen_signatures: set[str] = set()
     for item in queue.get("queue", []):
-        if str(item.get("id", "")) in completed:
-            continue
-        if _is_terminal(item):
-            continue
-        if not is_executable_hypothesis(item):
-            continue
-        cooldown_until = item.get("cooldown_until_loop")
-        if cooldown_until is not None:
-            try:
-                if int(cooldown_until) > active_loop_number:
-                    continue
-            except (TypeError, ValueError):
-                pass
-        items.append(item)
+        signature = str(item.get("reseed_source_signature", "") or "")
+        if signature:
+            if signature in seen_signatures:
+                counts["duplicate_signature"] += 1
+                continue
+            seen_signatures.add(signature)
+        reason = _eligibility_block_reason(item, state, options, weak_roots=weak_roots)
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _eligible_items(
+    queue: dict[str, Any],
+    state: dict[str, Any],
+    options: SupervisorOptions | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    weak_roots = set(_weak_bullish_roots(state, options)) if options is not None else set()
+    for item in queue.get("queue", []):
+        if _eligibility_block_reason(item, state, options, weak_roots=weak_roots) == "runnable":
+            items.append(item)
     return items
 
 
@@ -337,7 +403,7 @@ def _bullish_contract_roots(state: dict[str, Any]) -> set[str]:
             continue
         evidence = _entry_bullish_evidence(entry)
         if evidence.get("passes_bullish_contract"):
-            roots.add(_item_root({"id": entry.get("hypothesis_id", "")}))
+            roots.add(_entry_root(entry))
     return roots
 
 
@@ -349,7 +415,7 @@ def _weak_bullish_roots(state: dict[str, Any], options: SupervisorOptions) -> di
     for entry in state.get("loop_history", []):
         if str(entry.get("track", "")) != "bullish_setup":
             continue
-        root = _item_root({"id": entry.get("hypothesis_id", "")})
+        root = _entry_root(entry)
         if root in contract_roots:
             continue
         evidence = _entry_bullish_evidence(entry)
@@ -453,7 +519,7 @@ def _select_reseed_source_entries(state: dict[str, Any], options: SupervisorOpti
         key = (entry.get("loop_number"), entry.get("hypothesis_id"))
         if key in selected_keys:
             return False
-        root = _item_root({"id": entry.get("hypothesis_id", "")})
+        root = _entry_root(entry)
         if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
             return False
         if options.objective == BULLISH_POSITIVE_OBJECTIVE and root in weak_roots:
@@ -524,6 +590,21 @@ def _select_reseed_source_entries(state: dict[str, Any], options: SupervisorOpti
     return selected
 
 
+def _reseed_source_signature(root: str, candidate: pd.Series, generation: int) -> str:
+    payload = {
+        "root": root,
+        "generation": generation,
+        "variant_id": str(candidate.get("variant_id", "")),
+        "family_id": str(candidate.get("family_id", "")),
+        "detector": str(candidate.get("detector", "")),
+        "direction": str(candidate.get("direction", "")),
+        "timeframe": str(candidate.get("timeframe", "")),
+        "params": str(candidate.get("params", "")),
+    }
+    raw = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
 def reseed_runtime_queue_from_recent_evidence(
     *,
     queue: dict[str, Any],
@@ -534,6 +615,15 @@ def reseed_runtime_queue_from_recent_evidence(
     if not options.reseed_when_empty or options.max_reseed_per_epoch < 1:
         return []
     existing_ids = {str(item.get("id", "")) for item in queue.get("queue", [])}
+    existing_signature_counts: dict[str, int] = {}
+    reseed_counts_by_root: dict[str, int] = {}
+    for item in queue.get("queue", []):
+        signature = str(item.get("reseed_source_signature", "") or "")
+        if signature:
+            existing_signature_counts[signature] = existing_signature_counts.get(signature, 0) + 1
+        if item.get("created_from") == "meta_supervisor_reseed":
+            root = _item_root(item)
+            reseed_counts_by_root[root] = reseed_counts_by_root.get(root, 0) + 1
     by_id = {str(item.get("id", "")): item for item in queue.get("queue", [])}
     session_id = str(state.get("session_id") or "session")
     actions: list[str] = []
@@ -554,10 +644,18 @@ def reseed_runtime_queue_from_recent_evidence(
         if candidate is None:
             continue
 
-        parent_root = _item_root({"id": parent_id})
+        parent_root = _item_root(parent or {"id": entry.get("root_hypothesis_id") or parent_id})
+        if reseed_counts_by_root.get(parent_root, 0) >= options.max_reseeds_per_root:
+            continue
         loop_number = int(entry.get("loop_number", 0) or 0)
         reseed_round = int(state.get("last_completed_loop", 0) or 0)
         generation = int(parent.get("generation", entry.get("generation", 0)) or 0) + 1
+        max_generation = _item_max_generation(parent or entry, options)
+        if generation > max_generation:
+            continue
+        reseed_signature = _reseed_source_signature(parent_root, candidate, generation)
+        if existing_signature_counts.get(reseed_signature, 0) >= options.max_reseed_signature_attempts:
+            continue
         suffix = f"supervisor_reseed_g{generation:03d}_l{loop_number:04d}_r{reseed_round:04d}_{reseeded + 1}"
         child_id = _safe_child_id(parent_root, suffix)
         if child_id in existing_ids:
@@ -587,8 +685,11 @@ def reseed_runtime_queue_from_recent_evidence(
             "status": "new",
             "promotion_level": "L1_encoded",
             "priority": reseeded,
+            "root_id": parent_root,
             "parent_id": parent_id,
             "generation": generation,
+            "lineage_fingerprint": lineage_fingerprint(parent_root, parent_id, child_id, generation, reseed_round),
+            "reseed_source_signature": reseed_signature,
             "created_from": "meta_supervisor_reseed",
             "research_gate_stage": "reseed",
             "discovery_mode": "refinement",
@@ -608,6 +709,8 @@ def reseed_runtime_queue_from_recent_evidence(
                 child[key] = parent[key]
         queue.setdefault("queue", []).append(child)
         existing_ids.add(child_id)
+        existing_signature_counts[reseed_signature] = existing_signature_counts.get(reseed_signature, 0) + 1
+        reseed_counts_by_root[parent_root] = reseed_counts_by_root.get(parent_root, 0) + 1
         actions.append(f"reseeded {child_id} from {parent_id}")
         reseeded += 1
     return actions
@@ -641,6 +744,11 @@ def _pick_epoch_slots(
         candidate_id = str(candidate.get("id", ""))
         root = _item_root(candidate)
         if candidate_id in chosen_ids:
+            return False
+        if (
+            _item_generation(candidate) > _item_max_generation(candidate, options)
+            and str(candidate.get("research_gate_stage", "")) != "validation"
+        ):
             return False
         if root_counts.get(root, 0) >= options.max_same_root_per_epoch:
             return False
@@ -825,7 +933,8 @@ def build_supervisor_decision(
     epoch_dir, decisions = _load_epoch_decisions(state)
     promoted_roots = {str(item.get("concept_id")) for item in decisions if item.get("decision") == "promote"}
     recent_tracks = _recent_track_counts(state)
-    eligible = _eligible_items(queue, state)
+    eligible = _eligible_items(queue, state, options)
+    inventory = runnable_inventory(queue, state, options)
     weak_bullish_roots = _weak_bullish_roots(state, options)
     slots = _pick_epoch_slots(
         eligible,
@@ -834,9 +943,16 @@ def build_supervisor_decision(
         weak_bullish_roots=set(weak_bullish_roots),
         options=options,
     )
+    cap_candidates = [
+        item
+        for item in queue.get("queue", [])
+        if str(item.get("id", "")) not in _completed_ids(state)
+        and not _is_terminal(item)
+        and is_executable_hypothesis(item)
+    ]
     queue_patch = [
         *_queue_patch_for_slots(slots),
-        *_queue_patch_for_caps(eligible, slots, weak_bullish_roots=weak_bullish_roots, options=options),
+        *_queue_patch_for_caps(cap_candidates, slots, weak_bullish_roots=weak_bullish_roots, options=options),
     ]
     concept_decisions = []
     concepts = scoreboard.get("concepts", {}) if isinstance(scoreboard.get("concepts", {}), dict) else {}
@@ -892,6 +1008,8 @@ def build_supervisor_decision(
             "weak_family_cooldown_loops": options.weak_family_cooldown_loops,
             "max_non_contract_reseed_source_generation": options.max_non_contract_reseed_source_generation,
             "max_primitive_overlap": options.max_primitive_overlap,
+            "max_reseeds_per_root": options.max_reseeds_per_root,
+            "max_reseed_signature_attempts": options.max_reseed_signature_attempts,
         },
         "inputs": {
             "state_path": str(options.state_path),
@@ -899,6 +1017,7 @@ def build_supervisor_decision(
             "concept_scoreboard_path": str(options.concept_scoreboard_path),
             "epoch_dir": str(epoch_dir),
             "eligible_hypotheses": len(eligible),
+            "runnable_inventory": inventory,
             "recent_tracks": recent_tracks,
         },
         "weak_bullish_roots": weak_bullish_roots,
@@ -948,7 +1067,7 @@ def apply_supervisor_decision(queue: dict[str, Any], decision: dict[str, Any]) -
 
 def _latest_bullish_evidence(state: dict[str, Any], concept_id: str) -> dict[str, Any]:
     for entry in reversed(state.get("loop_history", [])):
-        if _item_root({"id": entry.get("hypothesis_id", "")}) != concept_id:
+        if _entry_root(entry) != concept_id:
             continue
         evidence_path = Path(str(entry.get("report_dir", ""))) / "bullish_evidence.yaml"
         if evidence_path.exists():
@@ -1003,6 +1122,8 @@ def update_evidence_ledger(
             "latest_loop": state.get("last_completed_loop", 0),
             "claim_type": bullish_evidence.get("claim_type", prior.get("claim_type", "")),
             "setup_class": bullish_evidence.get("setup_class", prior.get("setup_class", "")),
+            "contract_tier": bullish_evidence.get("contract_tier", prior.get("contract_tier", "")),
+            "asymmetry_score": bullish_evidence.get("asymmetry_score", prior.get("asymmetry_score")),
             "path_gate": bullish_evidence.get("passes_path_gate", prior.get("path_gate", None)),
             "bullish_contract": bullish_evidence.get(
                 "passes_bullish_contract",
@@ -1061,6 +1182,7 @@ def write_supervisor_artifacts(
         f"Generated: {decision.get('generated_at', '')}",
         f"Applied: {bool(decision.get('apply'))}",
         f"Objective: {decision.get('objective', '')}",
+        f"Runnable inventory: {decision.get('inputs', {}).get('runnable_inventory', {})}",
         "",
         "## Weak Bullish Families",
         *(
@@ -1135,6 +1257,7 @@ def supervise_latest_epoch(options: SupervisorOptions) -> dict[str, Any]:
         actions = apply_supervisor_decision(queue, decision)
         actions = [*reseed_actions, *actions]
         atomic_write_yaml(options.runtime_queue_path, queue)
+    post_inventory = runnable_inventory(queue, state, options)
     artifacts = write_supervisor_artifacts(
         epoch_dir,
         state=state,
@@ -1158,9 +1281,21 @@ def supervise_latest_epoch(options: SupervisorOptions) -> dict[str, Any]:
             "summary": artifacts["supervisor_summary"],
             "decisions": artifacts["supervisor_decisions"],
             "queue_patch": artifacts["queue_patch"],
+            "runnable_inventory": post_inventory,
         }
-        if reseed_actions and state.get("status") == "completed_no_runnable_hypotheses":
-            state["status"] = "completed"
+        state["runnable_inventory"] = post_inventory
+        if state.get("status") == "completed_no_runnable_hypotheses":
+            if int(post_inventory.get("runnable", 0) or 0) > 0:
+                state["status"] = "completed"
+                state.pop("requires_new_candidate_queue", None)
+                state.pop("no_runnable_reason", None)
+            elif reseed_actions:
+                state["status"] = "stopped_no_runnable_after_supervision"
+                state["no_runnable_reason"] = "cooled_or_exhausted_roots"
+                state["requires_new_candidate_queue"] = True
+            else:
+                state["requires_new_candidate_queue"] = True
+                state["no_runnable_reason"] = "evidence_exhausted"
         atomic_write_json(options.state_path, state)
     return {
         "decision": decision,
@@ -1186,6 +1321,7 @@ def run_supervised_epochs(
             **{
                 **lab_options.__dict__,
                 "resume": True if epoch_index > 0 or lab_options.resume else lab_options.resume,
+                "supervisor_max_generation": supervisor_options.max_generation,
             }
         )
         before = load_lab_state(epoch_lab_options.state_path).get("last_completed_loop", 0)
@@ -1201,19 +1337,22 @@ def run_supervised_epochs(
         )
         completed_epochs += 1
         reseeded = sum(1 for action in supervisor_result.get("actions", []) if action.startswith("reseeded "))
-        print(
-            f"Supervised epoch {completed_epochs}/{epochs}: loops {before + 1}-{after}, "
-            f"status={state.get('status')}, reseeded={reseeded}",
-            flush=True,
-        )
         post_state = load_lab_state(epoch_lab_options.state_path)
         post_queue = load_lab_queue(epoch_lab_options.runtime_queue_path)
-        has_runnable_after_supervision = bool(_eligible_items(post_queue, post_state))
+        has_runnable_after_supervision = bool(_eligible_items(post_queue, post_state, supervisor_options))
+        print(
+            f"Supervised epoch {completed_epochs}/{epochs}: loops {before + 1}-{after}, "
+            f"status={post_state.get('status')}, reseeded={reseeded}",
+            flush=True,
+        )
         if after <= int(before or 0):
             if not has_runnable_after_supervision:
                 break
             continue
-        if state.get("status") == "completed_no_runnable_hypotheses" and not has_runnable_after_supervision:
+        if post_state.get("status") in {
+            "completed_no_runnable_hypotheses",
+            "stopped_no_runnable_after_supervision",
+        } and not has_runnable_after_supervision:
             break
     state = load_lab_state(lab_options.state_path)
     state["supervised_epochs_completed"] = completed_epochs

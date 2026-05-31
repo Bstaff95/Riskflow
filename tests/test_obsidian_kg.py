@@ -10,6 +10,7 @@ from riskflow.obsidian_kg import (
     GENERATED_START,
     build_knowledge_graph,
     compile_setup_journey_queue,
+    compile_targeted_bullish_queue,
     export_evidence_summaries,
     load_obsidian_notes,
     validate_knowledge_graph,
@@ -118,6 +119,91 @@ def test_compile_setup_journey_queue_writes_lab_compatible_queue(tmp_path: Path)
     assert Path(item["source"]).exists()
 
 
+def test_compile_setup_journey_queue_can_append_research_grammar_memory(tmp_path: Path) -> None:
+    obsidian = _write_obsidian_fixture(tmp_path)
+    graph = build_knowledge_graph(load_obsidian_notes(obsidian))
+    grammar_dir = tmp_path / "research" / "grammar"
+    grammar_dir.mkdir(parents=True)
+    (grammar_dir / "rule_search_grid_v999_positive_fresh_test.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_grammar_search_v0",
+                "families": [
+                    {
+                        "family_id": "fresh_memory_candidate",
+                        "direction": "positive",
+                        "detector": "fresh_leader_ignition",
+                        "description": "Fresh leader ignition from research memory.",
+                        "parameter_grid": {
+                            "relative_window": [5, 8, 13],
+                            "min_relative_slope": [0.02, 0.04],
+                            "max_signal": [0.75, 1.0],
+                            "trigger": ["zero_reclaim", "viscosity_reclaim"],
+                        },
+                    },
+                    {
+                        "family_id": "warning_memory_candidate",
+                        "direction": "negative",
+                        "detector": "lower_high_rollover",
+                        "parameter_grid": {"lookback": [20]},
+                    },
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    compiled = compile_setup_journey_queue(
+        graph,
+        output_queue=tmp_path / "obsidian_candidate_queue.yaml",
+        generated_grid_dir=tmp_path / "generated_from_obsidian",
+        include_research_grammar=True,
+        research_grammar_dir=grammar_dir,
+        max_research_families=10,
+        max_family_variants=4,
+    )
+
+    queue = compiled["queue"]
+    errors = validate_lab_queue(queue, validate_sources=True)
+    assert errors == []
+    assert len(queue["queue"]) == 2
+    research_item = next(item for item in queue["queue"] if item["id"].startswith("research_"))
+    assert research_item["setup_class"] == "fresh_leadership"
+    assert research_item["discovery_mode"] == "new_family"
+    generated = yaml.safe_load(Path(research_item["source"]).read_text(encoding="utf-8"))
+    family = generated["families"][0]
+    assert family["direction"] == "positive"
+    assert family["detector"] == "fresh_leader_ignition"
+    variant_count = 1
+    for values in family["parameter_grid"].values():
+        variant_count *= len(values)
+    assert variant_count <= 4
+
+
+def test_compile_targeted_bullish_queue_writes_focused_valid_queue(tmp_path: Path) -> None:
+    compiled = compile_targeted_bullish_queue(
+        output_queue=tmp_path / "targeted_bullish_candidate_queue.yaml",
+        generated_grid_dir=tmp_path / "generated_from_obsidian",
+    )
+
+    queue = compiled["queue"]
+    errors = validate_lab_queue(queue, validate_sources=True)
+    assert errors == []
+    assert len(queue["queue"]) == 24
+    setup_classes = {item["setup_class"] for item in queue["queue"]}
+    assert {
+        "regime_confirmed_reclaim_entry",
+        "deep_reset_regime_reclaim_entry",
+        "parent_absent_failed_weakness_permission",
+        "parent_active_failed_weakness_blocker",
+        "fresh_leader_followup_filter",
+    }.issubset(setup_classes)
+    assert all(item["branch_budget"]["max_generation"] == 1 for item in queue["queue"])
+    assert any(item["claim_type"] == "warning_blocker" for item in queue["queue"])
+    assert Path(compiled["queue_path"]).exists()
+
+
 def test_validate_rejects_incomplete_setup_journey(tmp_path: Path) -> None:
     obsidian = tmp_path / "obsidian"
     path = obsidian / "wiki" / "setup_journeys" / "Bad.md"
@@ -181,4 +267,3 @@ Keep this review note.
     assert "positive rows exist but did not pass strict referee" in text
     assert "Keep this review note." in text
     assert "rf_type: evidence_summary" in text
-

@@ -73,8 +73,10 @@ from .obsidian_kg import (
     DEFAULT_OBSIDIAN_DIR,
     DEFAULT_OBSIDIAN_GRID_DIR,
     DEFAULT_OBSIDIAN_QUEUE_PATH,
+    DEFAULT_TARGETED_BULLISH_QUEUE_PATH,
     build_knowledge_graph,
     compile_setup_journey_queue,
+    compile_targeted_bullish_queue,
     export_evidence_summaries,
     load_obsidian_notes,
     validate_knowledge_graph,
@@ -958,6 +960,21 @@ def observation_library_command(args: argparse.Namespace) -> int:
 
 
 def obsidian_kg_command(args: argparse.Namespace) -> int:
+    if args.obsidian_kg_action == "compile-targeted-bullish-queue":
+        try:
+            compiled = compile_targeted_bullish_queue(
+                output_queue=args.output_queue,
+                generated_grid_dir=args.generated_grid_dir,
+            )
+        except Exception as exc:
+            print(f"Targeted bullish queue compile failed: {exc}")
+            return 1
+        queue = compiled["queue"]
+        print(f"Wrote targeted bullish queue: {compiled['queue_path']}")
+        print(f"Wrote generated grids under: {compiled['grid_dir']}")
+        print(f"Hypotheses: {len(queue.get('queue', []))}")
+        return 0
+
     try:
         nodes = load_obsidian_notes(args.obsidian_dir)
         graph = build_knowledge_graph(nodes)
@@ -1009,6 +1026,10 @@ def obsidian_kg_command(args: argparse.Namespace) -> int:
                 output_queue=args.output_queue,
                 generated_grid_dir=args.generated_grid_dir,
                 min_source_cases=args.min_source_cases,
+                include_research_grammar=args.include_research_grammar,
+                research_grammar_dir=args.research_grammar_dir,
+                max_research_families=args.max_research_families,
+                max_family_variants=args.max_family_variants,
             )
         except Exception as exc:
             print(f"Obsidian KG queue compile failed: {exc}")
@@ -1329,6 +1350,8 @@ def lab_loop_command(args: argparse.Namespace) -> int:
             max_primitive_overlap=args.max_primitive_overlap,
             reseed_when_empty=args.reseed_when_empty,
             max_reseed_per_epoch=args.max_reseed_per_epoch,
+            max_reseeds_per_root=args.max_reseeds_per_root,
+            max_reseed_signature_attempts=args.max_reseed_signature_attempts,
             objective=args.objective,
         )
         try:
@@ -1392,6 +1415,8 @@ def lab_loop_command(args: argparse.Namespace) -> int:
                         max_primitive_overlap=args.max_primitive_overlap,
                         reseed_when_empty=args.reseed_when_empty,
                         max_reseed_per_epoch=args.max_reseed_per_epoch,
+                        max_reseeds_per_root=args.max_reseeds_per_root,
+                        max_reseed_signature_attempts=args.max_reseed_signature_attempts,
                         generated_grid_dir=options.generated_grid_dir,
                         objective=args.objective,
                     ),
@@ -1767,7 +1792,45 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Minimum linked source cases required before compiling a setup journey.",
     )
+    kg_compile.add_argument(
+        "--include-research-grammar",
+        action="store_true",
+        help="Also compile compact bullish candidates from existing research/grammar grids.",
+    )
+    kg_compile.add_argument(
+        "--research-grammar-dir",
+        default="research/grammar",
+        help="Directory of prior grammar-search grid YAMLs used by --include-research-grammar.",
+    )
+    kg_compile.add_argument(
+        "--max-research-families",
+        type=int,
+        default=80,
+        help="Maximum positive research-memory families to append to the generated queue.",
+    )
+    kg_compile.add_argument(
+        "--max-family-variants",
+        type=int,
+        default=32,
+        help="Maximum compact parameter variants per generated research-memory family before timeframe expansion.",
+    )
     kg_compile.set_defaults(func=obsidian_kg_command)
+
+    kg_compile_targeted = obsidian_kg_subparsers.add_parser(
+        "compile-targeted-bullish-queue",
+        help="Compile the focused bullish setup queue from recent lab findings.",
+    )
+    kg_compile_targeted.add_argument(
+        "--output-queue",
+        default=str(DEFAULT_TARGETED_BULLISH_QUEUE_PATH),
+        help="Generated targeted bullish lab-loop queue YAML path.",
+    )
+    kg_compile_targeted.add_argument(
+        "--generated-grid-dir",
+        default=str(DEFAULT_OBSIDIAN_GRID_DIR),
+        help="Directory for generated targeted bullish grammar grids.",
+    )
+    kg_compile_targeted.set_defaults(func=obsidian_kg_command)
 
     kg_export = obsidian_kg_subparsers.add_parser(
         "export-evidence",
@@ -2051,6 +2114,18 @@ def build_parser() -> argparse.ArgumentParser:
             type=int,
             default=5,
             help="Maximum runnable hypotheses the supervisor can create when the queue is exhausted.",
+        )
+        command.add_argument(
+            "--max-reseeds-per-root",
+            type=int,
+            default=2,
+            help="Bullish-positive mode: maximum meta-supervisor reseeds allowed from one canonical root.",
+        )
+        command.add_argument(
+            "--max-reseed-signature-attempts",
+            type=int,
+            default=1,
+            help="Maximum reseeds allowed for the same root/family/params signature.",
         )
         command.add_argument(
             "--no-reseed",

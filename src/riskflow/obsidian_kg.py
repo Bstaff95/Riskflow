@@ -18,7 +18,9 @@ OBSIDIAN_QUEUE_MODEL = "riskflow_lab_loop_hypothesis_queue_v0"
 DEFAULT_OBSIDIAN_DIR = Path("obsidian")
 DEFAULT_KG_OUTPUT_DIR = Path("research/knowledge_graph")
 DEFAULT_OBSIDIAN_QUEUE_PATH = Path("research/lab_loop/obsidian_candidate_queue.yaml")
+DEFAULT_TARGETED_BULLISH_QUEUE_PATH = Path("research/lab_loop/targeted_bullish_candidate_queue.yaml")
 DEFAULT_OBSIDIAN_GRID_DIR = Path("research/grammar/generated_from_obsidian")
+DEFAULT_RESEARCH_GRAMMAR_DIR = Path("research/grammar")
 GENERATED_START = "<!-- riskflow:generated:start -->"
 GENERATED_END = "<!-- riskflow:generated:end -->"
 
@@ -139,6 +141,34 @@ def _as_list(value: Any) -> list[str]:
             return []
         return [value.strip()]
     return [str(value).strip()]
+
+
+def _first_list_values(value: Any, *, limit: int = 2) -> list[Any]:
+    values = value if isinstance(value, list) else [value]
+    return values[: max(1, limit)]
+
+
+def _variant_count(parameter_grid: dict[str, Any]) -> int:
+    count = 1
+    for value in parameter_grid.values():
+        if isinstance(value, list):
+            count *= max(1, len(value))
+        else:
+            count *= 1
+    return count
+
+
+def _compact_parameter_grid(parameter_grid: dict[str, Any], *, max_variants: int) -> dict[str, Any]:
+    compact = {key: _first_list_values(value) for key, value in parameter_grid.items()}
+    if max_variants < 1:
+        return compact
+    while _variant_count(compact) > max_variants:
+        largest_key = max(compact, key=lambda key: len(compact[key]) if isinstance(compact[key], list) else 1)
+        values = compact[largest_key]
+        if not isinstance(values, list) or len(values) <= 1:
+            break
+        compact[largest_key] = values[:-1]
+    return compact
 
 
 def _read_markdown(path: Path) -> tuple[dict[str, Any], str]:
@@ -360,6 +390,344 @@ def _journey_primitives(frontmatter: dict[str, Any]) -> list[str]:
             result.append(primitive)
             seen.add(primitive)
     return result
+
+
+def _primitive_tokens_from_family(family: dict[str, Any]) -> list[str]:
+    tokens = [str(family.get("detector", "")), str(family.get("family_id", ""))]
+    params = family.get("parameter_grid", {})
+    if isinstance(params, dict):
+        for key, value in params.items():
+            tokens.append(str(key))
+            tokens.extend(str(item) for item in _as_list(value))
+    result: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        for part in re.split(r"[^A-Za-z0-9]+", token):
+            primitive = _slug(part)
+            if len(primitive) < 3 or primitive in seen:
+                continue
+            result.append(primitive)
+            seen.add(primitive)
+    return result[:16]
+
+
+def _setup_class_for_family(family: dict[str, Any]) -> str:
+    detector = _slug(str(family.get("detector", "")))
+    family_id = _slug(str(family.get("family_id", "")))
+    text = f"{detector} {family_id}"
+    if any(token in text for token in ("fresh_leader", "fresh_relative", "leader_ignition")):
+        return "fresh_leadership"
+    if any(token in text for token in ("compression", "coil", "chop")):
+        return "compression_expansion"
+    if any(token in text for token in ("warning_cleared", "cleared_warning")):
+        return "warning_cleared_recovery"
+    if any(token in text for token in ("trend_pullback", "pullback", "continuation")):
+        return "trend_pullback_hold"
+    if any(token in text for token in ("regime", "acceptance", "zero_retest")):
+        return "acceptance_confirmation"
+    if any(token in text for token in ("divergence", "curvature")):
+        return "divergence_or_curvature_repair"
+    if any(token in text for token in ("reset", "failed_weakness", "breakdown")):
+        return "failed_breakdown_reclaim"
+    if any(token in text for token in ("rotation", "relative_leads", "underperformance")):
+        return "rotation_reclaim"
+    if any(token in text for token in ("zone_reclaim", "retest")):
+        return "reclaim_retest"
+    return detector or "bullish_research_family"
+
+
+def _research_family_priority(family: dict[str, Any], source_path: Path) -> int:
+    detector = _slug(str(family.get("detector", "")))
+    family_id = _slug(str(family.get("family_id", "")))
+    text = f"{source_path.name} {detector} {family_id}"
+    score = 0
+    if "positive" in text or "bullish" in text:
+        score += 100
+    if any(token in text for token in ("fresh", "compression", "warning_cleared", "regime", "trend_pullback")):
+        score += 50
+    if any(token in text for token in ("negative", "warning", "blocker", "counterfactual")):
+        score -= 30
+    if "lower_high" in text:
+        score -= 80
+    return score
+
+
+def _load_research_grid(path: Path) -> dict[str, Any]:
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _research_positive_families(research_grammar_dir: str | Path) -> list[tuple[Path, dict[str, Any]]]:
+    root = Path(research_grammar_dir)
+    candidates: list[tuple[int, Path, dict[str, Any]]] = []
+    if not root.exists():
+        return []
+    for path in sorted(root.glob("rule_search_grid*.yaml")):
+        if "generated_from_obsidian" in path.parts:
+            continue
+        grid = _load_research_grid(path)
+        families = grid.get("families", [])
+        if isinstance(families, dict):
+            families = [families]
+        if not isinstance(families, list):
+            continue
+        for family in families:
+            if not isinstance(family, dict):
+                continue
+            if str(family.get("direction", "")).lower() != "positive":
+                continue
+            if not family.get("detector") or not isinstance(family.get("parameter_grid", {}), dict):
+                continue
+            score = _research_family_priority(family, path)
+            if score <= -50:
+                continue
+            candidates.append((score, path, family))
+    candidates.sort(key=lambda item: (-item[0], str(item[1]), str(item[2].get("family_id", ""))))
+    return [(path, family) for _score, path, family in candidates]
+
+
+def _targeted_bullish_specs() -> list[dict[str, Any]]:
+    base_regime = {
+        "relative_window": [5, 8],
+        "benchmark_window": [5, 8],
+        "min_relative_slope": [0.03, 0.05],
+        "min_benchmark_return": [0.0, 0.02],
+        "max_signal": [0.5, 1.0],
+        "warning_lookback": [20],
+        "warning_context_window": [8],
+    }
+    parent_base = {
+        "setup": ["failed_weakness_reclaim"],
+        "lookback": [13, 20],
+        "zone_max": [-2.0, -1.5],
+        "low_tolerance": [0.2, 0.35],
+        "relative_slope_min": [-0.05, 0.0],
+        "parent_context_window": [20],
+    }
+    fresh_base = {
+        "relative_window": [5, 8],
+        "min_relative_slope": [0.03, 0.05, 0.08],
+        "max_signal": [0.5, 0.75, 1.0],
+        "min_gradient_slope": [0.03, 0.06],
+    }
+
+    specs: list[dict[str, Any]] = []
+
+    def add(
+        queue_id: str,
+        *,
+        setup_class: str,
+        claim_type: str,
+        detector: str,
+        direction: str,
+        parameter_grid: dict[str, Any],
+        hypothesis: str,
+        required_controls: list[str],
+    ) -> None:
+        specs.append(
+            {
+                "id": queue_id,
+                "setup_class": setup_class,
+                "claim_type": claim_type,
+                "family": {
+                    "family_id": queue_id,
+                    "direction": direction,
+                    "detector": detector,
+                    "description": hypothesis,
+                    "parameter_grid": parameter_grid,
+                },
+                "hypothesis": hypothesis,
+                "required_controls": required_controls,
+            }
+        )
+
+    for suffix, trigger, updates in [
+        ("viscosity", "viscosity_reclaim", {"require_warning_absent": [True]}),
+        ("zero", "zero_reclaim", {"require_warning_absent": [True]}),
+        ("warning_ignore_control", "viscosity_reclaim", {"require_warning_absent": [False]}),
+        ("loose_slope_control", "viscosity_reclaim", {"min_relative_slope": [0.0]}),
+        ("benchmark_positive", "viscosity_reclaim", {"min_benchmark_return": [0.02]}),
+        ("max_signal_05", "viscosity_reclaim", {"max_signal": [0.5]}),
+        ("zero_warning_ignore_control", "zero_reclaim", {"require_warning_absent": [False]}),
+        ("zero_benchmark_positive", "zero_reclaim", {"min_benchmark_return": [0.02]}),
+    ]:
+        params = {**base_regime, **updates, "trigger": [trigger]}
+        add(
+            f"targeted_regime_confirmed_reclaim_entry_{suffix}",
+            setup_class="regime_confirmed_reclaim_entry",
+            claim_type="bullish_entry" if "control" not in suffix else "control",
+            detector="regime_confirmed_reclaim",
+            direction="positive",
+            parameter_grid=params,
+            hypothesis=f"Targeted regime-confirmed reclaim {suffix} should improve bullish relative trade path.",
+            required_controls=["warning_ignore_control", "direction_flip", "no_regime_gate"],
+        )
+
+    for suffix, updates in [
+        ("low_2", {"min_recent_signal_low": [-2.0]}),
+        ("low_15", {"min_recent_signal_low": [-1.5]}),
+        ("low_1", {"min_recent_signal_low": [-1.0]}),
+        ("compression_30", {"min_recent_signal_low": [-1.5], "min_compression": [30.0]}),
+    ]:
+        add(
+            f"targeted_deep_reset_regime_reclaim_entry_{suffix}",
+            setup_class="deep_reset_regime_reclaim_entry",
+            claim_type="bullish_entry",
+            detector="regime_confirmed_reclaim",
+            direction="positive",
+            parameter_grid={
+                **base_regime,
+                **updates,
+                "trigger": ["viscosity_reclaim"],
+                "min_relative_slope": [0.04, 0.05],
+                "require_warning_absent": [True],
+            },
+            hypothesis=f"Targeted deep-reset regime reclaim {suffix} should isolate asymmetric long path quality.",
+            required_controls=["same_setup_without_deep_reset", "warning_ignore_control", "loose_relative_slope"],
+        )
+
+    for parent_mode, claim_type, direction in [
+        ("absent", "bullish_permission", "positive"),
+        ("active", "warning_blocker", "negative"),
+        ("ignore", "control", "positive"),
+    ]:
+        for trigger in ["viscosity_reclaim", "zero_reclaim"]:
+            add(
+                f"targeted_parent_{parent_mode}_failed_weakness_{trigger}",
+                setup_class=(
+                    "parent_active_failed_weakness_blocker"
+                    if parent_mode == "active"
+                    else (
+                        "parent_absent_failed_weakness_permission"
+                        if parent_mode == "absent"
+                        else "parent_ignore_failed_weakness_control"
+                    )
+                ),
+                claim_type=claim_type,
+                detector="parent_context_bullish_setup",
+                direction=direction,
+                parameter_grid={**parent_base, "parent_mode": [parent_mode], "trigger": [trigger]},
+                hypothesis=f"Targeted parent-context {parent_mode} failed-weakness {trigger} should separate permission from blocker evidence.",
+                required_controls=["parent_absent", "parent_active", "parent_ignore"],
+            )
+
+    for trigger in ["zero_reclaim", "viscosity_reclaim"]:
+        add(
+            f"targeted_fresh_leader_raw_{trigger}",
+            setup_class="fresh_leader_followup_filter",
+            claim_type="control",
+            detector="fresh_leader_ignition",
+            direction="positive",
+            parameter_grid={**fresh_base, "trigger": [trigger], "require_warning_absent": [False]},
+            hypothesis=f"Raw fresh-leader {trigger} baseline should not promote without warning-filter improvement.",
+            required_controls=["warning_absent", "warning_active_negative"],
+        )
+        add(
+            f"targeted_fresh_leader_warning_absent_{trigger}",
+            setup_class="fresh_leader_followup_filter",
+            claim_type="bullish_permission",
+            detector="fresh_leader_ignition",
+            direction="positive",
+            parameter_grid={**fresh_base, "trigger": [trigger], "require_warning_absent": [True]},
+            hypothesis=f"Fresh-leader {trigger} with warning absent should act as a permission filter.",
+            required_controls=["raw_baseline", "warning_active_negative"],
+        )
+        add(
+            f"targeted_fresh_leader_warning_active_{trigger}",
+            setup_class="fresh_leader_followup_filter",
+            claim_type="warning_blocker",
+            detector="fresh_leader_ignition",
+            direction="negative",
+            parameter_grid={**fresh_base, "trigger": [trigger], "require_warning_absent": [False]},
+            hypothesis=f"Fresh-leader {trigger} warning-active counterfactual should expose blocker behavior.",
+            required_controls=["raw_baseline", "warning_absent"],
+        )
+
+    return specs
+
+
+def compile_targeted_bullish_queue(
+    *,
+    output_queue: str | Path = DEFAULT_TARGETED_BULLISH_QUEUE_PATH,
+    generated_grid_dir: str | Path = DEFAULT_OBSIDIAN_GRID_DIR,
+) -> dict[str, Any]:
+    """Compile the focused bullish research queue from recent lab evidence."""
+    queue_path = Path(output_queue)
+    grid_dir = Path(generated_grid_dir) / "targeted_bullish"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+    queue_items: list[dict[str, Any]] = []
+    for priority, spec in enumerate(_targeted_bullish_specs(), start=1):
+        queue_id = str(spec["id"])
+        grid = {
+            "model": "riskflow_grammar_search_v0",
+            "generated_from": "riskflow_targeted_bullish_queue_v0",
+            "families": [spec["family"]],
+        }
+        grid_path = grid_dir / f"{queue_id}.yaml"
+        grid_path.write_text(yaml.safe_dump(grid, sort_keys=False), encoding="utf-8")
+        primitives = _primitive_tokens_from_family(spec["family"])
+        queue_items.append(
+            {
+                "id": queue_id,
+                "root_id": queue_id,
+                "track": "bullish_setup",
+                "status": "new",
+                "promotion_level": "L0_registered",
+                "priority": priority,
+                "source": str(grid_path),
+                "hypothesis": spec["hypothesis"],
+                "claim_type": spec["claim_type"],
+                "setup_class": spec["setup_class"],
+                "discovery_mode": "new_family",
+                "primary_detector": spec["family"]["detector"],
+                "detector_archetype": spec["setup_class"],
+                "objective": BULLISH_POSITIVE_OBJECTIVE,
+                "source_cases": [],
+                "measurable_primitives": primitives,
+                "required_controls": spec["required_controls"],
+                "novelty": {
+                    "source": "targeted_bullish_queue",
+                    "archetype": spec["setup_class"],
+                    "expected_new_primitives": primitives,
+                },
+                "family_budget": {
+                    "max_loops_without_contract": 3,
+                    "max_generation_without_contract": 1,
+                    "cooldown_epochs_on_fail": 5,
+                },
+                "path_objective": {
+                    "min_sample_size": 30,
+                    "min_unique_symbols": 12,
+                    "min_event_clusters": 12,
+                    "min_hit_rate": 0.55,
+                    "asymmetric_min_hit_rate": 0.40,
+                    "asymmetric_min_terminal_relative_return": 0.03,
+                    "min_mfe_mae_ratio": 1.50,
+                    "asymmetric_min_mfe_mae_ratio": 1.60,
+                    "max_median_drawdown": -0.35,
+                },
+                "branch_budget": {"max_generation": 1},
+                "expected_outcome": "positive_trade_path_or_filter_edge",
+                "next_action": "Run as targeted bullish discovery before any broad long run.",
+            }
+        )
+
+    payload = {
+        "model": OBSIDIAN_QUEUE_MODEL,
+        "date": utc_now_iso().split("T", 1)[0],
+        "generated_from": "riskflow_targeted_bullish_queue_v0",
+        "production_effect": "none",
+        "default_timeframes": ["1d", "12h", "4h", "1h"],
+        "default_outcome": "forward_relative_return_vs_basket",
+        "strict_referee_required": True,
+        "queue": queue_items,
+    }
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return {"queue": payload, "queue_path": str(queue_path), "grid_dir": str(grid_dir)}
 
 
 def _journey_text(journey_id: str, frontmatter: dict[str, Any]) -> str:
@@ -695,6 +1063,10 @@ def compile_setup_journey_queue(
     output_queue: str | Path = DEFAULT_OBSIDIAN_QUEUE_PATH,
     generated_grid_dir: str | Path = DEFAULT_OBSIDIAN_GRID_DIR,
     min_source_cases: int = 1,
+    include_research_grammar: bool = False,
+    research_grammar_dir: str | Path = DEFAULT_RESEARCH_GRAMMAR_DIR,
+    max_research_families: int = 80,
+    max_family_variants: int = 32,
 ) -> dict[str, Any]:
     queue_path = Path(output_queue)
     grid_dir = Path(generated_grid_dir)
@@ -777,10 +1149,106 @@ def compile_setup_journey_queue(
             }
         )
 
+    if include_research_grammar and max_research_families > 0:
+        existing_ids = {str(item.get("id", "")) for item in queue_items}
+        seen_signatures = {
+            (
+                str(item.get("primary_detector", "")),
+                str(item.get("setup_class", "")),
+                tuple(sorted(str(value) for value in item.get("measurable_primitives", []))),
+            )
+            for item in queue_items
+        }
+        added = 0
+        for source_path, family in _research_positive_families(research_grammar_dir):
+            if added >= max_research_families:
+                break
+            family_id = _slug(str(family.get("family_id") or source_path.stem))
+            detector = str(family.get("detector", ""))
+            parameter_grid = family.get("parameter_grid", {})
+            if not isinstance(parameter_grid, dict):
+                continue
+            compact_family = {
+                **family,
+                "family_id": f"research_{family_id}",
+                "direction": "positive",
+                "parameter_grid": _compact_parameter_grid(parameter_grid, max_variants=max_family_variants),
+            }
+            primitives = _primitive_tokens_from_family(compact_family)
+            setup_class = _setup_class_for_family(compact_family)
+            signature = (detector, setup_class, tuple(sorted(primitives[:8])))
+            if signature in seen_signatures:
+                continue
+            seen_signatures.add(signature)
+            research_id = _slug(f"{source_path.stem}_{family_id}")[:88]
+            queue_id = f"research_{research_id}"
+            if queue_id in existing_ids:
+                base = queue_id[:82]
+                suffix = 2
+                while f"{base}_{suffix:03d}" in existing_ids:
+                    suffix += 1
+                queue_id = f"{base}_{suffix:03d}"
+                research_id = queue_id.replace("research_", "", 1)
+            grid = {
+                "model": "riskflow_grammar_search_v0",
+                "generated_from": "riskflow_research_grammar_memory",
+                "source_grid": str(source_path),
+                "families": [compact_family],
+            }
+            grid_path = grid_dir / f"research_{research_id}.yaml"
+            grid_path.write_text(yaml.safe_dump(grid, sort_keys=False), encoding="utf-8")
+            added += 1
+            priority = len(queue_items) + 1
+            queue_items.append(
+                {
+                    "id": queue_id,
+                    "track": "bullish_setup",
+                    "status": "new",
+                    "promotion_level": "L0_registered",
+                    "priority": priority,
+                    "source": str(grid_path),
+                    "hypothesis": str(
+                        family.get("description")
+                        or f"Research-memory bullish family {family_id} should improve long setup trade path."
+                    ),
+                    "claim_type": "bullish_entry",
+                    "setup_class": setup_class,
+                    "discovery_mode": "new_family",
+                    "primary_detector": detector,
+                    "detector_archetype": setup_class,
+                    "objective": BULLISH_POSITIVE_OBJECTIVE,
+                    "source_cases": [],
+                    "source_research_grid": str(source_path),
+                    "measurable_primitives": primitives,
+                    "required_controls": ["trigger_only", "blocker_present", "inverted_direction"],
+                    "novelty": {
+                        "source": "research_grammar_memory",
+                        "archetype": setup_class,
+                        "expected_new_primitives": primitives,
+                    },
+                    "family_budget": {
+                        "max_loops_without_contract": 3,
+                        "max_generation_without_contract": 1,
+                        "cooldown_epochs_on_fail": 5,
+                    },
+                    "path_objective": {
+                        "min_sample_size": 30,
+                        "min_unique_symbols": 12,
+                        "min_event_clusters": 12,
+                        "min_mfe_mae_ratio": 1.25,
+                    },
+                    "branch_budget": {"max_generation": 2},
+                    "expected_outcome": "positive_trade_path_with_controlled_mae",
+                    "next_action": "Run as broad bullish discovery before any same-family refinement.",
+                }
+            )
+            existing_ids.add(queue_id)
+
     payload = {
         "model": OBSIDIAN_QUEUE_MODEL,
         "date": utc_now_iso().split("T", 1)[0],
         "generated_from": OBSIDIAN_KG_MODEL,
+        "include_research_grammar": bool(include_research_grammar),
         "production_effect": "none",
         "default_timeframes": ["1d", "12h", "4h", "1h"],
         "default_outcome": "forward_relative_return_vs_basket",

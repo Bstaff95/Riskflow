@@ -274,6 +274,9 @@ def test_supervisor_reseeds_when_runnable_queue_is_empty(tmp_path: Path) -> None
     reseeded = [item for item in queue["queue"] if item.get("created_from") == "meta_supervisor_reseed"]
     assert len(reseeded) == 1
     assert reseeded[0]["priority"] == 0
+    assert reseeded[0]["root_id"] == "useful_parent"
+    assert reseeded[0]["lineage_fingerprint"]
+    assert reseeded[0]["reseed_source_signature"]
     assert Path(reseeded[0]["source"]).exists()
     assert result["decision"]["next_epoch_slots"][0]["hypothesis_id"] == reseeded[0]["id"]
     assert any(action.startswith("reseeded ") for action in result["actions"])
@@ -794,6 +797,172 @@ def test_bullish_objective_does_not_reseed_generation_one_near_miss_without_cont
             apply=True,
             epoch_size=5,
             objective=BULLISH_POSITIVE_OBJECTIVE,
+        )
+    )
+
+    queue = yaml.safe_load(queue_path.read_text(encoding="utf-8"))
+    assert [item for item in queue["queue"] if item.get("created_from") == "meta_supervisor_reseed"] == []
+    assert result["decision"]["next_epoch_slots"] == []
+
+
+def test_supervisor_does_not_schedule_over_generation_candidate(tmp_path: Path) -> None:
+    epoch_dir = tmp_path / "reports" / "session_test" / "epochs" / "epoch_0007"
+    epoch_dir.mkdir(parents=True)
+    branch_path = epoch_dir / "branch_decisions.yaml"
+    branch_path.write_text(
+        yaml.safe_dump({"model": "riskflow_lab_loop_epoch_branch_decisions_v0", "epoch": "epoch_0007", "decisions": []}),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "lab_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "session_id": "test",
+                "last_completed_loop": 31,
+                "completed_hypothesis_ids": [],
+                "loop_history": [],
+                "last_epoch": {
+                    "epoch": "epoch_0007",
+                    "epoch_dir": str(epoch_dir),
+                    "branch_decisions": str(branch_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue_path = tmp_path / "runtime_queue.yaml"
+    queue_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_lab_loop_hypothesis_queue_v0",
+                "queue": [
+                    {
+                        "id": "warning_parent_supervisor_reseed_g003_l0030_r0030_1",
+                        "track": "warning",
+                        "status": "new",
+                        "promotion_level": "L2_discovered",
+                        "priority": 0,
+                        "source": "research/grammar/rule_search_grid_v2_candidate.yaml",
+                        "hypothesis": "over cap warning child",
+                        "generation": 3,
+                        "research_gate_stage": "reseed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scoreboard_path = tmp_path / "concept_scoreboard.yaml"
+    scoreboard_path.write_text(yaml.safe_dump({"model": "scoreboard", "concepts": {}}), encoding="utf-8")
+
+    result = supervise_latest_epoch(
+        SupervisorOptions(
+            state_path=state_path,
+            runtime_queue_path=queue_path,
+            concept_scoreboard_path=scoreboard_path,
+            evidence_ledger_path=tmp_path / "evidence_ledger.yaml",
+            apply=False,
+            epoch_size=5,
+            max_generation=2,
+        )
+    )
+
+    assert result["decision"]["next_epoch_slots"] == []
+
+
+def test_supervisor_does_not_reseed_past_generation_cap(tmp_path: Path) -> None:
+    epoch_dir = tmp_path / "reports" / "session_test" / "epochs" / "epoch_0008"
+    loop_dir = tmp_path / "reports" / "session_test" / "loop_0032"
+    epoch_dir.mkdir(parents=True)
+    loop_dir.mkdir(parents=True)
+    branch_path = epoch_dir / "branch_decisions.yaml"
+    branch_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_lab_loop_epoch_branch_decisions_v0",
+                "epoch": "epoch_0008",
+                "decisions": [{"concept_id": "warning_parent", "decision": "refine", "latest_loop": 32}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = epoch_dir / "epoch_manifest.json"
+    manifest_path.write_text(json.dumps({"loop_start": 32, "loop_end": 32}), encoding="utf-8")
+    loop_dir.joinpath("ranked.csv").write_text(
+        "\n".join(
+            [
+                "variant_id,family_id,timeframe,direction,detector,classification,params",
+                'v1,family,4h,negative,lower_high_rollover,useful,"{""lookback"":20}"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    loop_dir.joinpath("strict_referee.csv").write_text("variant_id,strict_survivor\n", encoding="utf-8")
+    state_path = tmp_path / "lab_state.json"
+    parent_id = "warning_parent_supervisor_reseed_g002_l0028_r0031_1"
+    state_path.write_text(
+        json.dumps(
+            {
+                "session_id": "test",
+                "status": "completed_no_runnable_hypotheses",
+                "last_completed_loop": 32,
+                "completed_hypothesis_ids": [parent_id],
+                "loop_history": [
+                    {
+                        "loop_number": 32,
+                        "hypothesis_id": parent_id,
+                        "track": "warning",
+                        "generation": 2,
+                        "decision": "refine",
+                        "survivor_count": 0,
+                        "useful_count": 36,
+                        "report_dir": str(loop_dir),
+                    }
+                ],
+                "last_epoch": {
+                    "epoch": "epoch_0008",
+                    "epoch_dir": str(epoch_dir),
+                    "manifest": str(manifest_path),
+                    "branch_decisions": str(branch_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue_path = tmp_path / "runtime_queue.yaml"
+    queue_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_lab_loop_hypothesis_queue_v0",
+                "queue": [
+                    {
+                        "id": parent_id,
+                        "track": "warning",
+                        "status": "tested",
+                        "promotion_level": "L2_discovered",
+                        "priority": 1,
+                        "source": "research/grammar/rule_search_grid_v2_candidate.yaml",
+                        "hypothesis": "warning parent",
+                        "generation": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scoreboard_path = tmp_path / "concept_scoreboard.yaml"
+    scoreboard_path.write_text(yaml.safe_dump({"model": "scoreboard", "concepts": {}}), encoding="utf-8")
+
+    result = supervise_latest_epoch(
+        SupervisorOptions(
+            state_path=state_path,
+            runtime_queue_path=queue_path,
+            concept_scoreboard_path=scoreboard_path,
+            evidence_ledger_path=tmp_path / "evidence_ledger.yaml",
+            generated_grid_dir=tmp_path / "generated_grids",
+            apply=True,
+            epoch_size=5,
+            max_generation=2,
         )
     )
 

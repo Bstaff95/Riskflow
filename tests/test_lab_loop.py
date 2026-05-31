@@ -311,8 +311,44 @@ def test_bullish_positive_objective_promotes_only_true_positive_path() -> None:
     )
 
     assert evidence["passes_bullish_contract"] is True
+    assert evidence["contract_tier"] == "strict_validated"
     assert decision["decision"] == "promote"
     assert decision["survivor_count"] == 1
+
+
+def test_bullish_contract_v2_labels_asymmetric_candidate_without_promotion() -> None:
+    ranked = pd.DataFrame(
+        [
+            _bullish_ranked_row(
+                hit_rate_forward_relative_return_primary=0.42,
+                median_forward_relative_return_secondary=0.065,
+                median_max_drawdown=-0.12,
+                median_max_favorable_excursion=0.24,
+                median_mfe_mae_ratio=2.0,
+            )
+        ]
+    )
+    strict = pd.DataFrame()
+
+    evidence = summarize_bullish_evidence(
+        ranked,
+        strict,
+        pd.DataFrame({"variant_id": ["v1"]}),
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+    )
+    decision = decide_loop_outcome(
+        ranked,
+        strict,
+        hypothesis={"id": "bullish_a", "track": "bullish_setup"},
+        objective=BULLISH_POSITIVE_OBJECTIVE,
+        bullish_evidence=evidence,
+    )
+
+    assert evidence["contract_tier"] == "asymmetric_candidate"
+    assert evidence["hit_rate_role"] == "soft_diagnostic"
+    assert evidence["passes_path_gate"] is True
+    assert evidence["passes_bullish_contract"] is False
+    assert decision["decision"] == "bullish_path_watchlist"
 
 
 def test_bullish_positive_objective_demotes_weak_trade_path() -> None:
@@ -329,6 +365,39 @@ def test_bullish_positive_objective_demotes_weak_trade_path() -> None:
     assert decision["decision"] == "bullish_path_watchlist"
     assert decision["survivor_count"] == 0
     assert "MFE/MAE" in decision["reason"]
+
+
+def test_select_next_hypothesis_skips_supervisor_over_cap_items() -> None:
+    queue = {
+        "model": "riskflow_lab_loop_hypothesis_queue_v0",
+        "queue": [
+            {
+                "id": "over_cap",
+                "track": "warning",
+                "status": "new",
+                "promotion_level": "L1_encoded",
+                "priority": 0,
+                "source": "research/grammar/rule_search_grid_v2_candidate.yaml",
+                "hypothesis": "too deep",
+                "generation": 3,
+            },
+            {
+                "id": "within_cap",
+                "track": "warning",
+                "status": "new",
+                "promotion_level": "L1_encoded",
+                "priority": 1,
+                "source": "research/grammar/rule_search_grid_v2_candidate.yaml",
+                "hypothesis": "allowed",
+                "generation": 2,
+            },
+        ],
+    }
+
+    selected = select_next_hypothesis(queue, {"supervisor_max_generation": 2})
+
+    assert selected is not None
+    assert selected["id"] == "within_cap"
 
 
 def test_build_refinement_grid_mutates_numeric_params() -> None:

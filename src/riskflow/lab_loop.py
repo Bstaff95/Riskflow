@@ -52,6 +52,13 @@ DEFAULT_CONCEPT_SCOREBOARD_PATH = Path("research/lab_loop/concept_scoreboard.yam
 TERMINAL_STATUSES = {"promoted", "demoted", "archived", "failed", "blocked_by_evidence"}
 RUNNABLE_STATUSES = {"new", "encoded", "tested", "tested_needs_fresh_data", "needs_encoding"}
 CLAIM_TYPES = {"bullish_entry", "bullish_permission", "warning_blocker", "control"}
+BULLISH_CONTRACT_TIERS = {
+    "blocker",
+    "archive",
+    "path_watchlist",
+    "asymmetric_candidate",
+    "strict_validated",
+}
 BRANCH_DECISIONS = {
     "promote",
     "refine",
@@ -92,6 +99,7 @@ class LabLoopOptions:
     auto_refine: bool = True
     auto_gate_followups: bool = True
     objective: str = GENERAL_OBJECTIVE
+    supervisor_max_generation: int | None = None
 
 
 def utc_now_iso() -> str:
@@ -268,6 +276,7 @@ def select_next_hypothesis(queue: dict[str, Any], state: dict[str, Any] | None =
     state = state or {}
     completed_ids = set(state.get("completed_hypothesis_ids", []))
     active_loop_number = int(state.get("last_completed_loop", 0)) + 1
+    max_generation = _numeric_value(state.get("supervisor_max_generation"))
     candidates: list[dict[str, Any]] = []
     for item in queue.get("queue", []):
         status = str(item.get("status", "new"))
@@ -279,6 +288,12 @@ def select_next_hypothesis(queue: dict[str, Any], state: dict[str, Any] | None =
             continue
         cooldown_until = item.get("cooldown_until_loop")
         if cooldown_until is not None and int(cooldown_until) > active_loop_number:
+            continue
+        if (
+            max_generation is not None
+            and int(item.get("generation", 0) or 0) > int(max_generation)
+            and str(item.get("research_gate_stage", "")) != "validation"
+        ):
             continue
         candidates.append(item)
     if not candidates:
@@ -541,7 +556,7 @@ def create_research_gate_followups(
 
     existing_ids = {str(item.get("id")) for item in queue.get("queue", [])}
     parent_id = str(hypothesis.get("id", "hypothesis"))
-    parent_root = root_hypothesis_id(parent_id)
+    parent_root = canonical_hypothesis_root(hypothesis)
     children: list[dict[str, Any]] = []
     for spec in gate_followup_specs(candidate, base_timeframes=base_timeframes):
         child_id = _safe_slug(f"{parent_root}_{spec['name']}_l{loop_number:04d}", max_length=96)
@@ -562,8 +577,10 @@ def create_research_gate_followups(
             "status": "new",
             "promotion_level": "L1_encoded",
             "priority": int(hypothesis.get("priority", 100)) + 5 + len(children),
+            "root_id": parent_root,
             "parent_id": parent_id,
             "generation": int(hypothesis.get("generation", 0) or 0) + 1,
+            "lineage_fingerprint": lineage_fingerprint(parent_root, parent_id, child_id, spec["name"], loop_number),
             "created_from": "research_gate_strict_survivor",
             "research_gate_stage": spec["stage"],
             "source": str(grid_path),
@@ -639,7 +656,7 @@ def create_bullish_control_followups(
 
     existing_ids = {str(item.get("id")) for item in queue.get("queue", [])}
     parent_id = str(hypothesis.get("id", "hypothesis"))
-    parent_root = root_hypothesis_id(parent_id)
+    parent_root = canonical_hypothesis_root(hypothesis)
     children: list[dict[str, Any]] = []
     for spec in specs:
         child_id = _safe_slug(f"{parent_root}_{spec['name']}_l{loop_number:04d}", max_length=96)
@@ -663,8 +680,10 @@ def create_bullish_control_followups(
             "status": "new",
             "promotion_level": "L1_encoded",
             "priority": int(hypothesis.get("priority", 100)) + 5 + len(children),
+            "root_id": parent_root,
             "parent_id": parent_id,
             "generation": int(hypothesis.get("generation", 0) or 0) + 1,
+            "lineage_fingerprint": lineage_fingerprint(parent_root, parent_id, child_id, spec["name"], loop_number),
             "created_from": "bullish_positive_control",
             "claim_type": claim_type,
             "setup_class": hypothesis.get("setup_class", ""),
@@ -836,8 +855,41 @@ def _bullish_thresholds(hypothesis: dict[str, Any] | None) -> dict[str, float]:
         "min_edge_vs_cluster": threshold("min_edge_vs_cluster", 0.0),
         "min_hit_rate": threshold("min_hit_rate", 0.55),
         "min_mfe_mae_ratio": threshold("min_mfe_mae_ratio", 1.25),
+        "watchlist_min_sample_size": threshold("watchlist_min_sample_size", 20),
+        "watchlist_min_unique_symbols": threshold("watchlist_min_unique_symbols", 8),
+        "watchlist_min_event_clusters": threshold("watchlist_min_event_clusters", 8),
+        "asymmetric_min_hit_rate": threshold("asymmetric_min_hit_rate", 0.40),
+        "asymmetric_min_terminal_relative_return": threshold("asymmetric_min_terminal_relative_return", 0.03),
+        "asymmetric_min_mfe_mae_ratio": threshold("asymmetric_min_mfe_mae_ratio", 1.60),
         "max_median_drawdown": max_median_drawdown,
     }
+
+
+def _meets_minimum(value: float | None, threshold: float) -> bool:
+    return value is not None and value >= threshold
+
+
+def _positive_number(value: float | None) -> bool:
+    return value is not None and value > 0.0
+
+
+def _asymmetry_score(
+    *,
+    terminal_median: float | None,
+    hit_rate: float | None,
+    median_drawdown: float | None,
+    mfe_mae_ratio: float | None,
+) -> float:
+    score = 0.0
+    if terminal_median is not None:
+        score += terminal_median * 10.0
+    if mfe_mae_ratio is not None:
+        score += min(mfe_mae_ratio, 4.0)
+    if hit_rate is not None:
+        score += max(0.0, hit_rate - 0.40) * 2.0
+    if median_drawdown is not None:
+        score += max(0.0, 0.35 + median_drawdown)
+    return round(score, 6)
 
 
 def summarize_bullish_evidence(
@@ -910,8 +962,35 @@ def summarize_bullish_evidence(
     median_mfe = _first_numeric(candidate, ("median_max_favorable_excursion",))
     mfe_mae_ratio = _first_numeric(candidate, ("median_mfe_mae_ratio",))
     validation_status = str(candidate.get("validation_status", ""))
+    passes_path_gate = bool(
+        _positive_number(median_mfe)
+        and (median_drawdown is None or median_drawdown >= thresholds["max_median_drawdown"])
+        and _meets_minimum(mfe_mae_ratio, thresholds["min_mfe_mae_ratio"])
+    )
+    watchlist_diversity = bool(
+        sample_size >= thresholds["watchlist_min_sample_size"]
+        and unique_symbols >= thresholds["watchlist_min_unique_symbols"]
+        and event_clusters >= thresholds["watchlist_min_event_clusters"]
+    )
+    asymmetric_candidate = bool(
+        terminal_median is not None
+        and terminal_median >= thresholds["asymmetric_min_terminal_relative_return"]
+        and hit_rate is not None
+        and hit_rate >= thresholds["asymmetric_min_hit_rate"]
+        and _meets_minimum(mfe_mae_ratio, thresholds["asymmetric_min_mfe_mae_ratio"])
+        and (median_drawdown is None or median_drawdown >= thresholds["max_median_drawdown"])
+        and watchlist_diversity
+        and int(len(positive_useful)) > 0
+    )
+    asymmetry_score = _asymmetry_score(
+        terminal_median=terminal_median,
+        hit_rate=hit_rate,
+        median_drawdown=median_drawdown,
+        mfe_mae_ratio=mfe_mae_ratio,
+    )
 
     failures: list[str] = []
+    strict_failures: list[str] = []
     if positive_strict.empty:
         if not negative_strict.empty:
             failures.append("strict survivor evidence points negative, so this is a blocker not a bullish setup")
@@ -923,38 +1002,56 @@ def summarize_bullish_evidence(
         passes_contract = False
     else:
         if terminal_median is None or terminal_median <= thresholds["min_terminal_relative_return"]:
-            failures.append("terminal relative median is not positive enough")
+            strict_failures.append("terminal relative median is not positive enough")
         if edge_unconditional is None or edge_unconditional <= thresholds["min_edge_vs_unconditional"]:
-            failures.append("edge versus unconditional baseline is not positive")
+            strict_failures.append("edge versus unconditional baseline is not positive")
         if edge_cluster is None or edge_cluster <= thresholds["min_edge_vs_cluster"]:
-            failures.append("edge versus same-cluster baseline is not positive")
+            strict_failures.append("edge versus same-cluster baseline is not positive")
         if p_value is None or p_value >= 0.05:
-            failures.append("matched-null p-value is not below 0.05")
+            strict_failures.append("matched-null p-value is not below 0.05")
         if validation_status != "time_split_supported":
-            failures.append("time split is not supported")
+            strict_failures.append("time split is not supported")
         if sample_size < thresholds["min_sample_size"]:
-            failures.append("sample size is below bullish threshold")
+            strict_failures.append("sample size is below bullish threshold")
         if unique_symbols < thresholds["min_unique_symbols"]:
-            failures.append("unique symbol count is below bullish threshold")
+            strict_failures.append("unique symbol count is below bullish threshold")
         if event_clusters < thresholds["min_event_clusters"]:
-            failures.append("event cluster count is below bullish threshold")
+            strict_failures.append("event cluster count is below bullish threshold")
         if hit_rate is None or hit_rate < thresholds["min_hit_rate"]:
-            failures.append("positive hit rate is below bullish threshold")
+            strict_failures.append("positive hit rate is below bullish threshold")
         if median_drawdown is not None and median_drawdown < thresholds["max_median_drawdown"]:
-            failures.append("median drawdown is too deep")
+            strict_failures.append("median drawdown is too deep")
         if median_mfe is None or median_mfe <= 0.0:
-            failures.append("median favorable excursion is not positive")
+            strict_failures.append("median favorable excursion is not positive")
         if mfe_mae_ratio is None or mfe_mae_ratio < thresholds["min_mfe_mae_ratio"]:
-            failures.append("MFE/MAE ratio is below bullish threshold")
-        passes_contract = not failures
+            strict_failures.append("MFE/MAE ratio is below bullish threshold")
+        failures.extend(strict_failures)
+        passes_contract = not strict_failures
+
+    if not negative_strict.empty and positive_strict.empty:
+        contract_tier = "blocker"
+    elif passes_contract:
+        contract_tier = "strict_validated"
+    elif asymmetric_candidate:
+        contract_tier = "asymmetric_candidate"
+    elif passes_path_gate and int(len(positive_useful)) > 0:
+        contract_tier = "path_watchlist"
+    else:
+        contract_tier = "archive"
+    hit_rate_role = "hard_gate" if contract_tier == "strict_validated" else "soft_diagnostic"
 
     return {
         "model": "riskflow_bullish_evidence_v0",
+        "contract_model": "riskflow_bullish_contract_v2",
         "objective": BULLISH_POSITIVE_OBJECTIVE,
         "hypothesis_id": hypothesis.get("id", "") if isinstance(hypothesis, dict) else "",
         "track": hypothesis.get("track", "") if isinstance(hypothesis, dict) else "",
         "claim_type": hypothesis.get("claim_type", "bullish_entry") if isinstance(hypothesis, dict) else "bullish_entry",
         "setup_class": hypothesis.get("setup_class", "") if isinstance(hypothesis, dict) else "",
+        "contract_tier": contract_tier,
+        "hit_rate_role": hit_rate_role,
+        "asymmetry_score": asymmetry_score,
+        "contract_failures": failures,
         "strict_positive_survivors": int(len(positive_strict)),
         "strict_negative_survivors": int(len(negative_strict)),
         "positive_useful_rows": int(len(positive_useful)),
@@ -973,13 +1070,7 @@ def summarize_bullish_evidence(
         "mfe_mae_ratio": mfe_mae_ratio,
         "matched_null_p_value": p_value,
         "validation_status": validation_status,
-        "passes_path_gate": bool(
-            median_mfe is not None
-            and median_mfe > 0.0
-            and (median_drawdown is None or median_drawdown >= thresholds["max_median_drawdown"])
-            and mfe_mae_ratio is not None
-            and mfe_mae_ratio >= thresholds["min_mfe_mae_ratio"]
-        ),
+        "passes_path_gate": passes_path_gate,
         "passes_bullish_contract": bool(passes_contract),
         "failure_reason": "; ".join(failures) if failures else "passed bullish-positive contract",
         "thresholds": thresholds,
@@ -1013,6 +1104,7 @@ def decide_loop_outcome(
         positive_useful = int(evidence.get("positive_useful_rows", 0) or 0)
         positive_survivors = int(evidence.get("strict_positive_survivors", 0) or 0)
         negative_survivors = int(evidence.get("strict_negative_survivors", 0) or 0)
+        contract_tier = str(evidence.get("contract_tier", ""))
         if evidence.get("passes_bullish_contract"):
             return {
                 "decision": "promote",
@@ -1022,8 +1114,9 @@ def decide_loop_outcome(
                 "survivor_count": positive_survivors,
                 "useful_count": positive_useful,
                 "bullish_failure_reason": "",
+                "contract_tier": contract_tier,
             }
-        if negative_survivors and not positive_survivors:
+        if contract_tier == "blocker" or (negative_survivors and not positive_survivors):
             return {
                 "decision": "failed_setup_blocker",
                 "promotion_level": "L2_discovered",
@@ -1032,6 +1125,18 @@ def decide_loop_outcome(
                 "survivor_count": 0,
                 "useful_count": positive_useful,
                 "bullish_failure_reason": evidence.get("failure_reason", ""),
+                "contract_tier": contract_tier,
+            }
+        if contract_tier == "asymmetric_candidate":
+            return {
+                "decision": "bullish_path_watchlist",
+                "promotion_level": "L2_discovered",
+                "status": "tested",
+                "reason": evidence.get("failure_reason", "asymmetric bullish path candidate needs validation"),
+                "survivor_count": 0,
+                "useful_count": max(positive_useful, positive_survivors),
+                "bullish_failure_reason": evidence.get("failure_reason", ""),
+                "contract_tier": contract_tier,
             }
         if positive_survivors or positive_useful:
             return {
@@ -1042,6 +1147,7 @@ def decide_loop_outcome(
                 "survivor_count": 0,
                 "useful_count": max(positive_useful, positive_survivors),
                 "bullish_failure_reason": evidence.get("failure_reason", ""),
+                "contract_tier": contract_tier,
             }
         return {
             "decision": "archive",
@@ -1051,6 +1157,7 @@ def decide_loop_outcome(
             "survivor_count": 0,
             "useful_count": 0,
             "bullish_failure_reason": evidence.get("failure_reason", ""),
+            "contract_tier": contract_tier,
         }
     if not survivors.empty:
         return {
@@ -1180,8 +1287,15 @@ def create_next_hypothesis(
         "status": "new",
         "promotion_level": "L1_encoded",
         "priority": int(hypothesis.get("priority", 100)) + 10,
+        "root_id": canonical_hypothesis_root(hypothesis),
         "parent_id": hypothesis.get("id"),
         "generation": int(hypothesis.get("generation", 0)) + 1,
+        "lineage_fingerprint": lineage_fingerprint(
+            canonical_hypothesis_root(hypothesis),
+            hypothesis.get("id"),
+            child_id,
+            loop_number,
+        ),
         "created_from": "strict_survivor" if not strict_survivor_rows(strict_referee).empty else "useful_variant",
         "mutation_type": "narrow",
         "source": str(grid_path),
@@ -1198,9 +1312,21 @@ def root_hypothesis_id(hypothesis_id: str) -> str:
     return hypothesis_id.split("_child_", 1)[0]
 
 
+def canonical_hypothesis_root(hypothesis: dict[str, Any]) -> str:
+    explicit = str(hypothesis.get("root_id", "") or "").strip()
+    if explicit:
+        return explicit
+    return root_hypothesis_id(str(hypothesis.get("id", "")))
+
+
+def lineage_fingerprint(*parts: Any) -> str:
+    text = "|".join(str(part) for part in parts)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def safe_child_hypothesis_id(hypothesis: dict[str, Any], *, loop_number: int) -> str:
     parent_id = str(hypothesis.get("id", "hypothesis"))
-    root = root_hypothesis_id(parent_id)
+    root = canonical_hypothesis_root(hypothesis)
     safe_root = re.sub(r"[^A-Za-z0-9_]+", "_", root).strip("_") or "hypothesis"
     safe_root = safe_root[:64]
     generation = int(hypothesis.get("generation", 0) or 0) + 1
@@ -1218,10 +1344,12 @@ def loop_history_entry(
     errors: int,
 ) -> dict[str, Any]:
     hypothesis_id = str(hypothesis.get("id", ""))
+    root_id = canonical_hypothesis_root(hypothesis)
     return {
         "loop_number": loop_number,
         "hypothesis_id": hypothesis_id,
-        "root_hypothesis_id": root_hypothesis_id(hypothesis_id),
+        "root_hypothesis_id": root_id,
+        "lineage_fingerprint": hypothesis.get("lineage_fingerprint", ""),
         "generation": int(hypothesis.get("generation", 0) or 0),
         "track": hypothesis.get("track"),
         "decision": decision.get("decision"),
@@ -1230,6 +1358,7 @@ def loop_history_entry(
         "useful_count": int(decision.get("useful_count", 0) or 0),
         "objective": decision.get("objective", ""),
         "claim_type": hypothesis.get("claim_type", ""),
+        "contract_tier": decision.get("contract_tier", ""),
         "bullish_failure_reason": decision.get("bullish_failure_reason", ""),
         "next_hypothesis_id": child.get("id") if child else "",
         "report_dir": str(report_dir),
@@ -1819,6 +1948,9 @@ def _bullish_leaderboard_rows(entries: list[dict[str, Any]]) -> list[dict[str, A
                 "claim_type": evidence.get("claim_type", ""),
                 "setup_class": evidence.get("setup_class", ""),
                 "decision": evidence.get("decision", entry.get("decision")),
+                "contract_tier": evidence.get("contract_tier", ""),
+                "hit_rate_role": evidence.get("hit_rate_role", ""),
+                "asymmetry_score": evidence.get("asymmetry_score"),
                 "passes_bullish_contract": evidence.get("passes_bullish_contract", False),
                 "failure_reason": evidence.get("failure_reason", ""),
                 "candidate_variant_id": evidence.get("candidate_variant_id", ""),
@@ -2145,6 +2277,7 @@ def _run_lab_loop_locked(options: LabLoopOptions) -> dict[str, Any]:
             "updated_at": utc_now_iso(),
             "runner_version": LAB_LOOP_MODEL,
             "objective": options.objective,
+            "supervisor_max_generation": options.supervisor_max_generation,
             "queue_path": str(options.queue_path),
             "runtime_queue_path": str(options.runtime_queue_path),
             "report_session_dir": str(report_session_dir),

@@ -34,6 +34,7 @@ EVIDENCE_MART_MODEL = "riskflow_lab_director_evidence_mart_v0"
 BELIEF_GRAPH_MODEL = "riskflow_lab_director_belief_graph_v0"
 EXPERIMENT_PLAN_MODEL = "riskflow_lab_director_experiment_plan_v0"
 DIRECTOR_QUEUE_MODEL = "riskflow_lab_loop_hypothesis_queue_v0"
+LANE_RECOVERY_PLAN_MODEL = "riskflow_lab_director_lane_recovery_plan_v0"
 
 DEFAULT_DIRECTOR_REPORT_ROOT = Path("reports/lab_director")
 DEFAULT_DIRECTOR_QUEUE_PATH = Path("research/lab_loop/director_candidate_queue.yaml")
@@ -776,6 +777,297 @@ def _grid_for_spec(family: dict[str, Any], spec: dict[str, Any], family_id: str)
     }
 
 
+def _rows_for_belief(mart: dict[str, Any], belief: dict[str, Any]) -> list[dict[str, Any]]:
+    rows_by_trial = {str(row.get("trial_id", "")): row for row in mart.get("rows", []) or []}
+    rows: list[dict[str, Any]] = []
+    for trial_id in list(belief.get("supporting_trials", []) or []) + list(belief.get("contradicting_trials", []) or []):
+        row = rows_by_trial.get(str(trial_id))
+        if row:
+            rows.append(row)
+    if rows:
+        return rows
+    setup_class = str(belief.get("setup_class", ""))
+    return [row for row in mart.get("rows", []) or [] if str(row.get("setup_class", "")) == setup_class]
+
+
+def _family_from_belief_source(
+    belief: dict[str, Any],
+    mart: dict[str, Any],
+    source_root: Path,
+) -> tuple[dict[str, Any] | None, str]:
+    candidate_paths = [str((belief.get("best_trial") or {}).get("source_grid_path", "") or "")]
+    candidate_paths.extend(str(row.get("source_grid_path", "") or "") for row in _rows_for_belief(mart, belief))
+    for source_path in candidate_paths:
+        family = _load_source_family(source_path, source_root)
+        if family:
+            return family, "source_grid"
+    fallback = _fallback_family_for_belief(belief, mart)
+    if fallback:
+        return fallback, "inferred_minimal"
+    return None, "missing_source_grid"
+
+
+def _fallback_family_for_belief(belief: dict[str, Any], mart: dict[str, Any]) -> dict[str, Any] | None:
+    rows = _rows_for_belief(mart, belief)
+    detector = next((str(row.get("detector", "")) for row in rows if row.get("detector")), "")
+    setup_class = str(belief.get("setup_class", ""))
+    text = " ".join(
+        [
+            setup_class,
+            str(belief.get("claim_id", "")),
+            str(belief.get("plain_english_claim", "")),
+        ]
+    ).lower()
+    if not detector:
+        if "fresh_leader" in text:
+            detector = "fresh_leader_ignition"
+        elif "failed_weakness" in text:
+            detector = "failed_weakness_reclaim"
+        elif "lower_high" in text or "rollover" in text:
+            detector = "lower_high_rollover"
+        elif "reclaim" in text or "reset" in text or "regime" in text:
+            detector = "regime_confirmed_reclaim"
+    if detector == "regime_confirmed_reclaim":
+        parameter_grid = {
+            "relative_window": [5, 8],
+            "benchmark_window": [5],
+            "min_relative_slope": [0.0, 0.03],
+            "min_benchmark_return": [0.0],
+            "trigger": ["viscosity_reclaim"],
+            "require_warning_absent": [True],
+            "max_signal": [1.0],
+            "min_compression": [0.0],
+            "min_recent_signal_low": [-1.5],
+            "warning_lookback": [20],
+            "warning_context_window": [8],
+        }
+        direction = "positive"
+    elif detector == "fresh_leader_ignition":
+        parameter_grid = {
+            "relative_window": [5],
+            "min_relative_slope": [0.03],
+            "max_signal": [1.0],
+            "min_gradient_slope": [0.0],
+            "price_lookback": [20],
+            "below_high_margin": [0.02],
+            "trigger": ["viscosity_reclaim"],
+            "require_warning_absent": [True],
+            "warning_lookback": [20],
+            "warning_context_window": [8],
+        }
+        direction = "positive"
+    elif detector == "failed_weakness_reclaim":
+        parameter_grid = {
+            "lookback": [13],
+            "zone_max": [-1.5],
+            "low_tolerance": [0.25],
+            "min_slope": [0.0],
+            "relative_slope_min": [-0.05],
+            "recent_window": [8],
+            "trigger": ["viscosity_reclaim"],
+        }
+        direction = "positive"
+    elif detector == "lower_high_rollover":
+        parameter_grid = {
+            "lookback": [20],
+            "recent_window": [6],
+            "min_prior_high": [1.0],
+            "min_lower_high_gap": [0.35],
+            "require_below_viscosity": [False],
+            "max_relative_slope": [0.0],
+        }
+        direction = "negative"
+    else:
+        return None
+    return {
+        "family_id": _safe_slug_with_hash(f"{setup_class or detector}_fallback", max_length=120),
+        "direction": direction,
+        "detector": detector,
+        "description": "Inferred minimal recovery family from belief metadata.",
+        "parameter_grid": parameter_grid,
+    }
+
+
+def _lane_recovery_specs(lane: str, belief: dict[str, Any], family: dict[str, Any]) -> list[dict[str, Any]]:
+    parameter_grid = _listify_param_grid(family.get("parameter_grid", {}))
+    direction = str(family.get("direction", "positive") or "positive")
+    positive = "positive"
+    negative = "negative"
+    specs: list[dict[str, Any]] = []
+
+    if lane == "reset_quality":
+        if "min_recent_signal_low" in parameter_grid:
+            specs.append(
+                {
+                    "name": "reset_depth_band_sweep",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {"min_recent_signal_low": [-2.25, -1.75, -1.25, -0.75]},
+                    "question": "Which reset-depth band is actually carrying the recovery path?",
+                    "failure_mode": "reset_depth_band_not_causal",
+                    "expected_information_gain": 0.83,
+                }
+            )
+        if "trigger" in parameter_grid:
+            specs.append(
+                {
+                    "name": "reset_reclaim_trigger_matrix",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {"trigger": ["viscosity_reclaim", "zero_reclaim"]},
+                    "question": "Does reset quality depend on viscosity reclaim versus zero reclaim?",
+                    "failure_mode": "reset_trigger_not_causal",
+                    "expected_information_gain": 0.81,
+                }
+            )
+        specs.extend(
+            [
+                {
+                    "name": "reset_validation_cooldown90",
+                    "stage": "validation",
+                    "discovery_mode": "validation",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {},
+                    "cooldown_bars": 90,
+                    "question": "Does reset quality survive a stricter 90-bar cooldown?",
+                    "failure_mode": "reset_cooldown_sensitive",
+                    "expected_information_gain": 0.70,
+                },
+                {
+                    "name": "reset_validation_lag3",
+                    "stage": "validation",
+                    "discovery_mode": "validation",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {},
+                    "entry_lag_bars": 3,
+                    "question": "Does reset quality persist with delayed entry lag 3?",
+                    "failure_mode": "reset_lag_sensitive",
+                    "expected_information_gain": 0.68,
+                },
+            ]
+        )
+
+    elif lane == "warning_blocker":
+        specs.extend(
+            [
+                {
+                    "name": "blocker_active_negative",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "warning_blocker",
+                    "track": "warning",
+                    "direction": negative,
+                    "updates": {},
+                    "question": "Does the blocker-active shape identify avoidable downside?",
+                    "failure_mode": "blocker_not_harm_avoiding",
+                    "expected_information_gain": 0.82,
+                },
+                {
+                    "name": "blocker_missed_upside_cost",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {},
+                    "question": "What upside is missed when the blocker is treated as a filter?",
+                    "failure_mode": "blocker_too_costly",
+                    "expected_information_gain": 0.80,
+                },
+            ]
+        )
+        relaxed_updates: dict[str, Any] = {}
+        if "require_warning_absent" in parameter_grid:
+            relaxed_updates["require_warning_absent"] = [False]
+        if "min_benchmark_return" in parameter_grid:
+            relaxed_updates["min_benchmark_return"] = [-0.05, 0.0]
+        if "min_relative_slope" in parameter_grid:
+            relaxed_updates["min_relative_slope"] = [-0.05, 0.0]
+        if "max_relative_slope" in parameter_grid:
+            relaxed_updates["max_relative_slope"] = [0.0, 0.05]
+        if relaxed_updates:
+            specs.append(
+                {
+                    "name": "blocker_relaxed_context_negative",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "warning_blocker",
+                    "track": "warning",
+                    "direction": negative,
+                    "updates": relaxed_updates,
+                    "question": "Does blocker evidence remain useful when context filters are relaxed?",
+                    "failure_mode": "blocker_context_not_causal",
+                    "expected_information_gain": 0.76,
+                }
+            )
+
+    elif lane == "bullish_permission":
+        if "require_warning_absent" in parameter_grid:
+            specs.append(
+                {
+                    "name": "permission_warning_absent_pair",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "bullish_permission",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {"require_warning_absent": [True, False]},
+                    "question": "Does warning absence improve permission quality or just reduce sample count?",
+                    "failure_mode": "permission_warning_filter_not_causal",
+                    "expected_information_gain": 0.82,
+                }
+            )
+        trigger_only_updates: dict[str, Any] = {}
+        if "min_recent_signal_low" in parameter_grid:
+            trigger_only_updates["min_recent_signal_low"] = [-999.0]
+        if "min_compression" in parameter_grid:
+            trigger_only_updates["min_compression"] = [0.0]
+        if "min_benchmark_return" in parameter_grid:
+            trigger_only_updates["min_benchmark_return"] = [-0.05, 0.0]
+        if trigger_only_updates:
+            specs.append(
+                {
+                    "name": "permission_trigger_only_control",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": trigger_only_updates,
+                    "question": "Does the trigger alone work without the full permission context?",
+                    "failure_mode": "permission_context_not_incremental",
+                    "expected_information_gain": 0.78,
+                }
+            )
+        specs.append(
+            {
+                "name": "permission_validation_cooldown90",
+                "stage": "validation",
+                "discovery_mode": "validation",
+                "claim_type": "bullish_permission",
+                "track": "bullish_setup",
+                "direction": positive,
+                "updates": {},
+                "cooldown_bars": 90,
+                "question": "Does permission quality survive a 90-bar cooldown stress?",
+                "failure_mode": "permission_cooldown_sensitive",
+                "expected_information_gain": 0.70,
+            }
+        )
+
+    return specs
+
+
 def design_experiments(
     belief_graph: dict[str, Any],
     *,
@@ -904,6 +1196,179 @@ def design_experiments(
         "skipped": skipped,
         "generated_queue": queue,
         "output_queue_path": str(output_queue_path),
+    }
+
+
+def design_lane_recovery_experiments(
+    mart: dict[str, Any],
+    belief_graph: dict[str, Any],
+    lane_assignment: dict[str, Any],
+    *,
+    output_queue_path: Path,
+    generated_grid_dir: Path,
+    max_new_hypotheses: int,
+    source_root: Path = Path("."),
+    existing_hypothesis_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    generated_grid_dir.mkdir(parents=True, exist_ok=True)
+    existing_hypothesis_ids = existing_hypothesis_ids or set()
+    open_lanes = set(str(lane) for lane in lane_assignment.get("open_lanes", []) or [])
+    beliefs_by_id = {str(belief.get("claim_id", "")): belief for belief in belief_graph.get("beliefs", []) or []}
+    assignments = [
+        item
+        for item in lane_assignment.get("assignments", []) or []
+        if not item.get("blocked") and str(item.get("lane", "")) in open_lanes
+    ]
+    assignments.sort(
+        key=lambda item: (
+            int(item.get("confidence_score", 0) or 0),
+            str(item.get("lane", "")),
+            str(item.get("belief_id", "")),
+        ),
+        reverse=True,
+    )
+
+    queue_items: list[dict[str, Any]] = []
+    experiments: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    blocked_lanes: list[dict[str, str]] = []
+    priority = 1
+    supported_lanes = {"reset_quality", "warning_blocker", "bullish_permission"}
+
+    for assignment in assignments:
+        if len(queue_items) >= max_new_hypotheses:
+            break
+        lane = str(assignment.get("lane", ""))
+        belief_id = str(assignment.get("belief_id", ""))
+        belief = beliefs_by_id.get(belief_id)
+        if not belief:
+            skipped.append({"belief_id": belief_id, "lane": lane, "reason": "missing_belief"})
+            continue
+        if lane not in supported_lanes:
+            blocked_lanes.append({"belief_id": belief_id, "lane": lane, "reason": "unsupported_recovery_lane"})
+            continue
+        family, family_mode = _family_from_belief_source(belief, mart, source_root)
+        if not family:
+            blocked_lanes.append({"belief_id": belief_id, "lane": lane, "reason": family_mode})
+            continue
+        specs = _lane_recovery_specs(lane, belief, family)
+        if not specs:
+            blocked_lanes.append({"belief_id": belief_id, "lane": lane, "reason": "no_supported_recovery_specs"})
+            continue
+        for spec in specs:
+            if len(queue_items) >= max_new_hypotheses:
+                break
+            item_id = _safe_slug_with_hash(f"recovery_{lane}_{belief_id}_{spec['name']}", max_length=96)
+            if item_id in existing_hypothesis_ids:
+                skipped.append({"belief_id": belief_id, "lane": lane, "reason": f"already_seen:{item_id}"})
+                continue
+            family_id = _safe_slug_with_hash(f"{family.get('family_id', belief_id)}_{lane}_{spec['name']}", max_length=120)
+            grid = _grid_for_spec(family, spec, family_id)
+            grid_path = generated_grid_dir / f"{item_id}.yaml"
+            atomic_write_yaml(grid_path, grid)
+            root_ids = list(belief.get("root_ids", []))
+            root_id = str((root_ids[0] if root_ids else "") or belief_id)
+            lineage = lineage_fingerprint(root_id, belief_id, item_id, lane, spec["name"], "lane_recovery")
+            queue_item = {
+                "id": item_id,
+                "root_id": root_id,
+                "lineage_fingerprint": lineage,
+                "track": spec["track"],
+                "status": "new",
+                "promotion_level": "L1_encoded",
+                "priority": priority,
+                "source": str(grid_path),
+                "hypothesis": spec["question"],
+                "claim_type": spec["claim_type"],
+                "setup_class": belief.get("setup_class", ""),
+                "discovery_mode": spec["discovery_mode"],
+                "research_stage": spec["stage"],
+                "source_belief_id": belief_id,
+                "research_lane": lane,
+                "research_question": spec["question"],
+                "expected_information_gain": spec["expected_information_gain"],
+                "expected_failure_mode": spec["failure_mode"],
+                "required_controls": sorted(set(belief.get("next_required_tests", []))),
+                "measurable_primitives": sorted(set(belief.get("suspected_drivers", [])) | {lane, spec["stage"]}),
+                "branch_budget": {"max_generation": 1},
+                "path_objective": {
+                    "min_sample_size": 20,
+                    "min_unique_symbols": 8,
+                    "min_event_clusters": 8,
+                    "min_hit_rate": 0.52,
+                    "asymmetric_min_hit_rate": 0.40,
+                    "asymmetric_min_terminal_relative_return": 0.02,
+                    "min_mfe_mae_ratio": 1.30,
+                    "asymmetric_min_mfe_mae_ratio": 1.40,
+                    "max_median_drawdown": -0.40,
+                },
+                "production_effect": "none",
+                "created_from": "governed_lane_recovery",
+                "source_family_mode": family_mode,
+                "next_action": "Run as a governed lane-recovery research test.",
+            }
+            if "entry_lag_bars" in spec:
+                queue_item["entry_lag_bars"] = int(spec["entry_lag_bars"])
+            if "cooldown_bars" in spec:
+                queue_item["cooldown_bars"] = int(spec["cooldown_bars"])
+            if "timeframes" in spec:
+                queue_item["timeframes"] = list(spec["timeframes"])
+            queue_items.append(queue_item)
+            experiments.append(
+                {
+                    "experiment_id": item_id,
+                    "source_belief_id": belief_id,
+                    "research_lane": lane,
+                    "experiment_type": spec["stage"],
+                    "hypothesis": spec["question"],
+                    "source_family_mode": family_mode,
+                    "generated_grid_path": str(grid_path),
+                    "generated_queue_path": str(output_queue_path),
+                    "success_criteria": "Resolves an open governed research lane without changing production behavior.",
+                    "failure_criteria": spec["failure_mode"],
+                }
+            )
+            priority += 1
+
+    queue = {
+        "model": DIRECTOR_QUEUE_MODEL,
+        "date": utc_now_iso().split("T", 1)[0],
+        "generated_from": LANE_RECOVERY_PLAN_MODEL,
+        "production_effect": "none",
+        "default_timeframes": ["1d", "12h", "4h", "1h"],
+        "default_outcome": "forward_relative_return_vs_basket",
+        "strict_referee_required": True,
+        "queue": queue_items,
+    }
+    if queue_items:
+        stop_reason = ""
+        research_mode = "governed_lane_recovery"
+    elif blocked_lanes and len(blocked_lanes) >= len(assignments):
+        reasons = {item["reason"] for item in blocked_lanes}
+        if reasons == {"missing_source_grid"}:
+            stop_reason = "governed_recovery_missing_source_grids"
+        elif reasons == {"unsupported_recovery_lane"}:
+            stop_reason = "governed_recovery_no_supported_specs"
+        else:
+            stop_reason = "all_research_lanes_blocked"
+        research_mode = "stop_research_saturated"
+    else:
+        stop_reason = "governed_recovery_no_supported_specs"
+        research_mode = "stop_research_saturated"
+    return {
+        "model": LANE_RECOVERY_PLAN_MODEL,
+        "generated_at": utc_now_iso(),
+        "session_id": belief_graph.get("session_id", mart.get("session_id", "ad_hoc")),
+        "research_mode": research_mode,
+        "open_lanes": sorted(open_lanes),
+        "generated_count": len(queue_items),
+        "blocked_lanes": blocked_lanes,
+        "skipped": skipped,
+        "stop_reason": stop_reason,
+        "experiments": experiments,
+        "generated_queue": queue,
+        "output_queue_path": str(output_queue_path),
+        "production_effect": "none",
     }
 
 

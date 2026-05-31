@@ -13,6 +13,9 @@ from .lab_director import (
     DEFAULT_DIRECTOR_QUEUE_PATH,
     DEFAULT_DIRECTOR_REPORT_ROOT,
     LabDirectorOptions,
+    audit_director_plan,
+    append_queue_to_runtime,
+    design_lane_recovery_experiments,
     run_director_plan_next,
 )
 from .blocker_audit import build_blocker_audit, write_blocker_audit
@@ -494,6 +497,79 @@ def _governed_intervention_can_continue(
     return False
 
 
+def should_attempt_governed_recovery(
+    options: LabOpsOptions,
+    *,
+    state: dict[str, Any],
+    director_result: dict[str, Any],
+    governance_result: dict[str, Any],
+) -> bool:
+    if not options.governed:
+        return False
+    if not state.get("requires_new_candidate_queue"):
+        return False
+    if int(director_result.get("runtime_added", 0) or 0) > 0:
+        return False
+    lane_assignment = governance_result.get("lane_assignment", {})
+    return has_open_research_lanes(lane_assignment) and not bool(lane_assignment.get("all_lanes_blocked"))
+
+
+def _existing_hypothesis_ids_for_run(options: LabOpsOptions, run_id: str, state: dict[str, Any]) -> set[str]:
+    paths = _runtime_paths(options, run_id)
+    existing = {str(item) for item in state.get("completed_hypothesis_ids", [])}
+    if paths["runtime_queue"].exists():
+        try:
+            from .lab_loop import load_lab_queue
+
+            runtime_queue = load_lab_queue(paths["runtime_queue"])
+        except Exception:
+            runtime_queue = {"queue": []}
+        existing.update(str(item.get("id", "")) for item in runtime_queue.get("queue", []))
+    return existing
+
+
+def _attempt_governed_recovery(
+    options: LabOpsOptions,
+    run_id: str,
+    *,
+    block_number: int,
+    state: dict[str, Any],
+    director_result: dict[str, Any],
+    governance_result: dict[str, Any],
+) -> dict[str, Any]:
+    output_dir = run_dir(options, run_id) / "governance" / f"block_{block_number:04d}"
+    paths = _runtime_paths(options, run_id)
+    recovery_queue_path = output_dir / "recovery_candidate_queue.yaml"
+    generated_grid_dir = paths["generated_director_grids"] / "recovery" / f"block_{block_number:04d}"
+    plan = design_lane_recovery_experiments(
+        director_result["mart"],
+        director_result["belief_graph"],
+        governance_result.get("lane_assignment", {}),
+        output_queue_path=recovery_queue_path,
+        generated_grid_dir=generated_grid_dir,
+        max_new_hypotheses=options.max_new_hypotheses,
+        source_root=options.source_root,
+        existing_hypothesis_ids=_existing_hypothesis_ids_for_run(options, run_id, state),
+    )
+    audit = audit_director_plan(plan, source_root=options.source_root)
+    atomic_write_yaml(output_dir / "recovery_queue_plan.yaml", plan)
+    atomic_write_yaml(recovery_queue_path, plan.get("generated_queue", {}))
+    atomic_write_yaml(output_dir / "recovery_audit.yaml", audit)
+    runtime_added = 0
+    if audit.get("passed"):
+        runtime_added = append_queue_to_runtime(paths["runtime_queue"], plan.get("generated_queue", {}))
+    return {
+        "plan": plan,
+        "audit": audit,
+        "runtime_added": runtime_added,
+        "paths": {
+            "plan": output_dir / "recovery_queue_plan.yaml",
+            "queue": recovery_queue_path,
+            "audit": output_dir / "recovery_audit.yaml",
+        },
+    }
+
+
 def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
     if not options.apply:
         raise ValueError("lab-ops run requires --apply; use lab-ops plan for non-mutating planning")
@@ -519,6 +595,7 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
     last_state: dict[str, Any] = {}
     last_meta: dict[str, Any] = {}
     last_governance: dict[str, Any] = {}
+    last_recovery: dict[str, Any] = {}
 
     try:
         with _OpsLock(paths["lock"]):
@@ -680,9 +757,52 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                     terminal_status = "stopped"
                     stop_reason = str(intervention_type)
                     break
-                if last_state.get("requires_new_candidate_queue") and not director_result.get("runtime_added"):
+                recovery_added = 0
+                if should_attempt_governed_recovery(
+                    options,
+                    state=last_state,
+                    director_result=director_result,
+                    governance_result=last_governance,
+                ):
+                    last_recovery = _attempt_governed_recovery(
+                        options,
+                        run_id,
+                        block_number=completed_blocks,
+                        state=last_state,
+                        director_result=director_result,
+                        governance_result=last_governance,
+                    )
+                    recovery_added = int(last_recovery.get("runtime_added", 0) or 0)
+                    _append_journal(
+                        options,
+                        run_id,
+                        "governance_recovery_completed",
+                        {
+                            "block": completed_blocks,
+                            "runtime_added": recovery_added,
+                            "audit_passed": last_recovery.get("audit", {}).get("passed"),
+                            "stop_reason": last_recovery.get("plan", {}).get("stop_reason", ""),
+                            "plan": str(last_recovery.get("paths", {}).get("plan", "")),
+                        },
+                    )
+                    if not last_recovery.get("audit", {}).get("passed"):
+                        terminal_status = "failed"
+                        stop_reason = "governed_recovery_audit_failed"
+                        break
+                    if recovery_added > 0:
+                        _append_journal(
+                            options,
+                            run_id,
+                            "governance_recovery_applied",
+                            {
+                                "block": completed_blocks,
+                                "runtime_added": recovery_added,
+                                "queue": str(last_recovery.get("paths", {}).get("queue", "")),
+                            },
+                        )
+                if last_state.get("requires_new_candidate_queue") and not director_result.get("runtime_added") and recovery_added == 0:
                     terminal_status = "stopped"
-                    stop_reason = "no_runnable_and_no_valid_director_plan"
+                    stop_reason = str(last_recovery.get("plan", {}).get("stop_reason") or "no_runnable_and_no_valid_director_plan")
                     break
     except Exception as exc:
         errors += 1
@@ -722,6 +842,11 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
             "last_completed_loop": last_state.get("last_completed_loop"),
             "latest_process_score": last_meta.get("scorecard", {}).get("overall_process_score"),
             "latest_intervention": (last_meta.get("intervention") or {}).get("intervention_type"),
+            "latest_recovery": {
+                "runtime_added": last_recovery.get("runtime_added", 0),
+                "stop_reason": last_recovery.get("plan", {}).get("stop_reason", ""),
+                "audit_passed": last_recovery.get("audit", {}).get("passed"),
+            },
             "governance": {
                 "enabled": options.governed,
                 "open_lanes": last_governance.get("lane_assignment", {}).get("open_lanes", []),

@@ -10,6 +10,7 @@ from riskflow.lab_director import (
     audit_director_plan,
     build_belief_graph,
     build_evidence_mart,
+    design_lane_recovery_experiments,
     design_experiments,
     run_director_plan_next,
     _safe_slug_with_hash,
@@ -215,6 +216,84 @@ def test_director_skips_seen_ids_and_emits_deeper_controls(tmp_path: Path) -> No
     assert "director_deep_reset_regime_reclaim_entry_1d_validation_cooldown30" in ids
     assert "director_deep_reset_regime_reclaim_entry_1d_timeframe_transfer_1h" in ids
     assert ids.isdisjoint(seen)
+
+
+def test_lane_recovery_generates_valid_reset_quality_queue(tmp_path: Path) -> None:
+    options = _write_director_fixture(tmp_path)
+    mart = build_evidence_mart(options)
+    graph = build_belief_graph(mart)
+    lane_assignment = {
+        "model": "riskflow_research_lane_assignment_v0",
+        "open_lanes": ["reset_quality"],
+        "assignments": [
+            {
+                "belief_id": "deep_reset_regime_reclaim_entry_1d",
+                "lane": "reset_quality",
+                "blocked": False,
+                "confidence_score": 60,
+            }
+        ],
+    }
+
+    plan = design_lane_recovery_experiments(
+        mart,
+        graph,
+        lane_assignment,
+        output_queue_path=tmp_path / "research" / "lab_loop" / "recovery_candidate_queue.yaml",
+        generated_grid_dir=tmp_path / "research" / "lab_loop" / "generated_grids" / "recovery",
+        max_new_hypotheses=8,
+        source_root=tmp_path,
+    )
+
+    assert plan["model"] == "riskflow_lab_director_lane_recovery_plan_v0"
+    assert plan["generated_count"] > 0
+    queue = plan["generated_queue"]
+    assert validate_lab_queue(queue, validate_sources=True, source_root=tmp_path) == []
+    ids = {item["id"] for item in queue["queue"]}
+    assert any(item_id.startswith("recovery_reset_quality_") for item_id in ids)
+    assert {item["production_effect"] for item in queue["queue"]} == {"none"}
+
+
+def test_lane_recovery_skips_already_seen_ids(tmp_path: Path) -> None:
+    options = _write_director_fixture(tmp_path)
+    mart = build_evidence_mart(options)
+    graph = build_belief_graph(mart)
+    lane_assignment = {
+        "open_lanes": ["warning_blocker"],
+        "assignments": [
+            {
+                "belief_id": "deep_reset_regime_reclaim_entry_1d",
+                "lane": "warning_blocker",
+                "blocked": False,
+                "confidence_score": 60,
+            }
+        ],
+    }
+    first = design_lane_recovery_experiments(
+        mart,
+        graph,
+        lane_assignment,
+        output_queue_path=tmp_path / "first_queue.yaml",
+        generated_grid_dir=tmp_path / "first_grids",
+        max_new_hypotheses=8,
+        source_root=tmp_path,
+    )
+    seen = {item["id"] for item in first["generated_queue"]["queue"]}
+
+    second = design_lane_recovery_experiments(
+        mart,
+        graph,
+        lane_assignment,
+        output_queue_path=tmp_path / "second_queue.yaml",
+        generated_grid_dir=tmp_path / "second_grids",
+        max_new_hypotheses=8,
+        source_root=tmp_path,
+        existing_hypothesis_ids=seen,
+    )
+
+    assert second["generated_count"] == 0
+    assert second["generated_queue"]["queue"] == []
+    assert all(str(item["reason"]).startswith("already_seen:") for item in second["skipped"])
 
 
 def test_director_long_ids_keep_unique_hash_suffixes() -> None:

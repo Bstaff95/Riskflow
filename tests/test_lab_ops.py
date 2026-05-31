@@ -7,11 +7,13 @@ import yaml
 
 from riskflow.lab_ops import (
     LabOpsOptions,
+    _attempt_governed_recovery,
     has_runnable_inventory,
     run_lab_ops_plan,
     run_lab_ops_report,
     run_lab_ops_run,
     run_lab_ops_stop,
+    should_attempt_governed_recovery,
 )
 
 
@@ -81,3 +83,105 @@ def test_has_runnable_inventory_reads_supervisor_inventory() -> None:
     assert has_runnable_inventory({"runnable_inventory": {"runnable": 2}}) is True
     assert has_runnable_inventory({"runnable_inventory": {"runnable": 0}}) is False
     assert has_runnable_inventory({"runnable_inventory": {"runnable": "bad"}}) is False
+
+
+def test_governed_recovery_attempts_when_open_lanes_need_queue(tmp_path: Path) -> None:
+    options = LabOpsOptions(
+        report_root=tmp_path / "reports" / "lab_ops",
+        runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        governed=True,
+        apply=True,
+    )
+
+    assert should_attempt_governed_recovery(
+        options,
+        state={"requires_new_candidate_queue": True, "runnable_inventory": {"runnable": 0}},
+        director_result={"runtime_added": 0},
+        governance_result={"lane_assignment": {"open_lanes": ["reset_quality"], "all_lanes_blocked": False}},
+    )
+    assert not should_attempt_governed_recovery(
+        LabOpsOptions(governed=False),
+        state={"requires_new_candidate_queue": True},
+        director_result={"runtime_added": 0},
+        governance_result={"lane_assignment": {"open_lanes": ["reset_quality"], "all_lanes_blocked": False}},
+    )
+    assert not should_attempt_governed_recovery(
+        options,
+        state={"requires_new_candidate_queue": True},
+        director_result={"runtime_added": 2},
+        governance_result={"lane_assignment": {"open_lanes": ["reset_quality"], "all_lanes_blocked": False}},
+    )
+
+
+def test_governed_recovery_appends_runtime_queue(tmp_path: Path) -> None:
+    options = LabOpsOptions(
+        run_id="recovery_ops",
+        report_root=tmp_path / "reports" / "lab_ops",
+        runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        governed=True,
+        apply=True,
+        source_root=tmp_path,
+        max_new_hypotheses=4,
+    )
+    director_result = {
+        "runtime_added": 0,
+        "mart": {
+            "session_id": "recovery_session",
+            "rows": [
+                {
+                    "trial_id": "loop_0001:reset",
+                    "setup_class": "regime_confirmed_reclaim_entry",
+                    "detector": "regime_confirmed_reclaim",
+                    "contract_tier": "asymmetric_candidate",
+                    "timeframe": "1d",
+                }
+            ],
+        },
+        "belief_graph": {
+            "session_id": "recovery_session",
+            "beliefs": [
+                {
+                    "claim_id": "regime_confirmed_reclaim_entry_1d",
+                    "status": "promising_unvalidated",
+                    "setup_class": "regime_confirmed_reclaim_entry",
+                    "root_ids": ["recovery_root"],
+                    "evidence_level": "L2_discovered",
+                    "confidence_score": 60,
+                    "supporting_trials": ["loop_0001:reset"],
+                    "suspected_drivers": ["reset_depth"],
+                    "next_required_tests": ["strict_validation"],
+                    "best_trial": {},
+                }
+            ],
+        },
+    }
+    governance_result = {
+        "lane_assignment": {
+            "open_lanes": ["reset_quality"],
+            "all_lanes_blocked": False,
+            "assignments": [
+                {
+                    "belief_id": "regime_confirmed_reclaim_entry_1d",
+                    "lane": "reset_quality",
+                    "blocked": False,
+                    "confidence_score": 60,
+                }
+            ],
+        }
+    }
+
+    result = _attempt_governed_recovery(
+        options,
+        "recovery_ops",
+        block_number=1,
+        state={"completed_hypothesis_ids": []},
+        director_result=director_result,
+        governance_result=governance_result,
+    )
+
+    assert result["audit"]["passed"] is True
+    assert result["runtime_added"] > 0
+    assert result["paths"]["plan"].exists()
+    runtime_path = tmp_path / "research" / "lab_loop" / "autonomous_runs" / "recovery_ops" / "runtime_queue.yaml"
+    runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+    assert len(runtime["queue"]) == result["runtime_added"]

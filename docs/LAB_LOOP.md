@@ -380,6 +380,12 @@ lane-specific unless every valid lane is blocked or no runnable inventory
 remains. It still does not change production formulas, states, scores,
 rankings, Pine behavior, or TradingView defaults.
 
+If governed mode finds open lanes but the director cannot add runnable work, it
+attempts a lane-aware recovery queue before stopping. Recovery queues are
+limited to research sidecars for reset quality, warning/blocker, and bullish
+permission lanes, and write `recovery_queue_plan.yaml` plus `recovery_audit.yaml`
+under the current governed checkpoint.
+
 Generated ops artifacts live under `reports/lab_ops/` and run-scoped mutable
 state lives under `research/lab_loop/autonomous_runs/`. These are generated
 research artifacts, not production configuration.
@@ -390,6 +396,7 @@ artifacts:
 ```bash
 PYTHONPATH=src python3 -m riskflow blocker-audit inspect
 PYTHONPATH=src python3 -m riskflow lane-router assign
+PYTHONPATH=src python3 -m riskflow lane-router recover
 PYTHONPATH=src python3 -m riskflow validation-governance review
 PYTHONPATH=src python3 -m riskflow research-map update
 ```

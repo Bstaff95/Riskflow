@@ -36,6 +36,9 @@ from .lab_director import (
     DEFAULT_DIRECTOR_QUEUE_PATH,
     DEFAULT_DIRECTOR_REPORT_ROOT,
     LabDirectorOptions,
+    append_queue_to_runtime,
+    audit_director_plan,
+    design_lane_recovery_experiments,
     run_director_inspect,
     run_director_plan_next,
 )
@@ -47,8 +50,11 @@ from .lab_loop import (
     DEFAULT_STATE_PATH,
     LAB_OBJECTIVES,
     LabLoopOptions,
+    atomic_write_yaml,
     lab_loop_status,
     load_lab_queue,
+    load_lab_state,
+    load_yaml_file,
     run_lab_epoch,
     run_lab_loop,
     select_next_hypothesis,
@@ -1787,6 +1793,64 @@ def _governance_output_dir(args: argparse.Namespace, default_name: str) -> Path:
     return Path("reports") / default_name
 
 
+def _latest_lane_assignment_path(args: argparse.Namespace) -> Path:
+    run_id = getattr(args, "run_id", None)
+    candidates: list[Path] = []
+    if run_id:
+        root = Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)) / run_id / "governance"
+        if root.exists():
+            candidates.extend(root.glob("block_*/lane_assignment.yaml"))
+    candidates.extend(Path("reports/lab_ops").glob("*/governance/block_*/lane_assignment.yaml"))
+    if not candidates:
+        raise FileNotFoundError("No lane_assignment.yaml found. Pass --lane-assignment explicitly.")
+    return sorted(candidates, key=lambda path: path.stat().st_mtime)[-1]
+
+
+def _runtime_queue_for_recovery_cli(args: argparse.Namespace) -> Path:
+    if getattr(args, "runtime_queue", None):
+        return Path(args.runtime_queue)
+    run_id = getattr(args, "run_id", None)
+    if run_id:
+        return Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)) / run_id / "runtime_queue.yaml"
+    raise ValueError("--apply requires --run-id or --runtime-queue")
+
+
+def _default_recovery_grid_dir(args: argparse.Namespace, output_dir: Path) -> Path:
+    if getattr(args, "generated_grid_dir", None):
+        return Path(args.generated_grid_dir)
+    run_id = getattr(args, "run_id", None)
+    if run_id:
+        return Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)) / run_id / "generated_grids" / "recovery"
+    return output_dir / "generated_grids"
+
+
+def _existing_ids_for_recovery_cli(args: argparse.Namespace) -> set[str]:
+    existing: set[str] = set()
+    runtime_queue = None
+    try:
+        runtime_queue = _runtime_queue_for_recovery_cli(args)
+    except ValueError:
+        runtime_queue = None
+    if runtime_queue and runtime_queue.exists():
+        try:
+            payload = load_lab_queue(runtime_queue)
+        except Exception:
+            payload = {"queue": []}
+        existing.update(str(item.get("id", "")) for item in payload.get("queue", []))
+    state_path = None
+    if getattr(args, "state", None):
+        state_path = Path(args.state)
+    elif getattr(args, "run_id", None):
+        state_path = Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)) / args.run_id / "lab_state.json"
+    if state_path and state_path.exists():
+        try:
+            state = load_lab_state(state_path)
+        except Exception:
+            state = {}
+        existing.update(str(item) for item in state.get("completed_hypothesis_ids", []))
+    return existing
+
+
 def blocker_audit_command(args: argparse.Namespace) -> int:
     try:
         evidence_mart, belief_graph = _latest_director_snapshot(args)
@@ -1821,6 +1885,54 @@ def lane_router_command(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         print(f"Lane router failed: {exc}")
+        return 1
+
+
+def lane_router_recover_command(args: argparse.Namespace) -> int:
+    try:
+        evidence_mart_path, belief_graph_path = _latest_director_snapshot(args)
+        output_dir = _governance_output_dir(args, "lane_recovery")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        lane_assignment_path = Path(args.lane_assignment) if getattr(args, "lane_assignment", None) else _latest_lane_assignment_path(args)
+        mart = load_yaml_file(evidence_mart_path)
+        belief_graph = load_yaml_file(belief_graph_path)
+        lane_assignment = load_yaml_file(lane_assignment_path)
+        output_queue = Path(args.output_queue) if getattr(args, "output_queue", None) else output_dir / "recovery_candidate_queue.yaml"
+        generated_grid_dir = _default_recovery_grid_dir(args, output_dir)
+        plan = design_lane_recovery_experiments(
+            mart,
+            belief_graph,
+            lane_assignment,
+            output_queue_path=output_queue,
+            generated_grid_dir=generated_grid_dir,
+            max_new_hypotheses=args.max_new_hypotheses,
+            source_root=Path(args.source_root),
+            existing_hypothesis_ids=_existing_ids_for_recovery_cli(args),
+        )
+        audit = audit_director_plan(plan, source_root=Path(args.source_root))
+        plan_path = output_dir / "recovery_queue_plan.yaml"
+        audit_path = output_dir / "recovery_audit.yaml"
+        atomic_write_yaml(plan_path, plan)
+        atomic_write_yaml(output_queue, plan.get("generated_queue", {}))
+        atomic_write_yaml(audit_path, audit)
+        runtime_added = 0
+        if args.apply:
+            if not audit.get("passed"):
+                print(f"Recovery audit failed: {audit_path}")
+                for error in audit.get("errors", []):
+                    print(f"- {error}")
+                return 1
+            runtime_added = append_queue_to_runtime(_runtime_queue_for_recovery_cli(args), plan.get("generated_queue", {}))
+        print(f"Generated recovery items: {plan.get('generated_count')}")
+        print(f"Blocked lanes: {len(plan.get('blocked_lanes', []))}")
+        print(f"Recovery audit passed: {audit.get('passed')}")
+        if args.apply:
+            print(f"Runtime queue additions: {runtime_added}")
+        print(f"Recovery plan: {plan_path}")
+        print(f"Recovery queue: {output_queue}")
+        return 0 if audit.get("passed") else 1
+    except Exception as exc:
+        print(f"Lane recovery failed: {exc}")
         return 1
 
 
@@ -2849,6 +2961,22 @@ def build_parser() -> argparse.ArgumentParser:
     lane_assign.add_argument("--blocker-audit", default=None, help="Optional blocker_audit.yaml path.")
     lane_assign.add_argument("--meta-scorecard", default=None, help="Optional process_scorecard.yaml path.")
     lane_assign.set_defaults(func=lane_router_command)
+
+    lane_recover = lane_router_subparsers.add_parser(
+        "recover",
+        help="Generate a governed lane-recovery queue when open lanes have no runnable director work.",
+    )
+    add_governance_snapshot_args(lane_recover)
+    lane_recover.add_argument("--lane-assignment", default=None, help="Optional lane_assignment.yaml path.")
+    lane_recover.add_argument("--runtime-queue", default=None, help="Runtime queue to append to when --apply is set.")
+    lane_recover.add_argument("--state", default=None, help="Lab state JSON used to skip completed hypotheses.")
+    lane_recover.add_argument("--output-queue", default=None, help="Recovery queue YAML path.")
+    lane_recover.add_argument("--generated-grid-dir", default=None, help="Directory for generated recovery grids.")
+    lane_recover.add_argument("--ops-runtime-root", default=str(LAB_OPS_RUNTIME_ROOT), help="Lab-ops runtime root.")
+    lane_recover.add_argument("--source-root", default=".", help="Root used to resolve relative source paths.")
+    lane_recover.add_argument("--max-new-hypotheses", type=int, default=30, help="Maximum recovery hypotheses.")
+    lane_recover.add_argument("--apply", action="store_true", help="Append audited recovery items to the runtime queue.")
+    lane_recover.set_defaults(func=lane_router_recover_command)
 
     validation_governance = subparsers.add_parser(
         "validation-governance",

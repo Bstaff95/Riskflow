@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,8 @@ CEO_INFRA_DELTA_MODEL = "riskflow_ceo_research_infra_delta_v0"
 CEO_UNDERSTANDING_DELTA_MODEL = "riskflow_ceo_understanding_delta_v0"
 CEO_RISK_REGISTER_MODEL = "riskflow_ceo_risk_register_v0"
 CEO_KNOWLEDGE_GRAPH_DELTA_MODEL = "riskflow_ceo_knowledge_graph_delta_v0"
+CEO_HEARTBEAT_STATUS_MODEL = "riskflow_ceo_heartbeat_status_v0"
+CEO_STOP_MODEL = "riskflow_ceo_stop_request_v0"
 
 CEO_REPORT_ROOT = Path("reports/ceo_runs")
 
@@ -43,6 +45,13 @@ TERMINAL_TRUE_BLOCKERS = {
     "director_audit_failed",
     "meta_audit_failed",
     "governed_recovery_audit_failed",
+}
+
+HEARTBEAT_CONTINUE_DECISIONS = {
+    "run_champion_challenger",
+    "patch_research_infra",
+    "continue_governed_research",
+    "broaden_hypothesis_source",
 }
 
 
@@ -95,6 +104,31 @@ def resolve_lab_run_id(options: CeoOpsOptions, ceo_run_id: str) -> str:
 
 def ceo_dir(options: CeoOpsOptions, ceo_run_id: str) -> Path:
     return options.report_root / ceo_run_id
+
+
+def ceo_stop_path(options: CeoOpsOptions, ceo_run_id: str) -> Path:
+    return ceo_dir(options, ceo_run_id) / "stop.request"
+
+
+def ceo_heartbeat_status_path(options: CeoOpsOptions, ceo_run_id: str) -> Path:
+    return ceo_dir(options, ceo_run_id) / "heartbeat_status.yaml"
+
+
+def _lab_runtime_root(options: CeoOpsOptions, lab_run_id: str) -> Path:
+    return options.lab_ops_runtime_root / lab_run_id
+
+
+def lab_stop_path(options: CeoOpsOptions, lab_run_id: str) -> Path:
+    return _lab_runtime_root(options, lab_run_id) / "stop.request"
+
+
+def _lab_state_exists(options: CeoOpsOptions, lab_run_id: str) -> bool:
+    root = _lab_runtime_root(options, lab_run_id)
+    return (root / "lab_state.json").exists() or (root / "runtime_queue.yaml").exists()
+
+
+def is_stop_requested(options: CeoOpsOptions, ceo_run_id: str, lab_run_id: str) -> bool:
+    return ceo_stop_path(options, ceo_run_id).exists() or lab_stop_path(options, lab_run_id).exists()
 
 
 def _latest_child(path: Path, pattern: str) -> Path | None:
@@ -190,6 +224,7 @@ def build_company_status(options: CeoOpsOptions, ceo_run_id: str, lab_run_id: st
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
         "objective": options.objective,
+        "stop_requested": is_stop_requested(options, ceo_run_id, lab_run_id),
         "lab_status": {
             "status": lab_status.get("status", lab_manifest.get("status", "unknown")),
             "stop_reason": stop_reason,
@@ -213,6 +248,59 @@ def build_company_status(options: CeoOpsOptions, ceo_run_id: str, lab_run_id: st
             "product_ready_candidates": research_map.get("views", {}).get("product_ready_candidates", []),
         },
         "true_blocker": true_blocker,
+        "production_effect": "none",
+    }
+
+
+def build_heartbeat_status(
+    options: CeoOpsOptions,
+    ceo_run_id: str,
+    lab_run_id: str,
+    *,
+    block_number: int,
+    company_status: dict[str, Any],
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    decision_kind = str(decision.get("decision", "unknown"))
+    stop_requested = is_stop_requested(options, ceo_run_id, lab_run_id)
+    true_blocker = bool(company_status.get("true_blocker"))
+    production_promotion_required = bool(company_status.get("governance", {}).get("product_change_allowed"))
+    continue_recommended = (
+        decision_kind in HEARTBEAT_CONTINUE_DECISIONS
+        and not stop_requested
+        and not true_blocker
+        and not production_promotion_required
+    )
+    if decision_kind == "request_fresh_data":
+        next_action = "Refresh or broaden the market data snapshot before continuing automated research."
+    elif stop_requested:
+        next_action = "Stop requested. Do not run another CEO block until the stop request is removed or replaced."
+    elif true_blocker:
+        next_action = "Resolve the true blocker before continuing automated research."
+    elif production_promotion_required:
+        next_action = "Write a promotion proposal and wait for explicit user approval before continuing production-facing work."
+    else:
+        next_action = _next_block_plan(decision)
+    return {
+        "model": CEO_HEARTBEAT_STATUS_MODEL,
+        "generated_at": utc_now_iso(),
+        "last_wake_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "last_block_number": block_number,
+        "last_decision": decision_kind,
+        "last_decision_rationale": decision.get("rationale", ""),
+        "continue_recommended": continue_recommended,
+        "stop_recommended": not continue_recommended,
+        "stop_requested": stop_requested,
+        "true_blocker": true_blocker,
+        "production_promotion_required": production_promotion_required,
+        "lab_status": company_status.get("lab_status", {}),
+        "next_recommended_action": next_action,
+        "stop_request_paths": {
+            "ceo": str(ceo_stop_path(options, ceo_run_id)),
+            "lab": str(lab_stop_path(options, lab_run_id)),
+        },
         "production_effect": "none",
     }
 
@@ -429,6 +517,7 @@ def _write_manifest(options: CeoOpsOptions, ceo_run_id: str, lab_run_id: str) ->
 def _write_artifact_set(
     options: CeoOpsOptions,
     ceo_run_id: str,
+    lab_run_id: str,
     *,
     block_number: int,
     company_status: dict[str, Any],
@@ -451,6 +540,7 @@ def _write_artifact_set(
         "decision_packet": root / f"executive_decision_packet_{block_number:04d}.md",
         "latest_decision_packet": root / "executive_decision_packet.md",
         "promotion_candidates": root / "promotion_candidates.md",
+        "heartbeat_status": root / "heartbeat_status.yaml",
     }
     atomic_write_yaml(paths["company_status"], company_status)
     atomic_write_yaml(paths["product_delta"], product_delta)
@@ -471,6 +561,17 @@ def _write_artifact_set(
     atomic_write_text(paths["decision_packet"], packet)
     atomic_write_text(paths["latest_decision_packet"], packet)
     atomic_write_text(paths["promotion_candidates"], render_promotion_candidates(product_delta))
+    atomic_write_yaml(
+        paths["heartbeat_status"],
+        build_heartbeat_status(
+            options,
+            ceo_run_id,
+            lab_run_id,
+            block_number=block_number,
+            company_status=company_status,
+            decision=decision,
+        ),
+    )
     return paths
 
 
@@ -580,6 +681,8 @@ def _next_block_plan(decision: dict[str, Any]) -> str:
         return "Import or curate fresh OHLCV data before treating same-sample evidence as validation."
     if kind == "stop_true_blocker":
         return "Stop autonomous work and resolve the true blocker before continuing."
+    if kind == "stop_requested":
+        return "Stop autonomous work until the CEO and lab stop requests are intentionally cleared."
     return "Broaden the hypothesis source through Obsidian, visual review, web research, or agent critique."
 
 
@@ -657,9 +760,12 @@ def run_ceo_run_block(options: CeoOpsOptions) -> dict[str, Any]:
         raise ValueError("ceo run-block requires --apply")
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
-    _write_manifest(options, ceo_run_id, lab_run_id)
-    lab_result = run_lab_ops_run(_lab_ops_options(options, lab_run_id))
-    review = run_ceo_review(options, ceo_run_id=ceo_run_id, lab_run_id=lab_run_id)
+    if is_stop_requested(options, ceo_run_id, lab_run_id):
+        raise RuntimeError("ceo stop requested; remove stop.request files before running another block")
+    block_options = replace(options, resume=True) if _lab_state_exists(options, lab_run_id) and not options.resume else options
+    _write_manifest(block_options, ceo_run_id, lab_run_id)
+    lab_result = run_lab_ops_run(_lab_ops_options(block_options, lab_run_id))
+    review = run_ceo_review(block_options, ceo_run_id=ceo_run_id, lab_run_id=lab_run_id)
     return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "lab_result": lab_result, "review": review}
 
 
@@ -684,6 +790,7 @@ def run_ceo_review(
     paths = _write_artifact_set(
         options,
         ceo_run_id,
+        lab_run_id,
         block_number=block_number,
         company_status=company_status,
         product_delta=product_delta,
@@ -744,6 +851,88 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
     report_path = root / "final_ceo_report.md"
     atomic_write_text(report_path, "\n".join(lines).rstrip() + "\n")
     return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "paths": {"report": report_path, **review["paths"]}}
+
+
+def run_ceo_heartbeat_status(options: CeoOpsOptions) -> dict[str, Any]:
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    path = ceo_heartbeat_status_path(options, ceo_run_id)
+    if path.exists():
+        payload = _load_yaml_if_exists(path)
+        return {
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "status": payload,
+            "paths": {"heartbeat_status": path},
+            "from_file": True,
+        }
+    company_status = build_company_status(options, ceo_run_id, lab_run_id)
+    governance = _load_latest_governance(options, lab_run_id)
+    product_delta = build_product_delta_scoreboard(governance)
+    infra_delta = build_research_infra_delta(company_status, governance)
+    decision = choose_executive_decision(company_status, product_delta, infra_delta)
+    block_number = max(0, _next_block_number(options, ceo_run_id) - 1)
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": build_heartbeat_status(
+            options,
+            ceo_run_id,
+            lab_run_id,
+            block_number=block_number,
+            company_status=company_status,
+            decision=decision,
+        ),
+        "paths": {"heartbeat_status": path},
+        "from_file": False,
+    }
+
+
+def run_ceo_stop(options: CeoOpsOptions, *, reason: str) -> dict[str, Any]:
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    cleaned_reason = reason.strip() or "user_requested"
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    lab_root = _lab_runtime_root(options, lab_run_id)
+    lab_root.mkdir(parents=True, exist_ok=True)
+    ceo_stop = ceo_stop_path(options, ceo_run_id)
+    lab_stop = lab_stop_path(options, lab_run_id)
+    atomic_write_text(ceo_stop, cleaned_reason + "\n")
+    atomic_write_text(lab_stop, cleaned_reason + "\n")
+    stop_payload = {
+        "model": CEO_STOP_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "reason": cleaned_reason,
+        "stop_request_paths": {"ceo": str(ceo_stop), "lab": str(lab_stop)},
+        "production_effect": "none",
+    }
+    stop_status = root / "stop_status.yaml"
+    atomic_write_yaml(stop_status, stop_payload)
+    company_status = build_company_status(options, ceo_run_id, lab_run_id)
+    heartbeat = build_heartbeat_status(
+        options,
+        ceo_run_id,
+        lab_run_id,
+        block_number=max(0, _next_block_number(options, ceo_run_id) - 1),
+        company_status=company_status,
+        decision={
+            "decision": "stop_requested",
+            "rationale": f"CEO stop requested: {cleaned_reason}",
+            "production_effect": "none",
+        },
+    )
+    heartbeat_path = ceo_heartbeat_status_path(options, ceo_run_id)
+    atomic_write_yaml(heartbeat_path, heartbeat)
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "reason": cleaned_reason,
+        "paths": {"ceo_stop": ceo_stop, "lab_stop": lab_stop, "stop_status": stop_status, "heartbeat_status": heartbeat_path},
+        "heartbeat_status": heartbeat,
+    }
 
 
 def run_ceo_lab_status_text(options: CeoOpsOptions) -> str:

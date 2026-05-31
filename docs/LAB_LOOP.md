@@ -400,6 +400,8 @@ than launch one long script-governed run.
 PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo plan --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply
+PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason user_requested
 PYTHONPATH=src python3 -m riskflow ceo review --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo report --run-id <run_id>
 ```
@@ -410,6 +412,18 @@ research-infra delta, understanding delta, chart-facing product delta, risk
 register, knowledge-graph delta, and the executive decision packet. A block is
 not considered useful merely because loops ran; it must improve one of those
 buckets or stop with a clear reason.
+
+For overnight supervision, use a thread heartbeat automation instead of a giant
+Python loop. A heartbeat should wake Codex roughly every 15 minutes, inspect
+`heartbeat_status.yaml` and the latest decision packet, decide whether the next
+bounded block is justified, then run at most one additional `ceo run-block`
+with the same `--run-id`. The CEO layer writes
+`reports/ceo_runs/<run_id>/heartbeat_status.yaml` after reviews and stop
+requests. `ceo heartbeat-status` is read-only; it must not create a new
+decision packet. `ceo stop` writes both
+`reports/ceo_runs/<run_id>/stop.request` and
+`research/lab_loop/autonomous_runs/<lab_run_id>/stop.request`, so a later
+heartbeat can see the user-requested stop before launching more work.
 
 CEO mode may build sidecar and shadow product candidates, but product-facing
 changes still require explicit promotion approval. It must not silently change

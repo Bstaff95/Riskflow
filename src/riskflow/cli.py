@@ -79,6 +79,7 @@ from .lab_ops import (
 )
 from .ceo_ops import (
     CEO_REPORT_ROOT,
+    run_ceo_heartbeat_status,
     CeoOpsOptions,
     run_ceo_lab_status_text,
     run_ceo_plan,
@@ -86,6 +87,7 @@ from .ceo_ops import (
     run_ceo_review,
     run_ceo_run_block,
     run_ceo_status,
+    run_ceo_stop,
 )
 from .meta_research import (
     DEFAULT_META_REPORT_ROOT,
@@ -1802,7 +1804,7 @@ def ceo_command(args: argparse.Namespace) -> int:
     action = args.ceo_action
     options = _ceo_options_from_args(args)
     try:
-        if action in {"review", "report"} and not args.run_id:
+        if action in {"review", "report", "heartbeat-status", "stop"} and not args.run_id:
             print(f"ceo {action} requires --run-id")
             return 1
         if action == "status":
@@ -1837,6 +1839,25 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO decision: {review['decision']['decision']}")
             print(f"Decision packet: {review['paths']['latest_decision_packet']}")
             return 0 if lab_result["status"] in {"completed", "stopped"} else 1
+        if action == "heartbeat-status":
+            result = run_ceo_heartbeat_status(options)
+            status = result["status"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Heartbeat status: {result['paths']['heartbeat_status']}")
+            print(f"Last block: {status.get('last_block_number')}")
+            print(f"Last decision: {status.get('last_decision')}")
+            print(f"Continue recommended: {status.get('continue_recommended')}")
+            print(f"Stop requested: {status.get('stop_requested')}")
+            print(f"True blocker: {status.get('true_blocker')}")
+            print(f"Next action: {status.get('next_recommended_action')}")
+            return 0
+        if action == "stop":
+            result = run_ceo_stop(options, reason=args.reason)
+            print(f"CEO stop requested: {result['paths']['ceo_stop']}")
+            print(f"Lab stop requested: {result['paths']['lab_stop']}")
+            print(f"Reason: {result['reason']}")
+            return 0
         if action == "review":
             result = run_ceo_review(options)
             print(f"CEO decision: {result['decision']['decision']}")
@@ -3150,6 +3171,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_ceo_common(ceo_run_block)
     ceo_run_block.add_argument("--apply", action="store_true", help="Allow run-scoped lab queue/state mutations.")
     ceo_run_block.set_defaults(func=ceo_command)
+
+    ceo_heartbeat_status = ceo_subparsers.add_parser(
+        "heartbeat-status",
+        help="Read the latest CEO heartbeat status without writing a new decision packet.",
+    )
+    add_ceo_common(ceo_heartbeat_status)
+    ceo_heartbeat_status.set_defaults(func=ceo_command)
+
+    ceo_stop = ceo_subparsers.add_parser("stop", help="Request a graceful stop for a CEO-supervised run.")
+    add_ceo_common(ceo_stop)
+    ceo_stop.add_argument("--reason", default="user_requested", help="Stop reason to write into stop.request files.")
+    ceo_stop.set_defaults(func=ceo_command)
 
     ceo_review = ceo_subparsers.add_parser("review", help="Write a CEO decision packet from latest lab artifacts.")
     add_ceo_common(ceo_review)

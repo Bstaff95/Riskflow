@@ -203,6 +203,7 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `lab_loop.py`: autonomous research-loop runner that selects queued hypotheses, executes grammar-search grids, writes resumable state, records per-loop reports, updates a runtime queue, and generates refinement children without changing production formulas, scores, states, or TradingView defaults.
 - `meta_research.py`: deterministic process-quality layer above the lab director. It scores whether recent research actually learned, diagnoses process failures such as duplicate research or same-sample overfit, recommends one next intervention, audits that intervention, and writes generated reports without changing production formulas, scores, states, rankings, or TradingView defaults.
 - `lab_ops.py`: run-scoped autonomous lab operations wrapper. It plans, runs, resumes, stops, and reports long research runs with manifests, journals, checkpoints, budgets, process scorecards, and explicit stop reasons while keeping mutable state under generated runtime paths.
+- `blocker_audit.py`, `research_lane_router.py`, `validation_governance.py`, and `research_map.py`: governed research-lab controls above `lab_ops`. They separate failed bullish setups from valid warning/blocker claims, route beliefs into product-relevant research lanes, gate validation/product translation, and maintain a durable map of what the lab knows, what is duplicated, and what remains open. They are governance sidecars only and must not change production indicator behavior.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
@@ -226,6 +227,7 @@ python3 -m riskflow grammar-search --config configs/meme_universe.yaml --timefra
 PYTHONPATH=src python3 -m riskflow lab-loop run --max-loops 100 --max-hours 4 --strict-referee --resume
 PYTHONPATH=src python3 -m riskflow lab-meta plan --objective bullish-positive
 PYTHONPATH=src python3 -m riskflow lab-ops plan --objective bullish-positive --max-epochs 200 --epoch-size 5
+PYTHONPATH=src python3 -m riskflow lab-ops run --objective bullish-positive --governed --apply
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow score-research --config configs/meme_universe.yaml --timeframe 1d

@@ -1,5 +1,5 @@
 model: riskflow_lab_evidence_ledger_v0
-updated_at: '2026-05-30T13:21:51+00:00'
+updated_at: '2026-05-31T16:17:32+00:00'
 concepts:
   compression_reclaim_threshold_stress_lag0_epoch29_validation_lag0_l0142:
     track: warning
@@ -12453,3 +12453,688 @@ concepts:
     latest_epoch: epoch_0291
     latest_loop: 1527
     updated_at: '2026-05-30T13:21:48+00:00'
+  obsidian_accepted_viscosity_flush_reclaim:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: refine
+    last_supervisor_reason: Useful/watchlist evidence exists without strict survivors.
+    latest_epoch: epoch_0001
+    latest_loop: 3
+    claim_type: bullish_entry
+    setup_class: post_acceptance_shakeout_reclaim
+    path_gate: false
+    bullish_contract: false
+    failure_mode: strict survivor evidence points negative, so this is a blocker not
+      a bullish setup
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:49+00:00'
+  obsidian_failed_first_break_second_base_reclaim:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: refine
+    last_supervisor_reason: Useful/watchlist evidence exists without strict survivors.
+    latest_epoch: epoch_0001
+    latest_loop: 3
+    claim_type: bullish_entry
+    setup_class: post_failed_break_reset_reclaim
+    path_gate: true
+    bullish_contract: false
+    failure_mode: strict survivor evidence points negative, so this is a blocker not
+      a bullish setup
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:49+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: refine
+    last_supervisor_reason: Useful/watchlist evidence exists without strict survivors.
+    latest_epoch: epoch_0001
+    latest_loop: 3
+    claim_type: bullish_entry
+    setup_class: acceptance_confirmation_gate
+    path_gate: true
+    bullish_contract: false
+    failure_mode: strict survivor evidence points negative, so this is a blocker not
+      a bullish setup
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:49+00:00'
+  obsidian_failed_first_break_second_base_reclaim_supervisor_reseed_g001_l0002_r0003_2:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0002
+    latest_loop: 5
+    claim_type: ''
+    setup_class: ''
+    path_gate: null
+    bullish_contract: null
+    failure_mode: ''
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:02:57+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed_supervisor_reseed_g001_l0003_r0003_1:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0002
+    latest_loop: 5
+    claim_type: ''
+    setup_class: ''
+    path_gate: null
+    bullish_contract: null
+    failure_mode: ''
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:02:57+00:00'
+  obsidian_failed_first_break_second_base_reclaim_supervisor_reseed_g001_l0002_r0005_2:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0003
+    latest_loop: 7
+    claim_type: ''
+    setup_class: ''
+    path_gate: null
+    bullish_contract: null
+    failure_mode: ''
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:04:04+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed_supervisor_reseed_g001_l0003_r0005_1:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0813769894955332
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0003
+    latest_loop: 7
+    claim_type: ''
+    setup_class: ''
+    path_gate: null
+    bullish_contract: null
+    failure_mode: ''
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:04:04+00:00'
+  targeted_regime_confirmed_reclaim_entry_loose_slope_control:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0342396383559762
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0001
+    latest_loop: 5
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:47:10+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 24
+    best_median_relative_return: -0.0971381413185423
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0001
+    latest_loop: 5
+    claim_type: bullish_entry
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:47:10+00:00'
+  targeted_regime_confirmed_reclaim_entry_benchmark_positive:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 23
+    best_median_relative_return: 0.0305824267705554
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0002
+    latest_loop: 10
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: archive
+    asymmetry_score: 1.991411
+    path_gate: false
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 35
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T16:12:30+00:00'
+  targeted_regime_confirmed_reclaim_entry_viscosity:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 17
+    best_median_relative_return: 0.0305824267705554
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0006
+    latest_loop: 30
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: asymmetric_candidate
+    asymmetry_score: 2.344172
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 55
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:57:26+00:00'
+  targeted_regime_confirmed_reclaim_entry_warning_ignore_control:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 17
+    best_median_relative_return: -0.0627573183955764
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0007
+    latest_loop: 35
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 60
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:58:03+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero_benchmark_positive:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 22
+    best_median_relative_return: -0.0515097952194782
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0002
+    latest_loop: 10
+    claim_type: bullish_entry
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:49:34+00:00'
+  targeted_deep_reset_regime_reclaim_entry_compression_30:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 22
+    best_median_relative_return: 0.0222101778188851
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 5 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0001
+    latest_loop: 5
+    claim_type: control
+    setup_class: deep_reset_regime_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 4.384066
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 5
+    suspended_until_loop: 30
+    retirement_reason: 5 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T16:11:46+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_2:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 17
+    best_median_relative_return: 0.0290175027611443
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0010
+    latest_loop: 50
+    claim_type: bullish_permission
+    setup_class: deep_reset_regime_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 3.970767
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 75
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:59:56+00:00'
+  targeted_regime_confirmed_reclaim_entry_max_signal_05:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 17
+    best_median_relative_return: 0.0305824267705554
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 3 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0009
+    latest_loop: 45
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 1.991411
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 3
+    suspended_until_loop: 70
+    retirement_reason: 3 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:59:18+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero_warning_ignore_control:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 3
+    best_median_relative_return: 0.0028084424212618
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 3 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0009
+    latest_loop: 45
+    claim_type: control
+    setup_class: regime_confirmed_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 2.458439
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 3
+    suspended_until_loop: 70
+    retirement_reason: 3 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:59:18+00:00'
+  targeted_parent_absent_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 8
+    best_median_relative_return: -0.1975044059769046
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0003
+    latest_loop: 15
+    claim_type: bullish_permission
+    setup_class: parent_absent_failed_weakness_permission
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:51:28+00:00'
+  targeted_parent_active_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 3
+    best_median_relative_return: 0.2648367617458298
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0003
+    latest_loop: 15
+    claim_type: warning_blocker
+    setup_class: parent_active_failed_weakness_blocker
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:51:28+00:00'
+  targeted_parent_active_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 1
+    best_median_relative_return: 0.0081490905518557
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0003
+    latest_loop: 15
+    claim_type: warning_blocker
+    setup_class: parent_active_failed_weakness_blocker
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:51:28+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_1:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 16
+    best_median_relative_return: -0.0081957047973832
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 3 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0010
+    latest_loop: 50
+    claim_type: control
+    setup_class: deep_reset_regime_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 1.87492
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 3
+    suspended_until_loop: 75
+    retirement_reason: 3 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:59:56+00:00'
+  targeted_parent_absent_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 3
+    best_median_relative_return: 0.1112397196072818
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0005
+    latest_loop: 25
+    claim_type: control
+    setup_class: parent_absent_failed_weakness_permission
+    contract_tier: path_watchlist
+    asymmetry_score: 3.046593
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 50
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T16:14:28+00:00'
+  targeted_fresh_leader_raw_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 22
+    best_median_relative_return: -0.0844318823765859
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0004
+    latest_loop: 20
+    claim_type: control
+    setup_class: fresh_leader_followup_filter
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:53:58+00:00'
+  targeted_parent_ignore_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 8
+    best_median_relative_return: -0.1975044059769046
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0004
+    latest_loop: 20
+    claim_type: control
+    setup_class: parent_ignore_failed_weakness_control
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:53:58+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_15:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 18
+    best_median_relative_return: 0.0008713278366569
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 3 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0008
+    latest_loop: 40
+    claim_type: control
+    setup_class: deep_reset_regime_reclaim_entry
+    contract_tier: path_watchlist
+    asymmetry_score: 1.69165
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 3
+    suspended_until_loop: 65
+    retirement_reason: 3 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T13:58:41+00:00'
+  targeted_fresh_leader_warning_absent_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 22
+    best_median_relative_return: -0.0898602936895145
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 5 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0014
+    latest_loop: 70
+    claim_type: bullish_permission
+    setup_class: fresh_leader_followup_filter
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 5
+    suspended_until_loop: 95
+    retirement_reason: 5 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T14:02:27+00:00'
+  targeted_parent_ignore_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 3
+    best_median_relative_return: 0.0465876362803988
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 4 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0012
+    latest_loop: 60
+    claim_type: control
+    setup_class: parent_ignore_failed_weakness_control
+    contract_tier: path_watchlist
+    asymmetry_score: 2.466064
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 4
+    suspended_until_loop: 85
+    retirement_reason: 4 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T14:01:11+00:00'
+  targeted_fresh_leader_warning_active_viscosity_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 30
+    best_median_relative_return: -0.0405531154700311
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0005
+    latest_loop: 25
+    claim_type: warning_blocker
+    setup_class: fresh_leader_followup_filter
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:56:48+00:00'
+  targeted_fresh_leader_warning_active_zero_reclaim:
+    track: bullish_setup
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 22
+    best_median_relative_return: -0.0844318823765859
+    last_supervisor_action: archive
+    last_supervisor_reason: No useful strict or watchlist evidence survived this epoch.
+    latest_epoch: epoch_0005
+    latest_loop: 25
+    claim_type: warning_blocker
+    setup_class: fresh_leader_followup_filter
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: ''
+    attempts_without_bullish_contract: 0
+    suspended_until_loop: ''
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:56:48+00:00'
+  targeted_fresh_leader_raw_viscosity_reclaim:
+    track: bullish_setup
+    evidence_stage: L2_discovered
+    strict_survivors: 0
+    event_clusters: 3
+    best_median_relative_return: -0.0213594973257118
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 3 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0012
+    latest_loop: 60
+    claim_type: control
+    setup_class: fresh_leader_followup_filter
+    contract_tier: path_watchlist
+    asymmetry_score: 2.043899
+    path_gate: true
+    bullish_contract: false
+    failure_mode: positive rows exist but did not pass strict referee
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 3
+    suspended_until_loop: 85
+    retirement_reason: 3 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T14:01:11+00:00'
+  targeted_fresh_leader_warning_absent_viscosity_reclaim:
+    track: warning
+    evidence_stage: archived
+    strict_survivors: 0
+    event_clusters: 26
+    best_median_relative_return: 0.0305824267705554
+    last_supervisor_action: cool_weak_family
+    last_supervisor_reason: 27 bullish attempts without a bullish-positive contract
+      pass
+    latest_epoch: epoch_0010
+    latest_loop: 46
+    claim_type: bullish_permission
+    setup_class: fresh_leader_followup_filter
+    contract_tier: archive
+    asymmetry_score: 0.0
+    path_gate: false
+    bullish_contract: false
+    failure_mode: no useful positive-direction rows
+    next_allowed_action: needs_new_bullish_family
+    attempts_without_bullish_contract: 27
+    suspended_until_loop: 71
+    retirement_reason: 27 bullish attempts without a bullish-positive contract pass
+    updated_at: '2026-05-31T16:17:31+00:00'

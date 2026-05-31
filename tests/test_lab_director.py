@@ -10,7 +10,9 @@ from riskflow.lab_director import (
     audit_director_plan,
     build_belief_graph,
     build_evidence_mart,
+    design_experiments,
     run_director_plan_next,
+    _safe_slug_with_hash,
 )
 from riskflow.lab_loop import validate_lab_queue
 
@@ -183,6 +185,47 @@ def test_director_plan_generates_valid_decomposition_queue(tmp_path: Path) -> No
     assert "warning absence" in questions
 
 
+def test_director_skips_seen_ids_and_emits_deeper_controls(tmp_path: Path) -> None:
+    options = _write_director_fixture(tmp_path)
+    graph = build_belief_graph(build_evidence_mart(options))
+    seen = {
+        "director_deep_reset_regime_reclaim_entry_1d_ablate_reset_depth",
+        "director_deep_reset_regime_reclaim_entry_1d_ablate_reclaim_timing",
+        "director_deep_reset_regime_reclaim_entry_1d_compression_dependency",
+        "director_deep_reset_regime_reclaim_entry_1d_warning_filter_dependency",
+        "director_deep_reset_regime_reclaim_entry_1d_parent_context_dependency",
+        "director_deep_reset_regime_reclaim_entry_1d_validation_lag0",
+        "director_deep_reset_regime_reclaim_entry_1d_validation_lag2",
+        "director_deep_reset_regime_reclaim_entry_1d_validation_cooldown60",
+        "director_deep_reset_regime_reclaim_entry_1d_direction_flip_counterexample",
+        "director_deep_reset_regime_reclaim_entry_1d_timeframe_transfer",
+    }
+
+    plan = design_experiments(
+        graph,
+        output_queue_path=tmp_path / "research" / "lab_loop" / "director_candidate_queue.yaml",
+        generated_grid_dir=tmp_path / "research" / "lab_loop" / "generated_grids" / "director_seen",
+        max_new_hypotheses=6,
+        source_root=tmp_path,
+        existing_hypothesis_ids=seen,
+    )
+
+    ids = {item["id"] for item in plan["generated_queue"]["queue"]}
+    assert "director_deep_reset_regime_reclaim_entry_1d_validation_lag1_frozen" in ids
+    assert "director_deep_reset_regime_reclaim_entry_1d_validation_cooldown30" in ids
+    assert "director_deep_reset_regime_reclaim_entry_1d_timeframe_transfer_1h" in ids
+    assert ids.isdisjoint(seen)
+
+
+def test_director_long_ids_keep_unique_hash_suffixes() -> None:
+    first = _safe_slug_with_hash("director_" + "very_long_claim_" * 12 + "validation_lag0", max_length=96)
+    second = _safe_slug_with_hash("director_" + "very_long_claim_" * 12 + "validation_lag2", max_length=96)
+
+    assert len(first) <= 96
+    assert len(second) <= 96
+    assert first != second
+
+
 def test_director_apply_can_append_audited_queue_to_runtime(tmp_path: Path) -> None:
     options = _write_director_fixture(tmp_path)
     options = LabDirectorOptions(**{**options.__dict__, "apply": True, "apply_to_runtime": True})
@@ -206,4 +249,3 @@ def test_director_audit_rejects_production_effects(tmp_path: Path) -> None:
 
     assert audit["passed"] is False
     assert any("production_effect" in error for error in audit["errors"])
-

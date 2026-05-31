@@ -360,9 +360,39 @@ PYTHONPATH=src python3 -m riskflow lab-ops run \
   --apply
 ```
 
+For enterprise-style autonomous runs, use governed mode:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-ops run \
+  --objective bullish-positive \
+  --max-epochs 200 \
+  --epoch-size 5 \
+  --director-checkpoint-epochs 2 \
+  --strict-referee \
+  --governed \
+  --apply
+```
+
+Governed mode adds deterministic checkpoint artifacts for blocker audit,
+research-lane assignment, validation governance, and a run-scoped research map.
+It treats `request_fresh_data`, visual-review needs, and saturation as
+lane-specific unless every valid lane is blocked or no runnable inventory
+remains. It still does not change production formulas, states, scores,
+rankings, Pine behavior, or TradingView defaults.
+
 Generated ops artifacts live under `reports/lab_ops/` and run-scoped mutable
 state lives under `research/lab_loop/autonomous_runs/`. These are generated
 research artifacts, not production configuration.
+
+Standalone governance tools are available for auditing existing director
+artifacts:
+
+```bash
+PYTHONPATH=src python3 -m riskflow blocker-audit inspect
+PYTHONPATH=src python3 -m riskflow lane-router assign
+PYTHONPATH=src python3 -m riskflow validation-governance review
+PYTHONPATH=src python3 -m riskflow research-map update
+```
 
 ## Agent Checkpoints
 

@@ -15,6 +15,7 @@ from .lab_director import (
     LabDirectorOptions,
     run_director_plan_next,
 )
+from .blocker_audit import build_blocker_audit, write_blocker_audit
 from .lab_loop import (
     BULLISH_POSITIVE_OBJECTIVE,
     DEFAULT_CONCEPT_SCOREBOARD_PATH,
@@ -37,6 +38,9 @@ from .lab_supervisor import (
     run_supervised_epochs,
 )
 from .meta_research import DEFAULT_META_REPORT_ROOT, LabMetaOptions, run_meta_from_director_result
+from .research_lane_router import build_lane_assignment, has_open_research_lanes, write_lane_assignment
+from .research_map import build_research_map
+from .validation_governance import build_validation_governance, write_validation_governance
 
 
 LAB_OPS_MANIFEST_MODEL = "riskflow_lab_ops_run_manifest_v0"
@@ -70,6 +74,7 @@ class LabOpsOptions:
     apply: bool = False
     resume: bool = False
     dry_run: bool = False
+    governed: bool = False
     source_root: Path = Path(".")
     report_root: Path = LAB_OPS_REPORT_ROOT
     runtime_root: Path = LAB_OPS_RUNTIME_ROOT
@@ -154,6 +159,7 @@ def build_run_manifest(options: LabOpsOptions, run_id: str, *, status: str = "pl
         "timeframes": list(options.timeframes),
         "data_fingerprint": fingerprint,
         "apply_enabled": options.apply,
+        "governed_enabled": options.governed,
         "commit_policy": "never_auto_commit",
         "status": status,
     }
@@ -197,6 +203,16 @@ def _artifact_health(root: Path) -> dict[str, Any]:
         "total_bytes": total_bytes,
         "total_mb": round(total_bytes / 1_000_000, 3),
     }
+
+
+def has_runnable_inventory(state: dict[str, Any]) -> bool:
+    inventory = state.get("runnable_inventory", {})
+    if not isinstance(inventory, dict):
+        return False
+    try:
+        return int(inventory.get("runnable", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _write_budget_status(options: LabOpsOptions, run_id: str, *, completed_epochs: int, started_at: float) -> dict[str, Any]:
@@ -326,7 +342,9 @@ def _write_checkpoint(
     state: dict[str, Any],
     director_result: dict[str, Any],
     meta_result: dict[str, Any],
+    governance_result: dict[str, Any] | None = None,
 ) -> Path:
+    governance_result = governance_result or {}
     checkpoint = {
         "model": LAB_OPS_CHECKPOINT_MODEL,
         "generated_at": utc_now_iso(),
@@ -345,10 +363,135 @@ def _write_checkpoint(
             "audit_passed": (meta_result.get("audit") or {}).get("passed"),
             "report": str(meta_result.get("paths", {}).get("report", "")),
         },
+        "governance": {
+            "enabled": bool(governance_result),
+            "open_lanes": governance_result.get("lane_assignment", {}).get("open_lanes", []),
+            "all_lanes_blocked": governance_result.get("lane_assignment", {}).get("all_lanes_blocked"),
+            "validation_decision_counts": governance_result.get("validation_governance", {}).get("decision_counts", {}),
+            "executive_checkpoint": str(governance_result.get("paths", {}).get("executive_checkpoint", "")),
+        },
     }
     path = run_dir(options, run_id) / "checkpoints" / f"checkpoint_{block_number:04d}.yaml"
     atomic_write_yaml(path, checkpoint)
     return path
+
+
+def _write_executive_checkpoint(
+    options: LabOpsOptions,
+    run_id: str,
+    *,
+    block_number: int,
+    meta_result: dict[str, Any],
+    governance_result: dict[str, Any],
+) -> Path:
+    lane_assignment = governance_result.get("lane_assignment", {})
+    validation = governance_result.get("validation_governance", {})
+    blocker_audit = governance_result.get("blocker_audit", {})
+    research_map = governance_result.get("research_map", {})
+    lines = [
+        "# Riskflow Governed Lab Checkpoint",
+        "",
+        f"Run: {run_id}",
+        f"Block: {block_number}",
+        f"Generated: {utc_now_iso()}",
+        f"Process score: {meta_result.get('scorecard', {}).get('overall_process_score')}/100",
+        f"Intervention: {(meta_result.get('intervention') or {}).get('intervention_type')}",
+        "",
+        "## Research Lanes",
+        "",
+        f"- Open lanes: {', '.join(lane_assignment.get('open_lanes', [])) or 'none'}",
+        f"- All lanes blocked: {lane_assignment.get('all_lanes_blocked')}",
+        f"- Lane counts: {lane_assignment.get('lane_counts', {})}",
+        "",
+        "## Blocker Audit",
+        "",
+        f"- Audited candidates: {blocker_audit.get('audited_count', 0)}",
+        f"- Decisions: {blocker_audit.get('decision_counts', {})}",
+        "",
+        "## Validation Governance",
+        "",
+        f"- Gate counts: {validation.get('gate_counts', {})}",
+        f"- Decision counts: {validation.get('decision_counts', {})}",
+        f"- Product change allowed: {validation.get('product_change_allowed', False)}",
+        "",
+        "## Research Map",
+        "",
+        f"- Nodes: {len(research_map.get('nodes', []) or [])}",
+        f"- Edges: {len(research_map.get('edges', []) or [])}",
+        f"- Validation debt: {research_map.get('views', {}).get('validation_debt', [])[:10]}",
+    ]
+    path = run_dir(options, run_id) / "checkpoints" / f"executive_checkpoint_{block_number:04d}.md"
+    atomic_write_text(path, "\n".join(lines).rstrip() + "\n")
+    return path
+
+
+def _run_governance_checkpoint(
+    options: LabOpsOptions,
+    run_id: str,
+    *,
+    block_number: int,
+    director_result: dict[str, Any],
+    meta_result: dict[str, Any],
+) -> dict[str, Any]:
+    output_dir = run_dir(options, run_id) / "governance" / f"block_{block_number:04d}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mart = director_result["mart"]
+    belief_graph = director_result["belief_graph"]
+    scorecard = meta_result.get("scorecard", {})
+    blocker_audit = build_blocker_audit(mart, belief_graph)
+    blocker_path = write_blocker_audit(blocker_audit, output_dir)
+    lane_assignment = build_lane_assignment(belief_graph, blocker_audit=blocker_audit, meta_scorecard=scorecard)
+    lane_path = write_lane_assignment(lane_assignment, output_dir)
+    validation_governance = build_validation_governance(
+        belief_graph,
+        lane_assignment=lane_assignment,
+        blocker_audit=blocker_audit,
+    )
+    validation_path = write_validation_governance(validation_governance, output_dir)
+    research_map = build_research_map(
+        mart,
+        belief_graph,
+        lane_assignment=lane_assignment,
+        blocker_audit=blocker_audit,
+        validation_governance=validation_governance,
+    )
+    research_map_path = output_dir / "research_map.yaml"
+    atomic_write_yaml(research_map_path, research_map)
+    result = {
+        "blocker_audit": blocker_audit,
+        "lane_assignment": lane_assignment,
+        "validation_governance": validation_governance,
+        "research_map": research_map,
+        "paths": {
+            "blocker_audit": blocker_path,
+            "lane_assignment": lane_path,
+            "validation_governance": validation_path,
+            "research_map": research_map_path,
+        },
+    }
+    executive_path = _write_executive_checkpoint(
+        options,
+        run_id,
+        block_number=block_number,
+        meta_result=meta_result,
+        governance_result=result,
+    )
+    result["paths"]["executive_checkpoint"] = executive_path
+    return result
+
+
+def _governed_intervention_can_continue(
+    intervention_type: str,
+    *,
+    state: dict[str, Any],
+    governance_result: dict[str, Any],
+) -> bool:
+    if has_runnable_inventory(state):
+        return True
+    lane_assignment = governance_result.get("lane_assignment", {})
+    if intervention_type in {"request_fresh_data", "request_visual_review", "stop_research_saturated"}:
+        return has_open_research_lanes(lane_assignment)
+    return False
 
 
 def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
@@ -375,6 +518,7 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
     started_at = time.monotonic()
     last_state: dict[str, Any] = {}
     last_meta: dict[str, Any] = {}
+    last_governance: dict[str, Any] = {}
 
     try:
         with _OpsLock(paths["lock"]):
@@ -436,6 +580,25 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                         "intervention": (last_meta.get("intervention") or {}).get("intervention_type"),
                     },
                 )
+                if options.governed:
+                    last_governance = _run_governance_checkpoint(
+                        options,
+                        run_id,
+                        block_number=completed_blocks,
+                        director_result=director_result,
+                        meta_result=last_meta,
+                    )
+                    _append_journal(
+                        options,
+                        run_id,
+                        "governance_completed",
+                        {
+                            "block": completed_blocks,
+                            "open_lanes": last_governance.get("lane_assignment", {}).get("open_lanes", []),
+                            "all_lanes_blocked": last_governance.get("lane_assignment", {}).get("all_lanes_blocked"),
+                            "executive_checkpoint": str(last_governance.get("paths", {}).get("executive_checkpoint", "")),
+                        },
+                    )
                 checkpoint_path = _write_checkpoint(
                     options,
                     run_id,
@@ -443,6 +606,7 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                     state=last_state,
                     director_result=director_result,
                     meta_result=last_meta,
+                    governance_result=last_governance,
                 )
                 artifact_health = _artifact_health(run_dir(options, run_id))
                 _write_status(
@@ -456,6 +620,11 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                         "last_completed_loop": last_state.get("last_completed_loop"),
                         "last_checkpoint": str(checkpoint_path),
                         "artifact_health": artifact_health,
+                        "governance": {
+                            "enabled": options.governed,
+                            "open_lanes": last_governance.get("lane_assignment", {}).get("open_lanes", []),
+                            "all_lanes_blocked": last_governance.get("lane_assignment", {}).get("all_lanes_blocked"),
+                        },
                     },
                 )
                 if artifact_health["total_mb"] > options.max_generated_artifact_mb:
@@ -463,9 +632,21 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                     stop_reason = "artifact_hygiene_required"
                     break
                 if not director_result.get("audit", {}).get("passed"):
-                    terminal_status = "failed"
-                    stop_reason = "director_audit_failed"
-                    break
+                    _append_journal(
+                        options,
+                        run_id,
+                        "audit_failed",
+                        {
+                            "block": completed_blocks,
+                            "audit": "director",
+                            "errors": director_result.get("audit", {}).get("errors", []),
+                            "continued_existing_queue": has_runnable_inventory(last_state),
+                        },
+                    )
+                    if not has_runnable_inventory(last_state):
+                        terminal_status = "failed"
+                        stop_reason = "director_audit_failed"
+                        break
                 if not (last_meta.get("audit") or {}).get("passed"):
                     terminal_status = "failed"
                     stop_reason = "meta_audit_failed"
@@ -474,9 +655,28 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
                 if intervention_type in {
                     "request_visual_review",
                     "request_fresh_data",
-                    "process_policy_change",
                     "stop_research_saturated",
                 }:
+                    if options.governed and _governed_intervention_can_continue(
+                        str(intervention_type),
+                        state=last_state,
+                        governance_result=last_governance,
+                    ):
+                        _append_journal(
+                            options,
+                            run_id,
+                            "lane_specific_intervention_continued",
+                            {
+                                "block": completed_blocks,
+                                "intervention": intervention_type,
+                                "open_lanes": last_governance.get("lane_assignment", {}).get("open_lanes", []),
+                            },
+                        )
+                    else:
+                        terminal_status = "stopped"
+                        stop_reason = str(intervention_type)
+                        break
+                if intervention_type == "process_policy_change" and not has_runnable_inventory(last_state):
                     terminal_status = "stopped"
                     stop_reason = str(intervention_type)
                     break
@@ -522,6 +722,11 @@ def run_lab_ops_run(options: LabOpsOptions) -> dict[str, Any]:
             "last_completed_loop": last_state.get("last_completed_loop"),
             "latest_process_score": last_meta.get("scorecard", {}).get("overall_process_score"),
             "latest_intervention": (last_meta.get("intervention") or {}).get("intervention_type"),
+            "governance": {
+                "enabled": options.governed,
+                "open_lanes": last_governance.get("lane_assignment", {}).get("open_lanes", []),
+                "all_lanes_blocked": last_governance.get("lane_assignment", {}).get("all_lanes_blocked"),
+            },
         },
     )
     _append_journal(options, run_id, "run_completed", stop_payload)
@@ -600,6 +805,18 @@ def run_lab_ops_report(options: LabOpsOptions, *, run_id: str) -> dict[str, Any]
     latest_meta_reports = sorted((root / "meta").glob("*/meta_research_report.md")) if (root / "meta").exists() else []
     if latest_meta_reports:
         lines.extend(["", "## Latest Meta Report", "", latest_meta_reports[-1].read_text(encoding="utf-8")])
+    latest_governance = (
+        sorted((root / "governance").glob("block_*/research_map.yaml"))
+        if (root / "governance").exists()
+        else []
+    )
+    if latest_governance:
+        governance_dir = latest_governance[-1].parent
+        lines.extend(["", "## Latest Governance Bundle", ""])
+        for name in ("blocker_audit.yaml", "lane_assignment.yaml", "validation_decision.yaml", "research_map.yaml"):
+            path = governance_dir / name
+            if path.exists():
+                lines.extend([f"### {name}", "", "```yaml", path.read_text(encoding="utf-8").strip(), "```", ""])
     report_path = root / "reports" / "final_report.md"
     atomic_write_text(report_path, "\n".join(lines).rstrip() + "\n")
     return {"run_id": run_id, "paths": {"report": report_path}, "manifest": manifest}

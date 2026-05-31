@@ -1,0 +1,14 @@
+model: riskflow_research_map_v0
+generated_at: ''
+session_id: seed
+nodes: []
+edges: []
+views:
+  lane_counts: {}
+  status_counts: {}
+  top_open_questions: []
+  saturated_families: []
+  product_ready_candidates: []
+  validation_debt: []
+  stale_evidence_needing_fresh_data: []
+production_effect: none

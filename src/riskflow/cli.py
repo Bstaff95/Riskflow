@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .blocker_audit import run_blocker_audit
 from .baskets import build_equal_weight_return_index_frame
 from .compression import calculate_compression_features
 from .config import UniverseConfig, load_universe_config
@@ -90,7 +91,14 @@ from .reports import (
     export_state_research_reports,
     export_transition_research_reports,
 )
+from .research_lane_router import run_lane_assignment
+from .research_map import (
+    DEFAULT_RESEARCH_MAP_PATH,
+    DEFAULT_RESEARCH_MAP_REPORT_ROOT,
+    run_research_map_update,
+)
 from .research_outcomes import HORIZONS
+from .validation_governance import run_validation_governance
 from .mtf import MTF_LEADERBOARD_COLUMNS, RESEARCH_MTF_PRESET, append_mtf_context, normalize_timeframe
 from .mtf_research import run_mtf_research
 from .obsidian_kg import (
@@ -1694,6 +1702,7 @@ def _lab_ops_options_from_args(args: argparse.Namespace) -> LabOpsOptions:
         apply=getattr(args, "apply", False),
         resume=getattr(args, "resume", False),
         dry_run=getattr(args, "dry_run", False),
+        governed=getattr(args, "governed", False),
         source_root=Path(getattr(args, "source_root", ".")),
         report_root=Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)),
         runtime_root=Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)),
@@ -1741,6 +1750,120 @@ def lab_ops_command(args: argparse.Namespace) -> int:
         return 1
     print(f"Unknown lab-ops action: {action}")
     return 1
+
+
+def _latest_director_snapshot(args: argparse.Namespace) -> tuple[Path, Path]:
+    evidence_mart = getattr(args, "evidence_mart", None)
+    belief_graph = getattr(args, "belief_graph", None)
+    if evidence_mart and belief_graph:
+        return Path(evidence_mart), Path(belief_graph)
+
+    candidate_roots: list[Path] = []
+    run_id = getattr(args, "run_id", None)
+    if run_id:
+        candidate_roots.append(Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)) / run_id / "director")
+    candidate_roots.append(Path(getattr(args, "director_report_root", DEFAULT_DIRECTOR_REPORT_ROOT)))
+
+    candidates: list[Path] = []
+    for root in candidate_roots:
+        if root.exists():
+            candidates.extend(root.glob("**/evidence_mart.yaml"))
+    if not candidates:
+        raise FileNotFoundError("No evidence_mart.yaml found. Pass --evidence-mart and --belief-graph explicitly.")
+    mart_path = sorted(candidates, key=lambda path: path.stat().st_mtime)[-1]
+    graph_path = mart_path.parent / "belief_graph.yaml"
+    if not graph_path.exists():
+        raise FileNotFoundError(f"No belief_graph.yaml next to {mart_path}")
+    return mart_path, graph_path
+
+
+def _governance_output_dir(args: argparse.Namespace, default_name: str) -> Path:
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir:
+        return Path(output_dir)
+    run_id = getattr(args, "run_id", None)
+    if run_id:
+        return Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)) / run_id / "governance" / "manual"
+    return Path("reports") / default_name
+
+
+def blocker_audit_command(args: argparse.Namespace) -> int:
+    try:
+        evidence_mart, belief_graph = _latest_director_snapshot(args)
+        result = run_blocker_audit(
+            evidence_mart_path=evidence_mart,
+            belief_graph_path=belief_graph,
+            output_dir=_governance_output_dir(args, "blocker_audit"),
+        )
+        audit = result["audit"]
+        print(f"Audited blocker candidates: {audit.get('audited_count')}")
+        print(f"Decisions: {audit.get('decision_counts')}")
+        print(f"Blocker audit: {result['paths']['audit']}")
+        return 0
+    except Exception as exc:
+        print(f"Blocker audit failed: {exc}")
+        return 1
+
+
+def lane_router_command(args: argparse.Namespace) -> int:
+    try:
+        _evidence_mart, belief_graph = _latest_director_snapshot(args)
+        result = run_lane_assignment(
+            belief_graph_path=belief_graph,
+            output_dir=_governance_output_dir(args, "lane_router"),
+            blocker_audit_path=Path(args.blocker_audit) if getattr(args, "blocker_audit", None) else None,
+            meta_scorecard_path=Path(args.meta_scorecard) if getattr(args, "meta_scorecard", None) else None,
+        )
+        assignment = result["assignment"]
+        print(f"Assignments: {assignment.get('assignment_count')}")
+        print(f"Open lanes: {', '.join(assignment.get('open_lanes', [])) or 'none'}")
+        print(f"Lane assignment: {result['paths']['assignment']}")
+        return 0
+    except Exception as exc:
+        print(f"Lane router failed: {exc}")
+        return 1
+
+
+def validation_governance_command(args: argparse.Namespace) -> int:
+    try:
+        _evidence_mart, belief_graph = _latest_director_snapshot(args)
+        result = run_validation_governance(
+            belief_graph_path=belief_graph,
+            output_dir=_governance_output_dir(args, "validation_governance"),
+            lane_assignment_path=Path(args.lane_assignment) if getattr(args, "lane_assignment", None) else None,
+            blocker_audit_path=Path(args.blocker_audit) if getattr(args, "blocker_audit", None) else None,
+        )
+        governance = result["governance"]
+        print(f"Decision counts: {governance.get('decision_counts')}")
+        print(f"Product change allowed: {governance.get('product_change_allowed')}")
+        print(f"Validation decision: {result['paths']['governance']}")
+        return 0
+    except Exception as exc:
+        print(f"Validation governance failed: {exc}")
+        return 1
+
+
+def research_map_command(args: argparse.Namespace) -> int:
+    try:
+        evidence_mart, belief_graph = _latest_director_snapshot(args)
+        result = run_research_map_update(
+            evidence_mart_path=evidence_mart,
+            belief_graph_path=belief_graph,
+            map_path=Path(args.map_path),
+            report_root=Path(args.report_root),
+            lane_assignment_path=Path(args.lane_assignment) if getattr(args, "lane_assignment", None) else None,
+            blocker_audit_path=Path(args.blocker_audit) if getattr(args, "blocker_audit", None) else None,
+            validation_governance_path=Path(args.validation_governance) if getattr(args, "validation_governance", None) else None,
+        )
+        research_map = result["research_map"]
+        print(f"Nodes: {len(research_map.get('nodes', []))}")
+        print(f"Edges: {len(research_map.get('edges', []))}")
+        print(f"Research map: {result['paths']['map']}")
+        print(f"Status: {result['paths']['status']}")
+        return 0
+    except Exception as exc:
+        print(f"Research map update failed: {exc}")
+        return 1
 
 
 def resample_command(args: argparse.Namespace) -> int:
@@ -2697,6 +2820,62 @@ def build_parser() -> argparse.ArgumentParser:
     meta_status.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)
     meta_status.set_defaults(func=lab_meta_command)
 
+    def add_governance_snapshot_args(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--run-id", default=None, help="Lab-ops run id to inspect.")
+        command.add_argument("--evidence-mart", default=None, help="Explicit evidence_mart.yaml path.")
+        command.add_argument("--belief-graph", default=None, help="Explicit belief_graph.yaml path.")
+        command.add_argument(
+            "--director-report-root",
+            default=str(DEFAULT_DIRECTOR_REPORT_ROOT),
+            help="Fallback director report root when --run-id is not provided.",
+        )
+        command.add_argument(
+            "--ops-report-root",
+            default=str(LAB_OPS_REPORT_ROOT),
+            help="Lab-ops report root used with --run-id.",
+        )
+        command.add_argument("--output-dir", default=None, help="Directory for generated governance artifacts.")
+
+    blocker_audit = subparsers.add_parser("blocker-audit", help="Audit whether blocker-like beliefs avoid harm.")
+    blocker_audit_subparsers = blocker_audit.add_subparsers(dest="blocker_audit_action", required=True)
+    blocker_inspect = blocker_audit_subparsers.add_parser("inspect", help="Write a blocker audit from director artifacts.")
+    add_governance_snapshot_args(blocker_inspect)
+    blocker_inspect.set_defaults(func=blocker_audit_command)
+
+    lane_router = subparsers.add_parser("lane-router", help="Assign director beliefs to research lanes.")
+    lane_router_subparsers = lane_router.add_subparsers(dest="lane_router_action", required=True)
+    lane_assign = lane_router_subparsers.add_parser("assign", help="Write lane assignments from a belief graph.")
+    add_governance_snapshot_args(lane_assign)
+    lane_assign.add_argument("--blocker-audit", default=None, help="Optional blocker_audit.yaml path.")
+    lane_assign.add_argument("--meta-scorecard", default=None, help="Optional process_scorecard.yaml path.")
+    lane_assign.set_defaults(func=lane_router_command)
+
+    validation_governance = subparsers.add_parser(
+        "validation-governance",
+        help="Review whether beliefs may advance through validation gates.",
+    )
+    validation_subparsers = validation_governance.add_subparsers(dest="validation_governance_action", required=True)
+    validation_review = validation_subparsers.add_parser("review", help="Write validation governance decisions.")
+    add_governance_snapshot_args(validation_review)
+    validation_review.add_argument("--lane-assignment", default=None, help="Optional lane_assignment.yaml path.")
+    validation_review.add_argument("--blocker-audit", default=None, help="Optional blocker_audit.yaml path.")
+    validation_review.set_defaults(func=validation_governance_command)
+
+    research_map = subparsers.add_parser("research-map", help="Update or report the durable Riskflow research map.")
+    research_map_subparsers = research_map.add_subparsers(dest="research_map_action", required=True)
+    research_map_update = research_map_subparsers.add_parser("update", help="Update the research map from director artifacts.")
+    add_governance_snapshot_args(research_map_update)
+    research_map_update.add_argument("--lane-assignment", default=None, help="Optional lane_assignment.yaml path.")
+    research_map_update.add_argument("--blocker-audit", default=None, help="Optional blocker_audit.yaml path.")
+    research_map_update.add_argument("--validation-governance", default=None, help="Optional validation_decision.yaml path.")
+    research_map_update.add_argument("--map-path", default=str(DEFAULT_RESEARCH_MAP_PATH), help="Durable research map YAML.")
+    research_map_update.add_argument(
+        "--report-root",
+        default=str(DEFAULT_RESEARCH_MAP_REPORT_ROOT),
+        help="Generated research map status report root.",
+    )
+    research_map_update.set_defaults(func=research_map_command)
+
     lab_ops = subparsers.add_parser(
         "lab-ops",
         help="Plan, run, resume, and report autonomous Riskflow lab runs.",
@@ -2740,6 +2919,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="Generated artifact megabyte cap before stopping.",
         )
         command.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+        command.add_argument("--governed", action="store_true", help="Write governance artifacts at each lab-ops checkpoint.")
         command.add_argument("--source-root", default=".", help="Root used to resolve relative source paths.")
         command.add_argument(
             "--ops-report-root",

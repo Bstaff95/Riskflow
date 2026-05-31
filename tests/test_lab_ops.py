@@ -7,6 +7,7 @@ import yaml
 
 from riskflow.lab_ops import (
     LabOpsOptions,
+    has_runnable_inventory,
     run_lab_ops_plan,
     run_lab_ops_report,
     run_lab_ops_run,
@@ -74,3 +75,9 @@ def test_lab_ops_report_writes_final_report(tmp_path: Path) -> None:
 
     assert result["paths"]["report"].exists()
     assert "Riskflow Lab Ops Final Report" in result["paths"]["report"].read_text(encoding="utf-8")
+
+
+def test_has_runnable_inventory_reads_supervisor_inventory() -> None:
+    assert has_runnable_inventory({"runnable_inventory": {"runnable": 2}}) is True
+    assert has_runnable_inventory({"runnable_inventory": {"runnable": 0}}) is False
+    assert has_runnable_inventory({"runnable_inventory": {"runnable": "bad"}}) is False

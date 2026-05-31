@@ -80,6 +80,16 @@ def _safe_slug(value: str, *, max_length: int = 96) -> str:
     return (slug or "director_item")[:max_length].rstrip("_")
 
 
+def _safe_slug_with_hash(value: str, *, max_length: int = 96) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value).strip().lower()).strip("_")
+    slug = re.sub(r"_+", "_", slug) or "director_item"
+    if len(slug) <= max_length:
+        return slug
+    token = lineage_fingerprint(slug, "safe_slug")[:8]
+    prefix_length = max(1, max_length - len(token) - 1)
+    return f"{slug[:prefix_length].rstrip('_')}_{token}"
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -616,6 +626,19 @@ def _director_specs_for_belief(belief: dict[str, Any], family: dict[str, Any]) -
     specs.extend(
         [
             {
+                "name": "validation_lag1_frozen",
+                "stage": "validation",
+                "discovery_mode": "validation",
+                "claim_type": "control",
+                "track": "bullish_setup",
+                "direction": direction,
+                "updates": {},
+                "entry_lag_bars": 1,
+                "question": "Does the frozen rule preserve its baseline lag-1 path behavior after first-stage controls?",
+                "failure_mode": "baseline_lag_not_stable",
+                "expected_information_gain": 0.74,
+            },
+            {
                 "name": "validation_lag0",
                 "stage": "validation",
                 "discovery_mode": "validation",
@@ -655,6 +678,19 @@ def _director_specs_for_belief(belief: dict[str, Any], family: dict[str, Any]) -
                 "expected_information_gain": 0.70,
             },
             {
+                "name": "validation_cooldown30",
+                "stage": "validation",
+                "discovery_mode": "validation",
+                "claim_type": "control",
+                "track": "bullish_setup",
+                "direction": direction,
+                "updates": {},
+                "cooldown_bars": 30,
+                "question": "Does the frozen rule survive a moderate 30-bar cooldown stress?",
+                "failure_mode": "cooldown_sensitive",
+                "expected_information_gain": 0.69,
+            },
+            {
                 "name": "direction_flip_counterexample",
                 "stage": "counterexample",
                 "discovery_mode": "counterexample",
@@ -679,8 +715,45 @@ def _director_specs_for_belief(belief: dict[str, Any], family: dict[str, Any]) -
                 "failure_mode": "timeframe_not_transferable",
                 "expected_information_gain": 0.68,
             },
+            {
+                "name": "timeframe_transfer_1h",
+                "stage": "validation",
+                "discovery_mode": "validation",
+                "claim_type": "control",
+                "track": "bullish_setup",
+                "direction": direction,
+                "updates": {},
+                "timeframes": ["1h"],
+                "question": "Does the setup collapse on 1h, or is it portable to lower-timeframe structure?",
+                "failure_mode": "timeframe_not_transferable",
+                "expected_information_gain": 0.62,
+            },
         ]
     )
+    counter_updates: dict[str, Any] = {}
+    if "require_warning_absent" in parameter_grid:
+        counter_updates["require_warning_absent"] = [False]
+    if "min_benchmark_return" in parameter_grid:
+        counter_updates["min_benchmark_return"] = [-0.05, 0.0]
+    if "min_relative_slope" in parameter_grid:
+        counter_updates["min_relative_slope"] = [-0.05, 0.0]
+    if "min_compression" in parameter_grid:
+        counter_updates["min_compression"] = [0.0]
+    if counter_updates:
+        specs.append(
+            {
+                "name": "falsification_relaxed_context",
+                "stage": "counterexample",
+                "discovery_mode": "counterexample",
+                "claim_type": "control",
+                "track": "bullish_setup",
+                "direction": direction,
+                "updates": counter_updates,
+                "question": "Does the setup still work when warning/context/compression constraints are relaxed?",
+                "failure_mode": "context_filters_not_causal",
+                "expected_information_gain": 0.73,
+            }
+        )
     return specs
 
 
@@ -710,8 +783,10 @@ def design_experiments(
     generated_grid_dir: Path,
     max_new_hypotheses: int,
     source_root: Path = Path("."),
+    existing_hypothesis_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     generated_grid_dir.mkdir(parents=True, exist_ok=True)
+    existing_hypothesis_ids = existing_hypothesis_ids or set()
     candidate_beliefs = [
         belief
         for belief in belief_graph.get("beliefs", [])
@@ -736,8 +811,11 @@ def design_experiments(
             if len(queue_items) >= max_new_hypotheses:
                 break
             claim_id = str(belief.get("claim_id", "belief"))
-            item_id = _safe_slug(f"director_{claim_id}_{spec['name']}", max_length=96)
-            family_id = _safe_slug(f"{family.get('family_id', claim_id)}_{spec['name']}", max_length=120)
+            item_id = _safe_slug_with_hash(f"director_{claim_id}_{spec['name']}", max_length=96)
+            if item_id in existing_hypothesis_ids:
+                skipped.append({"claim_id": claim_id, "reason": f"already_seen:{item_id}"})
+                continue
+            family_id = _safe_slug_with_hash(f"{family.get('family_id', claim_id)}_{spec['name']}", max_length=120)
             grid = _grid_for_spec(family, spec, family_id)
             grid_path = generated_grid_dir / f"{item_id}.yaml"
             atomic_write_yaml(grid_path, grid)
@@ -987,12 +1065,22 @@ def run_director_plan_next(options: LabDirectorOptions) -> dict[str, Any]:
         else output_dir / "generated_grids"
     )
     queue_path = options.output_queue_path if options.apply else output_dir / "director_candidate_queue.yaml"
+    existing_hypothesis_ids: set[str] = set()
+    if options.runtime_queue_path.exists():
+        try:
+            runtime_queue = load_lab_queue(options.runtime_queue_path)
+        except Exception:
+            runtime_queue = {"queue": []}
+        existing_hypothesis_ids.update(str(item.get("id", "")) for item in runtime_queue.get("queue", []))
+    state = load_lab_state(options.state_path)
+    existing_hypothesis_ids.update(str(item) for item in state.get("completed_hypothesis_ids", []))
     plan = design_experiments(
         belief_graph,
         output_queue_path=queue_path,
         generated_grid_dir=grid_dir,
         max_new_hypotheses=options.max_new_hypotheses,
         source_root=options.source_root,
+        existing_hypothesis_ids=existing_hypothesis_ids,
     )
     audit = audit_director_plan(plan, source_root=options.source_root)
     if options.apply and not audit["passed"]:

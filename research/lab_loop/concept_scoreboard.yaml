@@ -1,5 +1,5 @@
 model: riskflow_lab_loop_concept_scoreboard_v0
-updated_at: '2026-05-30T13:21:41+00:00'
+updated_at: '2026-05-31T16:17:29+00:00'
 concepts:
   warning_relative_failed_breakout_daily_current:
     track: warning
@@ -22891,3 +22891,468 @@ concepts:
     latest_loop: 1527
     retirement_reason: ''
     updated_at: '2026-05-30T13:21:41+00:00'
+  obsidian_accepted_viscosity_flush_reclaim:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 8
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: refine
+    latest_loop: 1
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:48+00:00'
+  obsidian_failed_first_break_second_base_reclaim:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 3
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: refine
+    latest_loop: 2
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:48+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 3
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: refine
+    latest_loop: 3
+    retirement_reason: ''
+    updated_at: '2026-05-31T00:01:48+00:00'
+  obsidian_failed_first_break_second_base_reclaim_supervisor_reseed_g001_l0002_r0003_2:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 4
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T00:02:55+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed_supervisor_reseed_g001_l0003_r0003_1:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 5
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T00:02:55+00:00'
+  obsidian_failed_first_break_second_base_reclaim_supervisor_reseed_g001_l0002_r0005_2:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 6
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T00:04:03+00:00'
+  obsidian_viscosity_acceptance_zero_confirmed_supervisor_reseed_g001_l0003_r0005_1:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 8.432447180942292
+    best_median_relative_return: -0.0813769894955332
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 7
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T00:04:03+00:00'
+  targeted_regime_confirmed_reclaim_entry_loose_slope_control:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -7.427146497138301
+    best_median_relative_return: -0.0342396383559762
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 4
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:47:09+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 17
+    event_clusters: 24
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -11.126586267292987
+    best_median_relative_return: -0.0971381413185423
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 2
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:47:09+00:00'
+  targeted_regime_confirmed_reclaim_entry_benchmark_positive:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 18
+    event_clusters: 23
+    strict_survivors: 0
+    useful_or_watchlist: 8
+    best_rank_score: -3.6977799588583817
+    best_median_relative_return: 0.0305824267705554
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 10
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T16:12:29+00:00'
+  targeted_regime_confirmed_reclaim_entry_viscosity:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 17
+    event_clusters: 17
+    strict_survivors: 0
+    useful_or_watchlist: 10
+    best_rank_score: 0.1724798565813724
+    best_median_relative_return: 0.0305824267705554
+    validation_status: time_split_supported
+    latest_decision: archive
+    latest_loop: 30
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:57:24+00:00'
+  targeted_regime_confirmed_reclaim_entry_warning_ignore_control:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 16
+    event_clusters: 17
+    strict_survivors: 0
+    useful_or_watchlist: 3
+    best_rank_score: 0.6222974970420165
+    best_median_relative_return: -0.0627573183955764
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 35
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:58:01+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero_benchmark_positive:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 18
+    event_clusters: 22
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -10.000893703804184
+    best_median_relative_return: -0.0515097952194782
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 9
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:49:32+00:00'
+  targeted_deep_reset_regime_reclaim_entry_compression_30:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 19
+    event_clusters: 22
+    strict_survivors: 0
+    useful_or_watchlist: 15
+    best_rank_score: 0.7469533063055134
+    best_median_relative_return: 0.0222101778188851
+    validation_status: ''
+    latest_decision: agent_review
+    latest_loop: 5
+    retirement_reason: ''
+    updated_at: '2026-05-31T16:11:45+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_2:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 16
+    event_clusters: 17
+    strict_survivors: 0
+    useful_or_watchlist: 4
+    best_rank_score: 3.4589250862939265
+    best_median_relative_return: 0.0290175027611443
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 50
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:59:54+00:00'
+  targeted_regime_confirmed_reclaim_entry_max_signal_05:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 17
+    event_clusters: 17
+    strict_survivors: 0
+    useful_or_watchlist: 5
+    best_rank_score: 0.1724798565813724
+    best_median_relative_return: 0.0305824267705554
+    validation_status: time_split_supported
+    latest_decision: agent_review
+    latest_loop: 43
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:59:16+00:00'
+  targeted_regime_confirmed_reclaim_entry_zero_warning_ignore_control:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 4h
+    unique_symbols: 16
+    event_clusters: 3
+    strict_survivors: 0
+    useful_or_watchlist: 3
+    best_rank_score: -3.231365326414962
+    best_median_relative_return: 0.0028084424212618
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 45
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:59:16+00:00'
+  targeted_parent_absent_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 9
+    event_clusters: 8
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -16.963591838448313
+    best_median_relative_return: -0.1975044059769046
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 13
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:51:26+00:00'
+  targeted_parent_active_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 12h
+    unique_symbols: 4
+    event_clusters: 3
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -18.8197051678248
+    best_median_relative_return: 0.2648367617458298
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 14
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:51:26+00:00'
+  targeted_parent_active_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1h
+    unique_symbols: 1
+    event_clusters: 1
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -22.356847855568564
+    best_median_relative_return: 0.0081490905518557
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 15
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:51:26+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_1:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 15
+    event_clusters: 16
+    strict_survivors: 0
+    useful_or_watchlist: 5
+    best_rank_score: -1.244058175995299
+    best_median_relative_return: -0.0081957047973832
+    validation_status: ''
+    latest_decision: refine
+    latest_loop: 46
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:59:54+00:00'
+  targeted_parent_absent_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 4h
+    unique_symbols: 17
+    event_clusters: 3
+    strict_survivors: 0
+    useful_or_watchlist: 14
+    best_rank_score: -0.774114401479723
+    best_median_relative_return: 0.1112397196072818
+    validation_status: ''
+    latest_decision: agent_review
+    latest_loop: 24
+    retirement_reason: ''
+    updated_at: '2026-05-31T16:14:26+00:00'
+  targeted_fresh_leader_raw_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 18
+    event_clusters: 22
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -11.467154204009882
+    best_median_relative_return: -0.0844318823765859
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 19
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:53:56+00:00'
+  targeted_parent_ignore_failed_weakness_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 9
+    event_clusters: 8
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: -16.963591838448313
+    best_median_relative_return: -0.1975044059769046
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 18
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:53:56+00:00'
+  targeted_deep_reset_regime_reclaim_entry_low_15:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 1d
+    unique_symbols: 17
+    event_clusters: 18
+    strict_survivors: 0
+    useful_or_watchlist: 5
+    best_rank_score: -1.3474812921874866
+    best_median_relative_return: 0.0008713278366569
+    validation_status: ''
+    latest_decision: refine
+    latest_loop: 36
+    retirement_reason: ''
+    updated_at: '2026-05-31T13:58:39+00:00'
+  targeted_fresh_leader_warning_absent_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 18
+    event_clusters: 22
+    strict_survivors: 0
+    useful_or_watchlist: 5
+    best_rank_score: -12.52428855343595
+    best_median_relative_return: -0.0898602936895145
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 67
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T14:02:25+00:00'
+  targeted_parent_ignore_failed_weakness_viscosity_reclaim:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 4h
+    unique_symbols: 17
+    event_clusters: 3
+    strict_survivors: 0
+    useful_or_watchlist: 10
+    best_rank_score: 0.4186730147638384
+    best_median_relative_return: 0.0465876362803988
+    validation_status: ''
+    latest_decision: agent_review
+    latest_loop: 60
+    retirement_reason: ''
+    updated_at: '2026-05-31T14:01:09+00:00'
+  targeted_fresh_leader_warning_active_viscosity_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 30
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 5.110810396507365
+    best_median_relative_return: -0.0405531154700311
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 25
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:56:46+00:00'
+  targeted_fresh_leader_warning_active_zero_reclaim:
+    track: bullish_setup
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 18
+    event_clusters: 22
+    strict_survivors: 0
+    useful_or_watchlist: 0
+    best_rank_score: 7.407229170933418
+    best_median_relative_return: -0.0844318823765859
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 22
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T13:56:46+00:00'
+  targeted_fresh_leader_raw_viscosity_reclaim:
+    track: bullish_setup
+    current_promotion_level: L2_discovered
+    best_timeframe: 12h
+    unique_symbols: 18
+    event_clusters: 3
+    strict_survivors: 0
+    useful_or_watchlist: 8
+    best_rank_score: -0.3166255950288155
+    best_median_relative_return: -0.0213594973257118
+    validation_status: ''
+    latest_decision: refine
+    latest_loop: 56
+    retirement_reason: ''
+    updated_at: '2026-05-31T14:01:09+00:00'
+  targeted_fresh_leader_warning_absent_viscosity_reclaim:
+    track: warning
+    current_promotion_level: archived
+    best_timeframe: 1d
+    unique_symbols: 20
+    event_clusters: 26
+    strict_survivors: 0
+    useful_or_watchlist: 27
+    best_rank_score: -6.8635888450484694
+    best_median_relative_return: 0.0305824267705554
+    validation_status: ''
+    latest_decision: archive
+    latest_loop: 46
+    retirement_reason: No useful strict or watchlist evidence survived this epoch.
+    updated_at: '2026-05-31T16:17:29+00:00'

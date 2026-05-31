@@ -241,11 +241,16 @@ Current grammar primitive families:
 
 Current active checkpoint:
 
-The next likely implementation work is the Grammar Candidate Sprint. This means adding measurable research sidecar features/events and evaluating them with Layer 7 evidence. It is not a production ranking, state, score, or TradingView formula change.
+The Grammar Candidate Sprint now has a lab-loop runner, meta-supervisor, and
+first lab-director layer. The next research operating mode is to run supervised
+epoch blocks, use `lab-director inspect` / `lab-director plan-next` to convert
+evidence into beliefs and sharper queues, then run the audited next queue. This
+is not a production ranking, state, score, or TradingView formula change.
 
 Current next implementation mission:
 
-Implement a Grammar Candidate Sprint as research sidecars, not production changes.
+Use the lab director to make the Signal Grammar Lab self-improving: evidence
+mart -> belief graph -> audited experiment plan -> next queue.
 
 Start with measurable features/events such as:
 

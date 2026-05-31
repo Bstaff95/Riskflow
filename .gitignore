@@ -22,6 +22,8 @@ obsidian/reports/*
 research/lab_loop/lab_state.json
 research/lab_loop/runtime_queue.yaml
 research/lab_loop/obsidian_candidate_queue.yaml
+research/lab_loop/targeted_bullish_candidate_queue.yaml
+research/lab_loop/director_candidate_queue.yaml
 research/lab_loop/failure_log.jsonl
 research/lab_loop/lab_loop.lock
 research/lab_loop/generated_grids/

@@ -59,3 +59,23 @@ Allowed durable note types:
 Generated graph tables, compiled queues, and generated grammar grids remain outside the curated vault unless a human or Codex intentionally promotes a concise summary.
 
 Do not call a setup validated from Obsidian links alone. A bullish setup requires Python evidence, strict referee checks, controls, and promotion gates.
+
+## Lab Director Memory
+
+The lab director writes generated evidence marts, belief graphs, experiment
+plans, audits, and reports under `reports/lab_director/`. These are generated
+artifacts and should stay out of Git by default.
+
+Promote only concise reviewed summaries into Obsidian. A promoted note should
+identify:
+
+- the belief or failed assumption;
+- exact source loop/report paths;
+- evidence level, contract tier, confidence, and blockers;
+- the next required test;
+- whether the finding is an entry, permission filter, blocker, invalidation,
+  path-management clue, gradient sidecar candidate, or archive.
+
+Obsidian should remember what the lab learned and what not to repeat. It should
+not override the Python evidence engine or mark a setup validated from prose
+alone.

@@ -30,6 +30,14 @@ from .indicator_behavior import (
     run_indicator_behavior_search,
 )
 from .indicator_engine import calculate_indicator
+from .lab_director import (
+    DEFAULT_DIRECTOR_GRID_DIR,
+    DEFAULT_DIRECTOR_QUEUE_PATH,
+    DEFAULT_DIRECTOR_REPORT_ROOT,
+    LabDirectorOptions,
+    run_director_inspect,
+    run_director_plan_next,
+)
 from .lab_loop import (
     DEFAULT_CONCEPT_SCOREBOARD_PATH,
     DEFAULT_QUEUE_PATH,
@@ -1470,6 +1478,121 @@ def lab_loop_command(args: argparse.Namespace) -> int:
     return 1
 
 
+def lab_director_command(args: argparse.Namespace) -> int:
+    action = args.lab_director_action
+    options = LabDirectorOptions(
+        state_path=Path(args.state),
+        runtime_queue_path=Path(args.runtime_queue),
+        concept_scoreboard_path=Path(args.concept_scoreboard),
+        evidence_ledger_path=Path(args.evidence_ledger),
+        report_root=Path(args.report_root),
+        director_report_root=Path(args.director_report_root),
+        output_queue_path=Path(args.output_queue),
+        generated_grid_dir=Path(args.generated_grid_dir),
+        objective=args.objective,
+        max_new_hypotheses=args.max_new_hypotheses,
+        source_root=Path(args.source_root),
+        apply=getattr(args, "apply", False),
+        apply_to_runtime=getattr(args, "apply_to_runtime", False),
+    )
+    try:
+        if action in {"inspect", "report"}:
+            result = run_director_inspect(options)
+            print(f"Evidence rows: {result['mart'].get('row_count')}")
+            print(f"Beliefs: {result['belief_graph'].get('belief_count')}")
+            print(f"Evidence mart: {result['paths']['evidence_mart_yaml']}")
+            print(f"Belief graph: {result['paths']['belief_graph']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0
+        if action == "plan-next":
+            result = run_director_plan_next(options)
+            plan = result["plan"]
+            audit = result["audit"]
+            print(f"Research mode: {plan.get('research_mode')}")
+            print(f"Generated experiments: {len(plan.get('experiments', []))}")
+            print(f"Audit passed: {audit.get('passed')}")
+            if audit.get("errors"):
+                print("Audit errors:")
+                for error in audit["errors"]:
+                    print(f"- {error}")
+            print(f"Plan: {result['paths']['plan']}")
+            print(f"Proposed queue: {result['paths']['proposed_queue']}")
+            if "applied_queue" in result["paths"]:
+                print(f"Applied queue: {result['paths']['applied_queue']}")
+            if result.get("runtime_added"):
+                print(f"Runtime queue additions: {result['runtime_added']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if audit.get("passed") or not options.apply else 1
+        if action == "run":
+            remaining = int(args.epochs)
+            completed_blocks = 0
+            last_state: dict[str, object] = {}
+            last_director: dict[str, object] | None = None
+            while remaining > 0:
+                block_epochs = min(int(args.director_checkpoint_epochs), remaining)
+                lab_options = LabLoopOptions(
+                    queue_path=Path(args.queue),
+                    runtime_queue_path=Path(args.runtime_queue),
+                    state_path=Path(args.state),
+                    report_root=Path(args.report_root),
+                    concept_scoreboard_path=Path(args.concept_scoreboard),
+                    config_path=Path(args.config),
+                    data_dir=Path(args.data_dir),
+                    timeframes=tuple(args.timeframes),
+                    max_loops=args.epoch_size,
+                    max_hours=args.max_hours,
+                    min_sample_size=args.min_sample_size,
+                    entry_lag_bars=args.entry_lag_bars,
+                    cooldown_bars=args.cooldown_bars,
+                    strict_referee=args.strict_referee,
+                    strict_null_iterations=args.strict_null_iterations,
+                    strict_random_seed=args.strict_random_seed,
+                    checkpoint_interval=args.checkpoint_interval,
+                    resume=args.resume or completed_blocks > 0,
+                    dry_run=args.dry_run,
+                    auto_refine=False,
+                    auto_gate_followups=args.auto_gate_followups,
+                    objective=args.objective,
+                )
+                supervisor_options = SupervisorOptions(
+                    state_path=Path(args.state),
+                    runtime_queue_path=Path(args.runtime_queue),
+                    concept_scoreboard_path=Path(args.concept_scoreboard),
+                    evidence_ledger_path=Path(args.evidence_ledger),
+                    policy_path=Path(args.supervisor_policy),
+                    epoch_size=args.epoch_size,
+                    apply=True,
+                    objective=args.objective,
+                )
+                last_state = run_supervised_epochs(
+                    lab_options,
+                    supervisor_options,
+                    epochs=block_epochs,
+                    epoch_size=args.epoch_size,
+                )
+                completed_blocks += 1
+                remaining -= block_epochs
+                last_director = run_director_plan_next(options)
+                if options.apply and not last_director["audit"].get("passed"):
+                    break
+                if last_state.get("requires_new_candidate_queue") and not last_director.get("runtime_added"):
+                    break
+            print(f"Director blocks completed: {completed_blocks}")
+            print(f"Lab loop status: {last_state.get('status')}")
+            print(f"Last completed loop: {last_state.get('last_completed_loop')}")
+            if last_director:
+                print(f"Director mode: {last_director['plan'].get('research_mode')}")
+                print(f"Director audit passed: {last_director['audit'].get('passed')}")
+                print(f"Director report: {last_director['paths']['report']}")
+            return 0
+    except Exception as exc:
+        print(f"Lab director {action} failed: {exc}")
+        return 1
+
+    print(f"Unknown lab-director action: {action}")
+    return 1
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -2234,6 +2357,151 @@ def build_parser() -> argparse.ArgumentParser:
     lab_scoreboard = lab_subparsers.add_parser("concept-scoreboard", help="Print the lab-loop concept scoreboard.")
     add_lab_loop_common(lab_scoreboard)
     lab_scoreboard.set_defaults(func=lab_loop_command)
+
+    lab_director = subparsers.add_parser(
+        "lab-director",
+        help="Inspect lab evidence, maintain research beliefs, and design the next experiment queue.",
+    )
+    lab_director_subparsers = lab_director.add_subparsers(dest="lab_director_action", required=True)
+
+    def add_lab_director_common(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--state", default=str(DEFAULT_STATE_PATH), help="Lab-loop state JSON path.")
+        command.add_argument(
+            "--runtime-queue",
+            default=str(DEFAULT_RUNTIME_QUEUE_PATH),
+            help="Runtime queue YAML used by supervised lab runs.",
+        )
+        command.add_argument(
+            "--concept-scoreboard",
+            default=str(DEFAULT_CONCEPT_SCOREBOARD_PATH),
+            help="Durable concept scoreboard YAML.",
+        )
+        command.add_argument(
+            "--evidence-ledger",
+            default=str(DEFAULT_EVIDENCE_LEDGER_PATH),
+            help="Durable meta-supervisor evidence ledger YAML.",
+        )
+        command.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT), help="Lab-loop report root.")
+        command.add_argument(
+            "--director-report-root",
+            default=str(DEFAULT_DIRECTOR_REPORT_ROOT),
+            help="Directory for generated lab-director artifacts.",
+        )
+        command.add_argument(
+            "--output-queue",
+            default=str(DEFAULT_DIRECTOR_QUEUE_PATH),
+            help="Applied director queue path used when --apply is set.",
+        )
+        command.add_argument(
+            "--generated-grid-dir",
+            default=str(DEFAULT_DIRECTOR_GRID_DIR),
+            help="Generated grammar grid directory used when --apply is set.",
+        )
+        command.add_argument(
+            "--objective",
+            choices=sorted(LAB_OBJECTIVES),
+            default="bullish-positive",
+            help="Research objective for director planning.",
+        )
+        command.add_argument(
+            "--max-new-hypotheses",
+            type=int,
+            default=30,
+            help="Maximum hypotheses to emit in a director-designed queue.",
+        )
+        command.add_argument(
+            "--source-root",
+            default=".",
+            help="Root used to resolve relative report/source paths during audit.",
+        )
+
+    director_inspect = lab_director_subparsers.add_parser(
+        "inspect",
+        help="Build evidence mart, belief graph, and a director report without applying a queue.",
+    )
+    add_lab_director_common(director_inspect)
+    director_inspect.set_defaults(func=lab_director_command)
+
+    director_report = lab_director_subparsers.add_parser(
+        "report",
+        help="Alias for inspect; writes the latest lab-director report.",
+    )
+    add_lab_director_common(director_report)
+    director_report.set_defaults(func=lab_director_command)
+
+    director_plan = lab_director_subparsers.add_parser(
+        "plan-next",
+        help="Design and audit the next experiment queue from current evidence.",
+    )
+    add_lab_director_common(director_plan)
+    director_plan.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the audited director queue to --output-queue.",
+    )
+    director_plan.add_argument(
+        "--apply-to-runtime",
+        action="store_true",
+        help="Append audited director queue items to --runtime-queue. Requires --apply.",
+    )
+    director_plan.set_defaults(func=lab_director_command)
+
+    director_run = lab_director_subparsers.add_parser(
+        "run",
+        help="Run supervised epoch blocks and invoke the lab director after each block.",
+    )
+    add_lab_director_common(director_run)
+    director_run.add_argument("--queue", default=str(DEFAULT_DIRECTOR_QUEUE_PATH), help="Seed queue for the run.")
+    director_run.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    director_run.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    director_run.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=["1d", "12h", "4h", "1h"],
+        help="Timeframes to run each executable hypothesis across.",
+    )
+    director_run.add_argument("--epochs", type=int, default=1, help="Maximum supervised epochs to run.")
+    director_run.add_argument("--epoch-size", type=int, default=5, help="Completed loops per supervised epoch.")
+    director_run.add_argument(
+        "--director-checkpoint-epochs",
+        type=int,
+        default=2,
+        help="Invoke the director after this many supervised epochs.",
+    )
+    director_run.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap per block.")
+    director_run.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
+    director_run.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
+    director_run.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
+    director_run.add_argument("--strict-referee", action="store_true", help="Run strict baseline/null validation.")
+    director_run.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
+    director_run.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+    director_run.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=5,
+        help="Write a process-quality checkpoint every N completed loops.",
+    )
+    director_run.add_argument("--resume", action="store_true", help="Resume from existing runtime queue and state.")
+    director_run.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+    director_run.add_argument(
+        "--no-auto-gates",
+        dest="auto_gate_followups",
+        action="store_false",
+        help="Do not append attribution/validation gate follow-ups after strict survivor promotions.",
+    )
+    director_run.set_defaults(auto_gate_followups=True)
+    director_run.add_argument(
+        "--supervisor-policy",
+        default=str(DEFAULT_SUPERVISOR_POLICY_PATH),
+        help="Optional meta-supervisor policy YAML path.",
+    )
+    director_run.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write director queues and append audited queue items to the runtime queue.",
+    )
+    director_run.set_defaults(apply_to_runtime=True)
+    director_run.set_defaults(func=lab_director_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

@@ -254,6 +254,66 @@ This queue focuses on regime-confirmed reclaim, deeper reset reclaim,
 parent-context failed-weakness permission/blocker logic, and fresh-leader
 follow-up as a filter rather than a standalone long trigger.
 
+## Lab Director
+
+The meta-supervisor enforces queue hygiene. The lab director is the native
+research-intelligence layer above it. It turns completed loop artifacts into:
+
+- an evidence mart;
+- a belief graph;
+- an audited next-experiment plan;
+- an optional director-designed queue.
+
+Use it after a 5-10 epoch block, a queue-exhaustion stop, or any major
+asymmetric/strict finding:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-director inspect
+PYTHONPATH=src python3 -m riskflow lab-director plan-next \
+  --objective bullish-positive
+```
+
+`inspect` and `plan-next` write generated artifacts under
+`reports/lab_director/` and do not mutate the runtime queue. To intentionally
+create the next runnable queue:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-director plan-next \
+  --objective bullish-positive \
+  --max-new-hypotheses 30 \
+  --apply
+PYTHONPATH=src python3 -m riskflow lab-loop validate-queue \
+  --queue research/lab_loop/director_candidate_queue.yaml
+```
+
+For a closed-loop run, use:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-director run \
+  --objective bullish-positive \
+  --queue research/lab_loop/director_candidate_queue.yaml \
+  --epochs 20 \
+  --epoch-size 5 \
+  --director-checkpoint-epochs 2 \
+  --strict-referee \
+  --resume \
+  --apply
+```
+
+Director rules:
+
+- evidence creates beliefs, not product truth;
+- `asymmetric_candidate` findings become decomposition/control tests, not
+  gradient or indicator changes;
+- strict survivors require fresh/frozen validation before product translation;
+- every director queue is audited before it can be applied;
+- no director output may change production formulas, states, scores, rankings,
+  or TradingView defaults.
+
+The current first use case is decomposing the `deep_reset_regime_reclaim_entry`
+lead from the targeted bullish pilot: reset depth, reclaim timing, compression,
+warning absence, parent context, timeframe transfer, entry lag, and cooldown.
+
 ## Agent Checkpoints
 
 Use agents after evidence accumulates, not after every run.

@@ -60,6 +60,23 @@ from .lab_supervisor import (
     run_supervised_epochs,
     supervise_latest_epoch,
 )
+from .lab_ops import (
+    LAB_OPS_REPORT_ROOT,
+    LAB_OPS_RUNTIME_ROOT,
+    LabOpsOptions,
+    run_lab_ops_plan,
+    run_lab_ops_report,
+    run_lab_ops_run,
+    run_lab_ops_status,
+    run_lab_ops_stop,
+)
+from .meta_research import (
+    DEFAULT_META_REPORT_ROOT,
+    LabMetaOptions,
+    read_latest_meta_status,
+    run_lab_meta_inspect,
+    run_lab_meta_plan,
+)
 from .reports import (
     export_event_study_reports,
     export_flow_graph_reports,
@@ -1593,6 +1610,139 @@ def lab_director_command(args: argparse.Namespace) -> int:
     return 1
 
 
+def _lab_director_options_from_args(args: argparse.Namespace) -> LabDirectorOptions:
+    return LabDirectorOptions(
+        state_path=Path(args.state),
+        runtime_queue_path=Path(args.runtime_queue),
+        concept_scoreboard_path=Path(args.concept_scoreboard),
+        evidence_ledger_path=Path(args.evidence_ledger),
+        report_root=Path(args.report_root),
+        director_report_root=Path(args.director_report_root),
+        output_queue_path=Path(args.output_queue),
+        generated_grid_dir=Path(args.generated_grid_dir),
+        objective=args.objective,
+        max_new_hypotheses=args.max_new_hypotheses,
+        source_root=Path(args.source_root),
+        apply=getattr(args, "apply", False),
+        apply_to_runtime=getattr(args, "apply_to_runtime", False),
+    )
+
+
+def lab_meta_command(args: argparse.Namespace) -> int:
+    action = args.lab_meta_action
+    director_options = _lab_director_options_from_args(args)
+    options = LabMetaOptions(
+        director_options=director_options,
+        meta_report_root=Path(args.meta_report_root),
+        snapshot_path=Path(args.snapshot) if getattr(args, "snapshot", None) else None,
+        session_id=getattr(args, "session_id", None),
+    )
+    try:
+        if action in {"inspect", "evaluate"}:
+            result = run_lab_meta_inspect(options)
+            print(f"Process score: {result['scorecard'].get('overall_process_score')}/100")
+            print(f"Failures: {', '.join(result['diagnosis'].get('failure_modes', [])) or 'none'}")
+            print(f"Scorecard: {result['paths']['scorecard']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0
+        if action in {"plan", "recommend", "report", "replay"}:
+            result = run_lab_meta_plan(options)
+            intervention = result.get("intervention") or {}
+            audit = result.get("audit") or {}
+            print(f"Process score: {result['scorecard'].get('overall_process_score')}/100")
+            print(f"Intervention: {intervention.get('intervention_type')}")
+            print(f"Meta audit passed: {audit.get('passed')}")
+            if audit.get("errors"):
+                print("Meta audit errors:")
+                for error in audit["errors"]:
+                    print(f"- {error}")
+            print(f"Scorecard: {result['paths']['scorecard']}")
+            print(f"Intervention plan: {result['paths'].get('intervention')}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if audit.get("passed") else 1
+        if action == "status":
+            print(read_latest_meta_status(Path(args.meta_report_root)))
+            return 0
+    except Exception as exc:
+        print(f"Lab meta {action} failed: {exc}")
+        return 1
+    print(f"Unknown lab-meta action: {action}")
+    return 1
+
+
+def _lab_ops_options_from_args(args: argparse.Namespace) -> LabOpsOptions:
+    return LabOpsOptions(
+        objective=getattr(args, "objective", "bullish-positive"),
+        run_id=getattr(args, "run_id", None),
+        queue_path=Path(getattr(args, "queue", DEFAULT_DIRECTOR_QUEUE_PATH)),
+        config_path=Path(getattr(args, "config", "configs/meme_universe.yaml")),
+        data_dir=Path(getattr(args, "data_dir", "data/raw")),
+        timeframes=tuple(getattr(args, "timeframes", ["1d", "12h", "4h", "1h"])),
+        max_epochs=getattr(args, "max_epochs", 50),
+        epoch_size=getattr(args, "epoch_size", 5),
+        director_checkpoint_epochs=getattr(args, "director_checkpoint_epochs", 2),
+        max_hours=getattr(args, "max_hours", None),
+        min_sample_size=getattr(args, "min_sample_size", 20),
+        entry_lag_bars=getattr(args, "entry_lag_bars", 1),
+        cooldown_bars=getattr(args, "cooldown_bars", None),
+        strict_referee=getattr(args, "strict_referee", True),
+        strict_null_iterations=getattr(args, "strict_null_iterations", 300),
+        strict_random_seed=getattr(args, "strict_random_seed", 29),
+        checkpoint_interval=getattr(args, "checkpoint_interval", 5),
+        max_errors=getattr(args, "max_errors", 10),
+        max_generated_artifact_mb=getattr(args, "max_generated_artifact_mb", 5000),
+        apply=getattr(args, "apply", False),
+        resume=getattr(args, "resume", False),
+        dry_run=getattr(args, "dry_run", False),
+        source_root=Path(getattr(args, "source_root", ".")),
+        report_root=Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)),
+        runtime_root=Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)),
+        supervisor_policy_path=Path(getattr(args, "supervisor_policy", DEFAULT_SUPERVISOR_POLICY_PATH)),
+        max_new_hypotheses=getattr(args, "max_new_hypotheses", 30),
+    )
+
+
+def lab_ops_command(args: argparse.Namespace) -> int:
+    action = args.lab_ops_action
+    options = _lab_ops_options_from_args(args)
+    try:
+        if action in {"resume", "status", "report", "stop"} and not args.run_id:
+            print(f"lab-ops {action} requires --run-id")
+            return 1
+        if action == "plan":
+            result = run_lab_ops_plan(options)
+            print(f"Run id: {result['run_id']}")
+            print(f"Manifest: {result['paths']['manifest']}")
+            print(f"Status: {result['paths']['status']}")
+            return 0
+        if action in {"run", "resume"}:
+            options = LabOpsOptions(**{**options.__dict__, "resume": action == "resume" or options.resume})
+            result = run_lab_ops_run(options)
+            print(f"Run id: {result['run_id']}")
+            print(f"Status: {result['status']}")
+            print(f"Stop reason: {result['stop_reason']}")
+            print(f"Completed epochs: {result['completed_epochs']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if result["status"] in {"completed", "stopped"} else 1
+        if action == "status":
+            result = run_lab_ops_status(options, run_id=args.run_id)
+            print(result["status_text"])
+            return 0
+        if action == "report":
+            result = run_lab_ops_report(options, run_id=args.run_id)
+            print(f"Report: {result['paths']['report']}")
+            return 0
+        if action == "stop":
+            result = run_lab_ops_stop(options, run_id=args.run_id, reason=args.reason)
+            print(f"Stop requested: {result['stop_request']}")
+            return 0
+    except Exception as exc:
+        print(f"Lab ops {action} failed: {exc}")
+        return 1
+    print(f"Unknown lab-ops action: {action}")
+    return 1
+
+
 def resample_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -2502,6 +2652,142 @@ def build_parser() -> argparse.ArgumentParser:
     )
     director_run.set_defaults(apply_to_runtime=True)
     director_run.set_defaults(func=lab_director_command)
+
+    lab_meta = subparsers.add_parser(
+        "lab-meta",
+        help="Score whether the research process is learning and recommend the next intervention.",
+    )
+    lab_meta_subparsers = lab_meta.add_subparsers(dest="lab_meta_action", required=True)
+
+    def add_lab_meta_common(command: argparse.ArgumentParser) -> None:
+        add_lab_director_common(command)
+        command.add_argument(
+            "--meta-report-root",
+            default=str(DEFAULT_META_REPORT_ROOT),
+            help="Directory for generated lab-meta artifacts.",
+        )
+        command.add_argument(
+            "--session-id",
+            default=None,
+            help="Optional lab-meta output session id override.",
+        )
+
+    for action_name, help_text in (
+        ("inspect", "Build a process scorecard without choosing an intervention."),
+        ("evaluate", "Alias for inspect."),
+        ("plan", "Build a scorecard and audited process intervention plan."),
+        ("recommend", "Alias for plan."),
+        ("report", "Write a plain-English meta-research report."),
+    ):
+        command = lab_meta_subparsers.add_parser(action_name, help=help_text)
+        add_lab_meta_common(command)
+        command.add_argument("--snapshot", default=None, help="Optional existing lab-director snapshot directory.")
+        command.set_defaults(func=lab_meta_command)
+
+    meta_replay = lab_meta_subparsers.add_parser(
+        "replay",
+        help="Run the meta evaluator against an existing lab-director artifact snapshot.",
+    )
+    add_lab_meta_common(meta_replay)
+    meta_replay.add_argument("--snapshot", required=True, help="Lab-director artifact directory to replay.")
+    meta_replay.set_defaults(func=lab_meta_command)
+
+    meta_status = lab_meta_subparsers.add_parser("status", help="Print the latest lab-meta status.")
+    add_lab_meta_common(meta_status)
+    meta_status.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)
+    meta_status.set_defaults(func=lab_meta_command)
+
+    lab_ops = subparsers.add_parser(
+        "lab-ops",
+        help="Plan, run, resume, and report autonomous Riskflow lab runs.",
+    )
+    lab_ops_subparsers = lab_ops.add_subparsers(dest="lab_ops_action", required=True)
+
+    def add_lab_ops_common(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--objective", choices=sorted(LAB_OBJECTIVES), default="bullish-positive")
+        command.add_argument("--run-id", default=None, help="Autonomous run id.")
+        command.add_argument("--queue", default=str(DEFAULT_DIRECTOR_QUEUE_PATH), help="Seed queue YAML.")
+        command.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+        command.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+        command.add_argument(
+            "--timeframes",
+            nargs="+",
+            default=["1d", "12h", "4h", "1h"],
+            help="Timeframes to run each executable hypothesis across.",
+        )
+        command.add_argument("--max-epochs", type=int, default=50, help="Maximum supervised epochs to run.")
+        command.add_argument("--epoch-size", type=int, default=5, help="Completed loops per supervised epoch.")
+        command.add_argument(
+            "--director-checkpoint-epochs",
+            type=int,
+            default=2,
+            help="Run the director/meta checkpoint after this many supervised epochs.",
+        )
+        command.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap.")
+        command.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
+        command.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
+        command.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
+        command.add_argument("--strict-referee", dest="strict_referee", action="store_true", default=True)
+        command.add_argument("--no-strict-referee", dest="strict_referee", action="store_false")
+        command.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
+        command.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+        command.add_argument("--checkpoint-interval", type=int, default=5, help="Lab-loop checkpoint interval.")
+        command.add_argument("--max-errors", type=int, default=10, help="Maximum block-level errors before failing.")
+        command.add_argument(
+            "--max-generated-artifact-mb",
+            type=int,
+            default=5000,
+            help="Generated artifact megabyte cap before stopping.",
+        )
+        command.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+        command.add_argument("--source-root", default=".", help="Root used to resolve relative source paths.")
+        command.add_argument(
+            "--ops-report-root",
+            default=str(LAB_OPS_REPORT_ROOT),
+            help="Directory for lab-ops generated reports.",
+        )
+        command.add_argument(
+            "--ops-runtime-root",
+            default=str(LAB_OPS_RUNTIME_ROOT),
+            help="Directory for lab-ops generated runtime state.",
+        )
+        command.add_argument(
+            "--supervisor-policy",
+            default=str(DEFAULT_SUPERVISOR_POLICY_PATH),
+            help="Optional meta-supervisor policy YAML path.",
+        )
+        command.add_argument("--max-new-hypotheses", type=int, default=30, help="Maximum director hypotheses per checkpoint.")
+
+    ops_plan = lab_ops_subparsers.add_parser("plan", help="Plan an autonomous run without mutating runtime queues.")
+    add_lab_ops_common(ops_plan)
+    ops_plan.set_defaults(func=lab_ops_command)
+
+    ops_run = lab_ops_subparsers.add_parser("run", help="Run an autonomous lab session.")
+    add_lab_ops_common(ops_run)
+    ops_run.add_argument("--apply", action="store_true", help="Allow run-scoped runtime queue/state mutations.")
+    ops_run.set_defaults(func=lab_ops_command)
+
+    ops_resume = lab_ops_subparsers.add_parser("resume", help="Resume an existing autonomous lab session.")
+    add_lab_ops_common(ops_resume)
+    ops_resume.add_argument("--apply", action="store_true", help="Allow run-scoped runtime queue/state mutations.")
+    ops_resume.add_argument("--resume", action="store_true", default=True, help=argparse.SUPPRESS)
+    ops_resume.set_defaults(func=lab_ops_command)
+
+    ops_status = lab_ops_subparsers.add_parser("status", help="Print autonomous run status.")
+    add_lab_ops_common(ops_status)
+    ops_status.add_argument("--apply", action="store_true", default=False, help=argparse.SUPPRESS)
+    ops_status.set_defaults(func=lab_ops_command)
+
+    ops_report = lab_ops_subparsers.add_parser("report", help="Write/read autonomous run final report.")
+    add_lab_ops_common(ops_report)
+    ops_report.add_argument("--apply", action="store_true", default=False, help=argparse.SUPPRESS)
+    ops_report.set_defaults(func=lab_ops_command)
+
+    ops_stop = lab_ops_subparsers.add_parser("stop", help="Request a graceful stop for an autonomous run.")
+    add_lab_ops_common(ops_stop)
+    ops_stop.add_argument("--reason", default="user_requested", help="Stop reason to write into stop.request.")
+    ops_stop.add_argument("--apply", action="store_true", default=False, help=argparse.SUPPRESS)
+    ops_stop.set_defaults(func=lab_ops_command)
 
     mtf_research = subparsers.add_parser("mtf-research", help="Run Layer 8 multi-timeframe context research.")
     mtf_research.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")

@@ -314,6 +314,56 @@ The current first use case is decomposing the `deep_reset_regime_reclaim_entry`
 lead from the targeted bullish pilot: reset depth, reclaim timing, compression,
 warning absence, parent context, timeframe transfer, entry lag, and cooldown.
 
+## Meta-Research And Lab Ops
+
+`lab-meta` scores whether the research process itself is learning. It reads the
+director evidence mart, belief graph, plan, and audit, then writes:
+
+- `process_scorecard.yaml`;
+- `process_diagnosis.yaml`;
+- `process_intervention_plan.yaml`;
+- `meta_audit.yaml`;
+- `meta_research_report.md`.
+
+Use it to decide whether the lab should continue, decompose, validate, broaden,
+add controls, request fresh data, request visual review, or stop saturated
+research:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-meta inspect
+PYTHONPATH=src python3 -m riskflow lab-meta plan \
+  --objective bullish-positive
+PYTHONPATH=src python3 -m riskflow lab-meta replay \
+  --snapshot reports/lab_director/<session>
+```
+
+The meta layer measures process quality only. It does not promote product logic
+and it does not change production formulas, states, scores, rankings, or
+TradingView defaults.
+
+`lab-ops` is the long-run wrapper for unattended research. It creates a
+run-scoped runtime queue/state directory, checkpoints every director block,
+runs `lab-meta`, and stops with explicit machine-readable reasons:
+
+```bash
+PYTHONPATH=src python3 -m riskflow lab-ops plan \
+  --objective bullish-positive \
+  --max-epochs 200 \
+  --epoch-size 5
+
+PYTHONPATH=src python3 -m riskflow lab-ops run \
+  --objective bullish-positive \
+  --max-epochs 200 \
+  --epoch-size 5 \
+  --director-checkpoint-epochs 2 \
+  --strict-referee \
+  --apply
+```
+
+Generated ops artifacts live under `reports/lab_ops/` and run-scoped mutable
+state lives under `research/lab_loop/autonomous_runs/`. These are generated
+research artifacts, not production configuration.
+
 ## Agent Checkpoints
 
 Use agents after evidence accumulates, not after every run.

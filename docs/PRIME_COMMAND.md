@@ -168,6 +168,8 @@ Some layers are implemented in `src/riskflow/`, some are research-only sidecars,
 - L8 Multi-Timeframe Context: optional completed-candle MTF sidecar.
 - L9 Capital-Flow Graph: optional table-based nodes/edges/chains, not literal fund-flow proof.
 - L10 Transition Evidence: observed historical state-transition tendencies, not production probabilities.
+- Lab Meta: deterministic research-process scoring and intervention recommendations.
+- Lab Ops: run-scoped autonomous lab orchestration for long, resumable research runs.
 
 Important downstream rule:
 

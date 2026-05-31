@@ -390,6 +390,32 @@ Generated ops artifacts live under `reports/lab_ops/` and run-scoped mutable
 state lives under `research/lab_loop/autonomous_runs/`. These are generated
 research artifacts, not production configuration.
 
+## CEO Autopilot
+
+`ceo` is the executive layer above governed `lab-ops`. Use it when Codex should
+actively supervise Riskflow as a company-style research/product system rather
+than launch one long script-governed run.
+
+```bash
+PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo plan --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply
+PYTHONPATH=src python3 -m riskflow ceo review --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo report --run-id <run_id>
+```
+
+The default CEO block is two supervised epochs of five loops each. After each
+block, the CEO layer writes `reports/ceo_runs/<run_id>/` artifacts that separate
+research-infra delta, understanding delta, chart-facing product delta, risk
+register, knowledge-graph delta, and the executive decision packet. A block is
+not considered useful merely because loops ran; it must improve one of those
+buckets or stop with a clear reason.
+
+CEO mode may build sidecar and shadow product candidates, but product-facing
+changes still require explicit promotion approval. It must not silently change
+`core_signal_v0`, Pine/TradingView defaults, production scores, state labels, or
+leaderboard ranking.
+
 Standalone governance tools are available for auditing existing director
 artifacts:
 

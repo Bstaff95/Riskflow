@@ -243,16 +243,19 @@ Current grammar primitive families:
 
 Current active checkpoint:
 
-The Grammar Candidate Sprint now has a lab-loop runner, meta-supervisor, and
-first lab-director layer. The next research operating mode is to run supervised
-epoch blocks, use `lab-director inspect` / `lab-director plan-next` to convert
-evidence into beliefs and sharper queues, then run the audited next queue. This
-is not a production ranking, state, score, or TradingView formula change.
+The Grammar Candidate Sprint now has lab-loop, lab-director, lab-meta,
+governed lab-ops, and a first CEO autopilot layer. The preferred operating mode
+for strategic autonomous work is to run bounded CEO blocks with
+`python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply`,
+then inspect the CEO decision packet before continuing. The CEO layer separates
+research-infra delta, understanding delta, and chart-facing product delta. It is
+not a production ranking, state, score, or TradingView formula change.
 
 Current next implementation mission:
 
-Use the lab director to make the Signal Grammar Lab self-improving: evidence
-mart -> belief graph -> audited experiment plan -> next queue.
+Use the CEO layer to make Riskflow improvement compound: bounded governed lab
+block -> executive decision packet -> champion/challenger product-delta review
+or research-infra/knowledge-map improvement -> next justified block.
 
 Start with measurable features/events such as:
 

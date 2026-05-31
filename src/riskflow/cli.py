@@ -77,6 +77,16 @@ from .lab_ops import (
     run_lab_ops_status,
     run_lab_ops_stop,
 )
+from .ceo_ops import (
+    CEO_REPORT_ROOT,
+    CeoOpsOptions,
+    run_ceo_lab_status_text,
+    run_ceo_plan,
+    run_ceo_report,
+    run_ceo_review,
+    run_ceo_run_block,
+    run_ceo_status,
+)
 from .meta_research import (
     DEFAULT_META_REPORT_ROOT,
     LabMetaOptions,
@@ -1758,6 +1768,91 @@ def lab_ops_command(args: argparse.Namespace) -> int:
     return 1
 
 
+def _ceo_options_from_args(args: argparse.Namespace) -> CeoOpsOptions:
+    return CeoOpsOptions(
+        objective=getattr(args, "objective", "bullish-positive"),
+        run_id=getattr(args, "run_id", None),
+        lab_run_id=getattr(args, "lab_run_id", None),
+        queue_path=Path(getattr(args, "queue", DEFAULT_DIRECTOR_QUEUE_PATH)),
+        config_path=Path(getattr(args, "config", "configs/meme_universe.yaml")),
+        data_dir=Path(getattr(args, "data_dir", "data/raw")),
+        timeframes=tuple(getattr(args, "timeframes", ["1d", "12h", "4h", "1h"])),
+        block_epochs=getattr(args, "block_epochs", 2),
+        epoch_size=getattr(args, "epoch_size", 5),
+        max_hours=getattr(args, "max_hours", None),
+        min_sample_size=getattr(args, "min_sample_size", 20),
+        entry_lag_bars=getattr(args, "entry_lag_bars", 1),
+        cooldown_bars=getattr(args, "cooldown_bars", None),
+        strict_referee=getattr(args, "strict_referee", True),
+        strict_null_iterations=getattr(args, "strict_null_iterations", 300),
+        strict_random_seed=getattr(args, "strict_random_seed", 29),
+        checkpoint_interval=getattr(args, "checkpoint_interval", 5),
+        apply=getattr(args, "apply", False),
+        resume=getattr(args, "resume", False),
+        dry_run=getattr(args, "dry_run", False),
+        source_root=Path(getattr(args, "source_root", ".")),
+        report_root=Path(getattr(args, "ceo_report_root", CEO_REPORT_ROOT)),
+        lab_ops_report_root=Path(getattr(args, "ops_report_root", LAB_OPS_REPORT_ROOT)),
+        lab_ops_runtime_root=Path(getattr(args, "ops_runtime_root", LAB_OPS_RUNTIME_ROOT)),
+        max_new_hypotheses=getattr(args, "max_new_hypotheses", 30),
+    )
+
+
+def ceo_command(args: argparse.Namespace) -> int:
+    action = args.ceo_action
+    options = _ceo_options_from_args(args)
+    try:
+        if action in {"review", "report"} and not args.run_id:
+            print(f"ceo {action} requires --run-id")
+            return 1
+        if action == "status":
+            result = run_ceo_status(options)
+            status = result["company_status"]
+            lab_status = status.get("lab_status", {})
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Lab status: {lab_status.get('status')}")
+            print(f"Stop reason: {lab_status.get('stop_reason')}")
+            open_lanes = status.get("governance", {}).get("open_lanes", [])
+            print(f"Open lanes: {', '.join(open_lanes) or 'none'}")
+            print(f"True blocker: {status.get('true_blocker')}")
+            if getattr(args, "show_lab_status", False):
+                print(run_ceo_lab_status_text(options))
+            return 0
+        if action == "plan":
+            result = run_ceo_plan(options)
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Plan: {result['paths']['plan']}")
+            print(f"Decision: {result['plan']['recommended_decision']['decision']}")
+            return 0
+        if action == "run-block":
+            result = run_ceo_run_block(options)
+            review = result["review"]
+            lab_result = result["lab_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Lab status: {lab_result['status']}")
+            print(f"Lab stop reason: {lab_result['stop_reason']}")
+            print(f"CEO decision: {review['decision']['decision']}")
+            print(f"Decision packet: {review['paths']['latest_decision_packet']}")
+            return 0 if lab_result["status"] in {"completed", "stopped"} else 1
+        if action == "review":
+            result = run_ceo_review(options)
+            print(f"CEO decision: {result['decision']['decision']}")
+            print(f"Decision packet: {result['paths']['latest_decision_packet']}")
+            return 0
+        if action == "report":
+            result = run_ceo_report(options)
+            print(f"CEO report: {result['paths']['report']}")
+            return 0
+    except Exception as exc:
+        print(f"CEO {action} failed: {exc}")
+        return 1
+    print(f"Unknown ceo action: {action}")
+    return 1
+
+
 def _latest_director_snapshot(args: argparse.Namespace) -> tuple[Path, Path]:
     evidence_mart = getattr(args, "evidence_mart", None)
     belief_graph = getattr(args, "belief_graph", None)
@@ -3003,6 +3098,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generated research map status report root.",
     )
     research_map_update.set_defaults(func=research_map_command)
+
+    ceo = subparsers.add_parser(
+        "ceo",
+        help="Operate the Riskflow CEO autopilot layer for bounded executive-supervised improvement blocks.",
+    )
+    ceo_subparsers = ceo.add_subparsers(dest="ceo_action", required=True)
+
+    def add_ceo_common(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--objective", choices=sorted(LAB_OBJECTIVES), default="bullish-positive")
+        command.add_argument("--run-id", default=None, help="CEO run id.")
+        command.add_argument("--lab-run-id", default=None, help="Underlying lab-ops run id.")
+        command.add_argument("--queue", default=str(DEFAULT_DIRECTOR_QUEUE_PATH), help="Seed queue YAML.")
+        command.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+        command.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+        command.add_argument(
+            "--timeframes",
+            nargs="+",
+            default=["1d", "12h", "4h", "1h"],
+            help="Timeframes to run each executable hypothesis across.",
+        )
+        command.add_argument("--block-epochs", type=int, default=2, help="Supervised epochs per CEO block.")
+        command.add_argument("--epoch-size", type=int, default=5, help="Completed loops per supervised epoch.")
+        command.add_argument("--max-hours", type=float, default=None, help="Optional wall-clock hour cap.")
+        command.add_argument("--min-sample-size", type=int, default=20, help="Minimum sample size for search classification.")
+        command.add_argument("--entry-lag-bars", type=int, default=1, help="Bars after event before measuring outcomes.")
+        command.add_argument("--cooldown-bars", type=int, default=None, help="Optional shared cooldown across timeframes.")
+        command.add_argument("--strict-referee", dest="strict_referee", action="store_true", default=True)
+        command.add_argument("--no-strict-referee", dest="strict_referee", action="store_false")
+        command.add_argument("--strict-null-iterations", type=int, default=300, help="Strict referee null iterations.")
+        command.add_argument("--strict-random-seed", type=int, default=29, help="Strict referee random seed.")
+        command.add_argument("--checkpoint-interval", type=int, default=5, help="Lab-loop checkpoint interval.")
+        command.add_argument("--dry-run", action="store_true", help="Create loop state/report without executing searches.")
+        command.add_argument("--resume", action="store_true", help="Resume the underlying run-scoped lab state.")
+        command.add_argument("--source-root", default=".", help="Root used to resolve relative source paths.")
+        command.add_argument("--ceo-report-root", default=str(CEO_REPORT_ROOT), help="Directory for CEO reports.")
+        command.add_argument("--ops-report-root", default=str(LAB_OPS_REPORT_ROOT), help="Directory for lab-ops reports.")
+        command.add_argument("--ops-runtime-root", default=str(LAB_OPS_RUNTIME_ROOT), help="Directory for lab-ops runtime state.")
+        command.add_argument("--max-new-hypotheses", type=int, default=30, help="Maximum director hypotheses per checkpoint.")
+
+    ceo_status = ceo_subparsers.add_parser("status", help="Print CEO-level company status.")
+    add_ceo_common(ceo_status)
+    ceo_status.add_argument("--show-lab-status", action="store_true", help="Also print underlying lab-ops status text.")
+    ceo_status.set_defaults(func=ceo_command)
+
+    ceo_plan = ceo_subparsers.add_parser("plan", help="Write a CEO plan without running a block.")
+    add_ceo_common(ceo_plan)
+    ceo_plan.set_defaults(func=ceo_command)
+
+    ceo_run_block = ceo_subparsers.add_parser("run-block", help="Run one bounded governed CEO research block.")
+    add_ceo_common(ceo_run_block)
+    ceo_run_block.add_argument("--apply", action="store_true", help="Allow run-scoped lab queue/state mutations.")
+    ceo_run_block.set_defaults(func=ceo_command)
+
+    ceo_review = ceo_subparsers.add_parser("review", help="Write a CEO decision packet from latest lab artifacts.")
+    add_ceo_common(ceo_review)
+    ceo_review.set_defaults(func=ceo_command)
+
+    ceo_report = ceo_subparsers.add_parser("report", help="Write the final CEO report.")
+    add_ceo_common(ceo_report)
+    ceo_report.set_defaults(func=ceo_command)
 
     lab_ops = subparsers.add_parser(
         "lab-ops",

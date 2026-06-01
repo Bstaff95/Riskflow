@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -462,6 +463,201 @@ def build_champion_challenger_action_plan(product_delta: dict[str, Any]) -> dict
     }
 
 
+def _safe_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+def _first_present(row: dict[str, Any], names: tuple[str, ...]) -> float | None:
+    for name in names:
+        value = _safe_float(row.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def _ranked_metric_summary(ranked_path: Path, *, product_role: str) -> dict[str, Any]:
+    if not ranked_path.exists():
+        return {}
+    rows: list[dict[str, Any]] = []
+    with ranked_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            rows.append(row)
+    if not rows:
+        return {}
+    useful = [row for row in rows if str(row.get("classification", "")).lower() in {"useful", "watchlist"}]
+    candidate_rows = useful or rows
+
+    def avg(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    medians = [
+        value
+        for row in candidate_rows
+        if (value := _first_present(row, ("median_forward_relative_return_secondary", "median_forward_relative_return_30"))) is not None
+    ]
+    hit_rates = [
+        value
+        for row in candidate_rows
+        if (value := _first_present(row, ("hit_rate_forward_relative_return_primary", "hit_rate_forward_relative_return_30"))) is not None
+    ]
+    drawdowns = [value for row in candidate_rows if (value := _safe_float(row.get("median_max_drawdown"))) is not None]
+    mfes = [value for row in candidate_rows if (value := _safe_float(row.get("median_max_favorable_excursion"))) is not None]
+    ratios = [value for row in candidate_rows if (value := _safe_float(row.get("median_mfe_mae_ratio"))) is not None]
+    sample_sizes = [value for row in candidate_rows if (value := _safe_float(row.get("sample_size"))) is not None]
+    unique_symbols = [value for row in candidate_rows if (value := _safe_float(row.get("unique_symbols"))) is not None]
+    event_clusters = [value for row in candidate_rows if (value := _safe_float(row.get("unique_event_clusters"))) is not None]
+    best_ranked = sorted(
+        candidate_rows,
+        key=lambda row: _safe_float(row.get("rank_score")) or 0.0,
+        reverse=True,
+    )[0]
+    baseline_medians = [
+        value
+        for row in rows
+        if (value := _first_present(row, ("median_forward_relative_return_secondary", "median_forward_relative_return_30"))) is not None
+    ]
+    baseline_hit_rates = [
+        value
+        for row in rows
+        if (value := _first_present(row, ("hit_rate_forward_relative_return_primary", "hit_rate_forward_relative_return_30"))) is not None
+    ]
+    average_median = avg(medians)
+    baseline_median = avg(baseline_medians)
+    baseline_hit_rate = avg(baseline_hit_rates)
+    best_median = max(medians) if medians else None
+    worst_median = min(medians) if medians else None
+    role = str(product_role)
+    if role == "warning_blocker":
+        challenger_for_delta = worst_median if worst_median is not None else average_median
+        baseline_for_delta = baseline_median if baseline_median is not None else 0.0
+        role_delta = (baseline_for_delta - challenger_for_delta) if challenger_for_delta is not None else None
+        missed_upside_cost = max(0.0, best_median or 0.0)
+        avoided_downside_benefit = max(0.0, role_delta or 0.0)
+        role_decision = (
+            "shadow_challenger_promising"
+            if avoided_downside_benefit > 0 and missed_upside_cost <= avoided_downside_benefit
+            else "needs_fresh_or_control_validation"
+        )
+    else:
+        role_delta = (average_median - baseline_median) if average_median is not None and baseline_median is not None else None
+        missed_upside_cost = None
+        avoided_downside_benefit = None
+        role_decision = (
+            "shadow_challenger_promising"
+            if role_delta is not None and role_delta > 0
+            else "needs_fresh_or_control_validation"
+        )
+    return {
+        "row_count": len(rows),
+        "useful_or_watchlist_rows": len(useful),
+        "best_variant_id": best_ranked.get("variant_id", ""),
+        "best_family_id": best_ranked.get("family_id", ""),
+        "timeframe": best_ranked.get("timeframe", ""),
+        "classification": best_ranked.get("classification", ""),
+        "rank_score": _safe_float(best_ranked.get("rank_score")),
+        "median_forward_relative_return": average_median,
+        "champion_baseline_median_forward_relative_return": baseline_median,
+        "champion_baseline_hit_rate": baseline_hit_rate,
+        "role_delta_vs_champion_baseline": role_delta,
+        "best_median_forward_relative_return": best_median,
+        "worst_median_forward_relative_return": worst_median,
+        "hit_rate": avg(hit_rates),
+        "median_max_drawdown": avg(drawdowns),
+        "median_max_favorable_excursion": avg(mfes),
+        "mfe_mae_ratio": avg(ratios),
+        "sample_size": avg(sample_sizes),
+        "unique_symbols": avg(unique_symbols),
+        "event_diversity": avg(event_clusters),
+        "missed_upside_cost": missed_upside_cost,
+        "avoided_downside_benefit": avoided_downside_benefit,
+        "role_decision": role_decision,
+        "champion_baseline_method": "same_source_all_ranked_variants_proxy",
+        "production_effect": "none",
+    }
+
+
+def _research_map_nodes_by_id(governance: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    research_map = governance.get("research_map", {}) or {}
+    return {str(node.get("id", "")): node for node in research_map.get("nodes", []) or []}
+
+
+def _loop_dirs_for_lab(options: CeoOpsOptions, lab_run_id: str) -> list[Path]:
+    lab_loop_root = _lab_root(options, lab_run_id) / "lab_loop"
+    if not lab_loop_root.exists():
+        return []
+    return sorted({path.parent for path in lab_loop_root.glob("**/bullish_evidence.yaml")})
+
+
+def _loop_matches_roots(loop_dir: Path, root_ids: set[str], belief_id: str) -> bool:
+    evidence = _load_yaml_if_exists(loop_dir / "bullish_evidence.yaml")
+    hypothesis_id = str(evidence.get("hypothesis_id", ""))
+    if hypothesis_id and hypothesis_id in root_ids:
+        return True
+    if hypothesis_id and belief_id and belief_id in hypothesis_id:
+        return True
+    hypothesis_path = loop_dir / "hypothesis.yaml"
+    if not hypothesis_path.exists():
+        return False
+    text = hypothesis_path.read_text(encoding="utf-8")
+    return any(root_id and root_id in text for root_id in root_ids)
+
+
+def attach_metric_sources_to_action_plan(
+    action_plan: dict[str, Any],
+    governance: dict[str, Any],
+    options: CeoOpsOptions,
+    lab_run_id: str,
+    *,
+    max_sources_per_item: int = 5,
+) -> dict[str, Any]:
+    nodes_by_id = _research_map_nodes_by_id(governance)
+    loop_dirs = _loop_dirs_for_lab(options, lab_run_id)
+    enriched_items: list[dict[str, Any]] = []
+    for item in action_plan.get("work_items", []) or []:
+        belief_id = str(item.get("belief_id", ""))
+        node = nodes_by_id.get(belief_id, {})
+        root_ids = {str(root_id) for root_id in node.get("root_ids", []) or [] if root_id}
+        matches = [loop_dir for loop_dir in loop_dirs if _loop_matches_roots(loop_dir, root_ids, belief_id)]
+        sources: list[dict[str, Any]] = []
+        for loop_dir in matches[:max_sources_per_item]:
+            ranked_path = loop_dir / "grammar_search_ranked.csv"
+            source = {
+                "loop_dir": str(loop_dir),
+                "hypothesis": str(loop_dir / "hypothesis.yaml"),
+                "bullish_evidence": str(loop_dir / "bullish_evidence.yaml"),
+                "ranked": str(ranked_path),
+                "variant_records": str(loop_dir / "grammar_search_variant_records.csv"),
+                "strict_referee": str(loop_dir / "strict_referee.csv"),
+                "metric_summary": _ranked_metric_summary(ranked_path, product_role=str(item.get("product_role", ""))),
+            }
+            sources.append(source)
+        enriched = dict(item)
+        enriched["research_map_node"] = {
+            "status": node.get("status", ""),
+            "setup_class": node.get("setup_class", ""),
+            "timeframes": node.get("timeframes", []),
+            "root_id_count": len(root_ids),
+        }
+        enriched["metric_sources"] = sources
+        enriched["source_match_status"] = "matched" if sources else "missing"
+        enriched_items.append(enriched)
+    enriched_plan = dict(action_plan)
+    enriched_plan["work_items"] = enriched_items
+    enriched_plan["metric_source_status"] = (
+        "attached" if any(item.get("metric_sources") for item in enriched_items) else "missing"
+    )
+    enriched_plan["metric_source_count"] = sum(len(item.get("metric_sources", []) or []) for item in enriched_items)
+    enriched_plan["production_effect"] = "none"
+    return enriched_plan
+
+
 def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int | None = None) -> dict[str, Any]:
     work_items = list(action_plan.get("work_items", []) or [])
     if top_n is not None:
@@ -474,6 +670,14 @@ def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int
         status = "metric_source_missing" if not metric_sources else "ready_for_metric_comparison"
         if status == "metric_source_missing":
             missing_metric_sources.append(belief_id)
+        source_summaries = [source.get("metric_summary", {}) for source in metric_sources]
+        source_decisions = {str(summary.get("role_decision", "")) for summary in source_summaries if summary}
+        if "shadow_challenger_promising" in source_decisions:
+            decision = "shadow_challenger_promising_needs_fresh_validation"
+        elif status == "metric_source_missing":
+            decision = "metric_source_extractor_required"
+        else:
+            decision = "needs_fresh_or_control_validation"
         results.append(
             {
                 "belief_id": belief_id,
@@ -484,11 +688,8 @@ def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int
                 "required_metrics": item.get("required_metrics", []),
                 "required_controls": item.get("required_controls", []),
                 "available_metric_sources": metric_sources,
-                "decision": (
-                    "capability_gap_required"
-                    if status == "metric_source_missing"
-                    else "run_metric_comparison_from_sources"
-                ),
+                "metric_summary": metric_sources[0].get("metric_summary", {}) if metric_sources else {},
+                "decision": decision,
                 "production_effect": "none",
             }
         )
@@ -496,7 +697,7 @@ def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int
     if results and missing_metric_sources:
         status = "blocked_missing_metric_sources"
     elif results:
-        status = "ready_for_metric_comparison"
+        status = "shadow_comparison_complete"
     return {
         "model": CEO_CHAMPION_CHALLENGER_RESULTS_MODEL,
         "generated_at": utc_now_iso(),
@@ -508,7 +709,7 @@ def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int
         "next_action": (
             "build_product_delta_metric_source_extractor"
             if missing_metric_sources
-            else "run_metric_comparison_from_sources"
+            else "run_fresh_or_control_validation_for_promising_shadow_challengers"
             if results
             else "broaden_product_candidate_source"
         ),
@@ -1015,7 +1216,9 @@ def run_ceo_champion_challenger(options: CeoOpsOptions, *, top_n: int | None = N
         governance = _load_latest_governance(options, lab_run_id)
         product_delta = build_product_delta_scoreboard(governance)
         action_plan = build_champion_challenger_action_plan(product_delta)
-        atomic_write_yaml(action_plan_path, action_plan)
+    governance = _load_latest_governance(options, lab_run_id)
+    action_plan = attach_metric_sources_to_action_plan(action_plan, governance, options, lab_run_id)
+    atomic_write_yaml(action_plan_path, action_plan)
     results = build_champion_challenger_results(action_plan, top_n=top_n)
     results_path = root / "champion_challenger_results.yaml"
     report_path = root / "champion_challenger_results.md"
@@ -1039,6 +1242,10 @@ def run_ceo_champion_challenger(options: CeoOpsOptions, *, top_n: int | None = N
         )
         capability_gap_path = root / "capability_gap.yaml"
         atomic_write_yaml(capability_gap_path, gap)
+    else:
+        stale_gap_path = root / "capability_gap.yaml"
+        if stale_gap_path.exists():
+            stale_gap_path.unlink()
     action_result = {
         "model": CEO_ACTION_RESULT_MODEL,
         "generated_at": utc_now_iso(),

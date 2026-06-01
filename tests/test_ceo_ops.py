@@ -8,6 +8,7 @@ import yaml
 import riskflow.ceo_ops as ceo_ops
 from riskflow.ceo_ops import (
     CeoOpsOptions,
+    attach_metric_sources_to_action_plan,
     build_champion_challenger_action_plan,
     build_product_delta_scoreboard,
     run_ceo_champion_challenger,
@@ -247,6 +248,63 @@ def test_ceo_champion_challenger_writes_gap_when_metric_sources_are_missing(tmp_
     assert action_result["decision"] == "run_champion_challenger"
     assert action_result["action_taken"] == "champion_challenger"
     assert action_result["production_effect"] == "none"
+
+
+def test_champion_challenger_attaches_metric_sources_from_research_map(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    lab_run_id = "ceo_test_lab"
+    loop_dir = tmp_path / "reports" / "lab_ops" / lab_run_id / "lab_loop" / "2026-06-01" / "session_a" / "loop_0001"
+    loop_dir.mkdir(parents=True, exist_ok=True)
+    (loop_dir / "bullish_evidence.yaml").write_text(
+        yaml.safe_dump({"hypothesis_id": "root_candidate_a", "contract_tier": "asymmetric_candidate"}),
+        encoding="utf-8",
+    )
+    (loop_dir / "hypothesis.yaml").write_text("families: []\n", encoding="utf-8")
+    (loop_dir / "grammar_search_ranked.csv").write_text(
+        "\n".join(
+            [
+                "variant_id,family_id,timeframe,classification,rank_score,median_forward_relative_return_secondary,hit_rate_forward_relative_return_primary,median_max_drawdown,median_max_favorable_excursion,median_mfe_mae_ratio,sample_size,unique_symbols,unique_event_clusters",
+                "variant_a,family_a,1d,useful,12.5,-0.08,0.42,-0.2,0.3,1.5,40,15,20",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    governance = {
+        "research_map": {
+            "nodes": [
+                {
+                    "id": "candidate_a",
+                    "status": "discovery_survivor",
+                    "setup_class": "candidate_setup",
+                    "timeframes": ["1d"],
+                    "root_ids": ["root_candidate_a"],
+                }
+            ]
+        }
+    }
+    action_plan = {
+        "champion": "core_signal_v0",
+        "work_items": [
+            {
+                "belief_id": "candidate_a",
+                "product_role": "warning_blocker",
+                "champion": "core_signal_v0",
+                "challenger": "core_signal_v0_plus_candidate_a",
+                "required_metrics": ["forward_relative_return_vs_basket"],
+            }
+        ],
+    }
+
+    enriched = attach_metric_sources_to_action_plan(action_plan, governance, options, lab_run_id)
+
+    source = enriched["work_items"][0]["metric_sources"][0]
+    assert enriched["metric_source_count"] == 1
+    assert source["bullish_evidence"].endswith("bullish_evidence.yaml")
+    assert source["metric_summary"]["champion_baseline_method"] == "same_source_all_ranked_variants_proxy"
+    assert source["metric_summary"]["avoided_downside_benefit"] == pytest.approx(0.0)
+    assert source["metric_summary"]["missed_upside_cost"] == pytest.approx(0.0)
+    assert enriched["production_effect"] == "none"
 
 
 def test_ceo_execute_next_runs_champion_challenger_not_another_lab_block(

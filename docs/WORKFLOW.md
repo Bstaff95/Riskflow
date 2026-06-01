@@ -30,6 +30,12 @@ At the start of future sessions, Codex should read:
 4. `docs/ROADMAP.md` for planning work
 5. `docs/WORKFLOW.md` for GitHub/Obsidian process
 
+For overnight or multi-hour CEO-mode heartbeat runs, also read:
+
+```text
+docs/CEO_HEARTBEAT_AUTONOMY.md
+```
+
 When major decisions are made, update the relevant docs file so future sessions inherit the decision.
 
 ## Git Workflow

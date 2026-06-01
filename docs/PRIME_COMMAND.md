@@ -20,6 +20,7 @@ Then read according to the task:
 - For planning/product work: docs/ROADMAP.md and docs/END_STATE.md.
 - For git, workflow, or Obsidian work: docs/WORKFLOW.md and docs/OBSIDIAN_MEMORY_POLICY.md.
 - For indicator/research/grammar work: docs/SIGNAL_GRAMMAR_LAB.md, docs/LAB_LOOP.md, and docs/VISUAL_INDICATOR_LEARNING_LOOP.md.
+- For CEO-mode, overnight, heartbeat, or autonomous Riskflow-improvement work: docs/CEO_HEARTBEAT_AUTONOMY.md.
 
 For deep handoff context, also read:
 
@@ -29,6 +30,7 @@ For deep handoff context, also read:
 - docs/END_STATE.md
 - docs/SIGNAL_GRAMMAR_LAB.md
 - docs/LAB_LOOP.md
+- docs/CEO_HEARTBEAT_AUTONOMY.md
 - docs/VISUAL_INDICATOR_LEARNING_LOOP.md
 - docs/OBSIDIAN_MEMORY_POLICY.md
 
@@ -244,19 +246,31 @@ Current grammar primitive families:
 Current active checkpoint:
 
 The Grammar Candidate Sprint now has lab-loop, lab-director, lab-meta,
-governed lab-ops, and a first CEO autopilot layer. The preferred operating mode
-for strategic autonomous work is a Codex-supervised heartbeat loop: inspect
-`python3 -m riskflow ceo heartbeat-status --run-id <run_id>` and the latest CEO
-decision packet, then run at most one binding CEO action with
-`python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply`.
+governed lab-ops, and a binding CEO autopilot layer. The preferred operating
+mode for strategic autonomous work is a Codex-supervised heartbeat loop: inspect
+`PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>`,
+`PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id> --show-lab-status`,
+and the latest CEO decision packet, then run at most one binding CEO action with
+`PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply`.
 The executor must follow the packet: champion/challenger decisions run
 champion/challenger preparation, governed-research decisions run one bounded
 block, and unsupported decisions write a capability-gap artifact instead of
 falling back to blind loop execution.
-Use `python3 -m riskflow ceo stop --run-id <run_id> --reason <reason>` to stop
-both the CEO run and its underlying lab runtime. The CEO layer separates
+Use `PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason <reason>`
+to stop both the CEO run and its underlying lab runtime. The CEO layer separates
 research-infra delta, understanding delta, and chart-facing product delta. It is
 not a production ranking, state, score, or TradingView formula change.
+For 8+ hour heartbeat runs, follow `docs/CEO_HEARTBEAT_AUTONOMY.md`; heartbeat
+prompts should point Codex there as the durable operating contract.
+
+Latest CEO run checkpoint as of 2026-06-01:
+
+- Run id: `ceo_supervised_chain_20260531`.
+- Lab run id: `ceo_supervised_chain_20260531_lab`.
+- The 8-hour heartbeat was stopped for `time_budget_elapsed`; stop files are expected under `reports/ceo_runs/ceo_supervised_chain_20260531/` and `research/lab_loop/autonomous_runs/ceo_supervised_chain_20260531_lab/`.
+- Latest binding action completed `run_champion_challenger` with `status: shadow_comparison_complete`.
+- `champion_challenger_results.yaml` had 24 candidates, 0 missing metric sources, and the next allowed action was fresh/control validation for promising shadow challengers.
+- Do not resume this old run blindly. If the user wants another overnight run, start or plan a new run id, then follow `docs/CEO_HEARTBEAT_AUTONOMY.md`.
 
 Current next implementation mission:
 

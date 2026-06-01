@@ -430,6 +430,10 @@ decision packet. `ceo stop` writes both
 `research/lab_loop/autonomous_runs/<lab_run_id>/stop.request`, so a later
 heartbeat can see the user-requested stop before launching more work.
 
+For the full overnight operating contract, use
+`docs/CEO_HEARTBEAT_AUTONOMY.md`. Future heartbeat prompts should point Codex to
+that document instead of restating the whole policy in chat.
+
 CEO mode may build sidecar and shadow product candidates, but product-facing
 changes still require explicit promotion approval. It must not silently change
 `core_signal_v0`, Pine/TradingView defaults, production scores, state labels, or

@@ -81,6 +81,8 @@ from .ceo_ops import (
     CEO_REPORT_ROOT,
     run_ceo_heartbeat_status,
     CeoOpsOptions,
+    run_ceo_champion_challenger,
+    run_ceo_execute_next,
     run_ceo_lab_status_text,
     run_ceo_plan,
     run_ceo_report,
@@ -1839,6 +1841,30 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO decision: {review['decision']['decision']}")
             print(f"Decision packet: {review['paths']['latest_decision_packet']}")
             return 0 if lab_result["status"] in {"completed", "stopped"} else 1
+        if action == "execute-next":
+            result = run_ceo_execute_next(options)
+            action_result = result["action_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Decision: {action_result.get('decision')}")
+            print(f"Action taken: {action_result.get('action_taken')}")
+            print(f"Status: {action_result.get('status')}")
+            paths = result.get("paths", {})
+            if paths.get("binding_action_result"):
+                print(f"Action result: {paths['binding_action_result']}")
+            if paths.get("capability_gap"):
+                print(f"Capability gap: {paths['capability_gap']}")
+            return 0 if action_result.get("status") not in {"blocked"} else 1
+        if action == "champion-challenger":
+            result = run_ceo_champion_challenger(options, top_n=getattr(args, "top_n", None))
+            action_result = result["action_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Status: {action_result.get('status')}")
+            print(f"Results: {result['paths']['results']}")
+            if result["paths"].get("capability_gap"):
+                print(f"Capability gap: {result['paths']['capability_gap']}")
+            return 0
         if action == "heartbeat-status":
             result = run_ceo_heartbeat_status(options)
             status = result["status"]
@@ -3171,6 +3197,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_ceo_common(ceo_run_block)
     ceo_run_block.add_argument("--apply", action="store_true", help="Allow run-scoped lab queue/state mutations.")
     ceo_run_block.set_defaults(func=ceo_command)
+
+    ceo_execute_next = ceo_subparsers.add_parser(
+        "execute-next",
+        help="Execute the latest CEO decision through the binding dispatcher.",
+    )
+    add_ceo_common(ceo_execute_next)
+    ceo_execute_next.add_argument("--apply", action="store_true", help="Allow the selected CEO action to write run artifacts.")
+    ceo_execute_next.set_defaults(func=ceo_command)
+
+    ceo_champion_challenger = ceo_subparsers.add_parser(
+        "champion-challenger",
+        help="Run CEO product-delta champion/challenger preparation for shadow candidates.",
+    )
+    add_ceo_common(ceo_champion_challenger)
+    ceo_champion_challenger.add_argument("--apply", action="store_true", help="Allow champion/challenger artifacts to be written.")
+    ceo_champion_challenger.add_argument("--top-n", type=int, default=None, help="Limit comparison work items.")
+    ceo_champion_challenger.set_defaults(func=ceo_command)
 
     ceo_heartbeat_status = ceo_subparsers.add_parser(
         "heartbeat-status",

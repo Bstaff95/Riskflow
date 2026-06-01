@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,11 @@ from .lab_ops import (
 CEO_MANIFEST_MODEL = "riskflow_ceo_manifest_v0"
 CEO_COMPANY_STATUS_MODEL = "riskflow_ceo_company_status_v0"
 CEO_PRODUCT_DELTA_MODEL = "riskflow_ceo_product_delta_scoreboard_v0"
+CEO_CHAMPION_CHALLENGER_ACTION_PLAN_MODEL = "riskflow_ceo_champion_challenger_action_plan_v0"
+CEO_CHAMPION_CHALLENGER_RESULTS_MODEL = "riskflow_ceo_champion_challenger_results_v0"
+CEO_ACTION_RESULT_MODEL = "riskflow_ceo_binding_action_result_v0"
+CEO_CAPABILITY_GAP_MODEL = "riskflow_ceo_capability_gap_v0"
+CEO_SELF_AUDIT_MODEL = "riskflow_ceo_self_audit_v0"
 CEO_INFRA_DELTA_MODEL = "riskflow_ceo_research_infra_delta_v0"
 CEO_UNDERSTANDING_DELTA_MODEL = "riskflow_ceo_understanding_delta_v0"
 CEO_RISK_REGISTER_MODEL = "riskflow_ceo_risk_register_v0"
@@ -114,6 +120,10 @@ def ceo_heartbeat_status_path(options: CeoOpsOptions, ceo_run_id: str) -> Path:
     return ceo_dir(options, ceo_run_id) / "heartbeat_status.yaml"
 
 
+def ceo_action_ledger_path(options: CeoOpsOptions, ceo_run_id: str) -> Path:
+    return ceo_dir(options, ceo_run_id) / "ceo_action_ledger.jsonl"
+
+
 def _lab_runtime_root(options: CeoOpsOptions, lab_run_id: str) -> Path:
     return options.lab_ops_runtime_root / lab_run_id
 
@@ -143,6 +153,43 @@ def _load_yaml_if_exists(path: Path | None) -> dict[str, Any]:
         return {}
     payload = load_yaml_file(path)
     return payload if isinstance(payload, dict) else {}
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _append_action_ledger(options: CeoOpsOptions, ceo_run_id: str, entry: dict[str, Any]) -> Path:
+    path = ceo_action_ledger_path(options, ceo_run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_json_safe(entry), sort_keys=True) + "\n")
+    return path
+
+
+def _read_action_ledger(options: CeoOpsOptions, ceo_run_id: str) -> list[dict[str, Any]]:
+    path = ceo_action_ledger_path(options, ceo_run_id)
+    if not path.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            entries.append(payload)
+    return entries
 
 
 def _lab_root(options: CeoOpsOptions, lab_run_id: str) -> Path:
@@ -352,6 +399,184 @@ def build_product_delta_scoreboard(governance: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def build_champion_challenger_action_plan(product_delta: dict[str, Any]) -> dict[str, Any]:
+    candidates = product_delta.get("candidates", []) or []
+    work_items: list[dict[str, Any]] = []
+    priority_by_role = {
+        "warning_blocker": 1,
+        "reset_quality": 2,
+        "bullish_permission": 3,
+        "gradient_interpretation": 4,
+        "path_management": 5,
+        "cross_asset_regime": 6,
+        "invalidation": 7,
+    }
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda item: (
+            priority_by_role.get(str(item.get("product_role", "")), 99),
+            -(float(item.get("confidence_score") or 0)),
+            str(item.get("belief_id", "")),
+        ),
+    )
+    for index, candidate in enumerate(sorted_candidates, start=1):
+        if candidate.get("comparison_status") != "needs_champion_challenger":
+            continue
+        work_items.append(
+            {
+                "priority": index,
+                "belief_id": candidate.get("belief_id"),
+                "product_role": candidate.get("product_role"),
+                "champion": candidate.get("champion", "core_signal_v0"),
+                "challenger": candidate.get("challenger"),
+                "current_gate": candidate.get("current_gate"),
+                "validation_decision": candidate.get("validation_decision"),
+                "evidence_level": candidate.get("evidence_level"),
+                "confidence_score": candidate.get("confidence_score"),
+                "required_metrics": product_delta.get("required_metrics", []),
+                "required_controls": [
+                    "forward_relative_return_vs_basket",
+                    "event_diversity",
+                    "lag_sensitivity",
+                    "cooldown_sensitivity",
+                    "missed_upside_cost",
+                    "avoided_downside_benefit",
+                ],
+                "minimum_decision": "compare_against_core_signal_v0_before_more_recovery_expansion",
+                "production_effect": "none",
+            }
+        )
+    return {
+        "model": CEO_CHAMPION_CHALLENGER_ACTION_PLAN_MODEL,
+        "generated_at": utc_now_iso(),
+        "status": "ready" if work_items else "no_candidates",
+        "champion": product_delta.get("champion", "core_signal_v0"),
+        "candidate_count": len(work_items),
+        "work_items": work_items,
+        "next_action": (
+            "run_top_priority_product_delta_comparisons"
+            if work_items
+            else "broaden_product_candidate_source"
+        ),
+        "production_effect": "none",
+    }
+
+
+def build_champion_challenger_results(action_plan: dict[str, Any], *, top_n: int | None = None) -> dict[str, Any]:
+    work_items = list(action_plan.get("work_items", []) or [])
+    if top_n is not None:
+        work_items = work_items[: max(0, top_n)]
+    results: list[dict[str, Any]] = []
+    missing_metric_sources: list[str] = []
+    for item in work_items:
+        belief_id = str(item.get("belief_id", ""))
+        metric_sources = item.get("metric_sources", []) or item.get("evidence_sources", []) or []
+        status = "metric_source_missing" if not metric_sources else "ready_for_metric_comparison"
+        if status == "metric_source_missing":
+            missing_metric_sources.append(belief_id)
+        results.append(
+            {
+                "belief_id": belief_id,
+                "product_role": item.get("product_role"),
+                "champion": item.get("champion", action_plan.get("champion", "core_signal_v0")),
+                "challenger": item.get("challenger"),
+                "comparison_status": status,
+                "required_metrics": item.get("required_metrics", []),
+                "required_controls": item.get("required_controls", []),
+                "available_metric_sources": metric_sources,
+                "decision": (
+                    "capability_gap_required"
+                    if status == "metric_source_missing"
+                    else "run_metric_comparison_from_sources"
+                ),
+                "production_effect": "none",
+            }
+        )
+    status = "no_candidates"
+    if results and missing_metric_sources:
+        status = "blocked_missing_metric_sources"
+    elif results:
+        status = "ready_for_metric_comparison"
+    return {
+        "model": CEO_CHAMPION_CHALLENGER_RESULTS_MODEL,
+        "generated_at": utc_now_iso(),
+        "status": status,
+        "candidate_count": len(results),
+        "missing_metric_source_count": len(missing_metric_sources),
+        "missing_metric_sources": missing_metric_sources,
+        "results": results,
+        "next_action": (
+            "build_product_delta_metric_source_extractor"
+            if missing_metric_sources
+            else "run_metric_comparison_from_sources"
+            if results
+            else "broaden_product_candidate_source"
+        ),
+        "production_effect": "none",
+    }
+
+
+def build_capability_gap(
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+    decision: str,
+    missing_capability: str,
+    reason: str,
+    required_command: str,
+    acceptance_criteria: list[str],
+) -> dict[str, Any]:
+    return {
+        "model": CEO_CAPABILITY_GAP_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "decision": decision,
+        "missing_capability": missing_capability,
+        "reason": reason,
+        "required_command": required_command,
+        "acceptance_criteria": acceptance_criteria,
+        "autonomy_allowed": "research_infra_only",
+        "forbidden_changes": [
+            "core_signal_v0",
+            "Pine_or_TradingView_defaults",
+            "production_scores",
+            "production_rankings",
+            "production_states",
+            "production_alerts",
+        ],
+        "production_effect": "none",
+    }
+
+
+def build_ceo_self_audit(action_result: dict[str, Any], ledger_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    recent = ledger_entries[-3:]
+    repeated_decisions = len(recent) >= 2 and len({entry.get("decision") for entry in recent}) == 1
+    no_progress = [
+        entry
+        for entry in recent
+        if entry.get("status") in {"blocked", "capability_gap", "no_candidates"}
+        or entry.get("meaningful_progress") is False
+    ]
+    return {
+        "model": CEO_SELF_AUDIT_MODEL,
+        "generated_at": utc_now_iso(),
+        "latest_decision": action_result.get("decision"),
+        "latest_action": action_result.get("action_taken"),
+        "latest_status": action_result.get("status"),
+        "recent_action_count": len(recent),
+        "repeated_decision_detected": repeated_decisions,
+        "recent_no_progress_count": len(no_progress),
+        "intervention_required": repeated_decisions and len(no_progress) >= 2,
+        "intervention": (
+            "build_missing_capability_or_change_strategy_before_more_lab_blocks"
+            if repeated_decisions and len(no_progress) >= 2
+            else "continue_with_bound_action_dispatch"
+        ),
+        "production_effect": "none",
+    }
+
+
 def build_research_infra_delta(company_status: dict[str, Any], governance: dict[str, Any]) -> dict[str, Any]:
     lab_status = company_status.get("lab_status", {})
     artifacts_present = {
@@ -533,6 +758,7 @@ def _write_artifact_set(
     paths = {
         "company_status": root / "company_status.yaml",
         "product_delta": root / "product_delta_scoreboard.yaml",
+        "champion_challenger_action_plan": root / "champion_challenger_action_plan.yaml",
         "infra_delta": root / "research_infra_delta.yaml",
         "understanding_delta": root / "understanding_delta.yaml",
         "risk_register": root / "risk_register.yaml",
@@ -544,6 +770,7 @@ def _write_artifact_set(
     }
     atomic_write_yaml(paths["company_status"], company_status)
     atomic_write_yaml(paths["product_delta"], product_delta)
+    atomic_write_yaml(paths["champion_challenger_action_plan"], build_champion_challenger_action_plan(product_delta))
     atomic_write_yaml(paths["infra_delta"], infra_delta)
     atomic_write_yaml(paths["understanding_delta"], understanding_delta)
     atomic_write_yaml(paths["risk_register"], risk_register)
@@ -716,6 +943,134 @@ def _lab_ops_options(options: CeoOpsOptions, lab_run_id: str) -> LabOpsOptions:
     )
 
 
+def _write_binding_action_result(
+    options: CeoOpsOptions,
+    ceo_run_id: str,
+    lab_run_id: str,
+    action_result: dict[str, Any],
+) -> dict[str, Path]:
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    action_result_path = root / "binding_action_result.yaml"
+    ledger_path = _append_action_ledger(options, ceo_run_id, action_result)
+    ledger_entries = _read_action_ledger(options, ceo_run_id)
+    self_audit = build_ceo_self_audit(action_result, ledger_entries)
+    self_audit_path = root / "ceo_self_audit.yaml"
+    atomic_write_yaml(action_result_path, _json_safe(action_result))
+    atomic_write_yaml(self_audit_path, self_audit)
+    return {
+        "binding_action_result": action_result_path,
+        "action_ledger": ledger_path,
+        "self_audit": self_audit_path,
+    }
+
+
+def render_champion_challenger_report(results: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Champion/Challenger Results",
+        "",
+        f"Generated: {results.get('generated_at')}",
+        f"Status: {results.get('status')}",
+        f"Candidate count: {results.get('candidate_count')}",
+        f"Missing metric sources: {results.get('missing_metric_source_count')}",
+        "",
+        "## Results",
+        "",
+    ]
+    for item in results.get("results", []) or []:
+        lines.append(
+            "- "
+            f"{item.get('belief_id')} "
+            f"role={item.get('product_role')} "
+            f"champion={item.get('champion')} "
+            f"challenger={item.get('challenger')} "
+            f"status={item.get('comparison_status')} "
+            f"decision={item.get('decision')}"
+        )
+    if not results.get("results"):
+        lines.append("- No candidates were available for comparison.")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            "This artifact does not promote or alter production Riskflow behavior.",
+            "If metric sources are missing, CEO mode must build the missing research-infra command before claiming product evidence.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_ceo_champion_challenger(options: CeoOpsOptions, *, top_n: int | None = None) -> dict[str, Any]:
+    if not options.apply:
+        raise ValueError("ceo champion-challenger requires --apply")
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    action_plan_path = root / "champion_challenger_action_plan.yaml"
+    action_plan = _load_yaml_if_exists(action_plan_path)
+    if not action_plan:
+        governance = _load_latest_governance(options, lab_run_id)
+        product_delta = build_product_delta_scoreboard(governance)
+        action_plan = build_champion_challenger_action_plan(product_delta)
+        atomic_write_yaml(action_plan_path, action_plan)
+    results = build_champion_challenger_results(action_plan, top_n=top_n)
+    results_path = root / "champion_challenger_results.yaml"
+    report_path = root / "champion_challenger_results.md"
+    atomic_write_yaml(results_path, results)
+    atomic_write_text(report_path, render_champion_challenger_report(results))
+    capability_gap_path: Path | None = None
+    if results.get("status") == "blocked_missing_metric_sources":
+        gap = build_capability_gap(
+            ceo_run_id=ceo_run_id,
+            lab_run_id=lab_run_id,
+            decision="run_champion_challenger",
+            missing_capability="product_delta_metric_source_extractor",
+            reason="Shadow candidates exist, but their action-plan work items do not carry source rows for metric comparison.",
+            required_command="PYTHONPATH=src python3 -m riskflow ceo champion-challenger --run-id <run_id> --apply",
+            acceptance_criteria=[
+                "attach exact evidence CSV/YAML source paths to each work item",
+                "compute role-specific champion/challenger deltas without changing production formulas",
+                "write candidate-level missing-upside and avoided-downside metrics",
+                "run tests that prove execute-next does not fall back to generic lab blocks for this decision",
+            ],
+        )
+        capability_gap_path = root / "capability_gap.yaml"
+        atomic_write_yaml(capability_gap_path, gap)
+    action_result = {
+        "model": CEO_ACTION_RESULT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "decision": "run_champion_challenger",
+        "action_taken": "champion_challenger",
+        "command_executed": "riskflow ceo champion-challenger",
+        "status": "capability_gap" if capability_gap_path else results.get("status"),
+        "meaningful_progress": bool(results.get("candidate_count")),
+        "inputs": {"action_plan": action_plan_path},
+        "outputs": {
+            "results": results_path,
+            "report": report_path,
+            "capability_gap": capability_gap_path,
+        },
+        "next_allowed_actions": [results.get("next_action", "broaden_product_candidate_source")],
+        "production_effect": "none",
+    }
+    paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+    paths.update({"action_plan": action_plan_path, "results": results_path, "report": report_path})
+    if capability_gap_path:
+        paths["capability_gap"] = capability_gap_path
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "action_result": action_result,
+        "results": results,
+        "paths": paths,
+    }
+
+
 def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
@@ -745,7 +1100,7 @@ def run_ceo_plan(options: CeoOpsOptions) -> dict[str, Any]:
         "objective": options.objective,
         "recommended_decision": decision,
         "next_command": (
-            "PYTHONPATH=src python3 -m riskflow ceo run-block "
+            "PYTHONPATH=src python3 -m riskflow ceo execute-next "
             f"--run-id {ceo_run_id} --objective {options.objective} --apply"
         ),
         "production_effect": "none",
@@ -767,6 +1122,157 @@ def run_ceo_run_block(options: CeoOpsOptions) -> dict[str, Any]:
     lab_result = run_lab_ops_run(_lab_ops_options(block_options, lab_run_id))
     review = run_ceo_review(block_options, ceo_run_id=ceo_run_id, lab_run_id=lab_run_id)
     return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "lab_result": lab_result, "review": review}
+
+
+def run_ceo_execute_next(options: CeoOpsOptions) -> dict[str, Any]:
+    if not options.apply:
+        raise ValueError("ceo execute-next requires --apply")
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    if not (root / "executive_decision_packet.md").exists():
+        run_ceo_review(options, ceo_run_id=ceo_run_id, lab_run_id=lab_run_id)
+    company_status = build_company_status(options, ceo_run_id, lab_run_id)
+    governance = _load_latest_governance(options, lab_run_id)
+    product_delta = build_product_delta_scoreboard(governance)
+    infra_delta = build_research_infra_delta(company_status, governance)
+    decision = choose_executive_decision(company_status, product_delta, infra_delta)
+    decision_kind = str(decision.get("decision", "unknown"))
+
+    if is_stop_requested(options, ceo_run_id, lab_run_id):
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "blocked_stop_requested",
+            "command_executed": None,
+            "status": "blocked",
+            "meaningful_progress": False,
+            "reason": "stop.request exists",
+            "next_allowed_actions": ["clear_stop_request_after_user_approval"],
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
+
+    if company_status.get("true_blocker"):
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "blocked_true_blocker",
+            "command_executed": None,
+            "status": "blocked",
+            "meaningful_progress": False,
+            "reason": decision.get("rationale", "true blocker"),
+            "next_allowed_actions": ["resolve_true_blocker"],
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
+
+    if company_status.get("governance", {}).get("product_change_allowed"):
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "blocked_production_promotion_gate",
+            "command_executed": None,
+            "status": "blocked",
+            "meaningful_progress": False,
+            "reason": "validation governance indicates product_change_allowed",
+            "next_allowed_actions": ["write_promotion_proposal_and_wait_for_user_approval"],
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
+
+    if decision_kind == "run_champion_challenger":
+        return run_ceo_champion_challenger(options)
+
+    if decision_kind == "continue_governed_research":
+        block = run_ceo_run_block(options)
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "run_block",
+            "command_executed": "riskflow ceo run-block",
+            "status": block["lab_result"].get("status"),
+            "meaningful_progress": True,
+            "outputs": {"decision_packet": block["review"]["paths"].get("latest_decision_packet")},
+            "next_allowed_actions": [block["review"]["decision"].get("decision")],
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        return {
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "action_result": action_result,
+            "block": block,
+            "paths": paths,
+        }
+
+    if decision_kind == "request_fresh_data":
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "blocked_fresh_data_required",
+            "command_executed": None,
+            "status": "blocked",
+            "meaningful_progress": False,
+            "reason": decision.get("rationale", "fresh data required"),
+            "next_allowed_actions": ["import_or_curate_fresh_ohlcv_data"],
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
+
+    gap = build_capability_gap(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        decision=decision_kind,
+        missing_capability=f"{decision_kind}_executor",
+        reason=f"CEO decision {decision_kind} has no binding executor yet.",
+        required_command=f"PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id {ceo_run_id} --apply",
+        acceptance_criteria=[
+            f"execute {decision_kind} without falling back to a generic lab block",
+            "write binding_action_result.yaml and ceo_action_ledger.jsonl",
+            "prove production_effect remains none",
+            "add tests covering the new executor branch",
+        ],
+    )
+    capability_gap_path = root / "capability_gap.yaml"
+    atomic_write_yaml(capability_gap_path, gap)
+    action_result = {
+        "model": CEO_ACTION_RESULT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "decision": decision_kind,
+        "action_taken": "capability_gap_recorded",
+        "command_executed": None,
+        "status": "capability_gap",
+        "meaningful_progress": True,
+        "outputs": {"capability_gap": capability_gap_path},
+        "next_allowed_actions": [f"build_{decision_kind}_executor"],
+        "production_effect": "none",
+    }
+    paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+    paths["capability_gap"] = capability_gap_path
+    return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
 
 
 def run_ceo_review(

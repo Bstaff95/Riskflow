@@ -8,7 +8,10 @@ import yaml
 import riskflow.ceo_ops as ceo_ops
 from riskflow.ceo_ops import (
     CeoOpsOptions,
+    build_champion_challenger_action_plan,
     build_product_delta_scoreboard,
+    run_ceo_champion_challenger,
+    run_ceo_execute_next,
     run_ceo_heartbeat_status,
     run_ceo_plan,
     run_ceo_review,
@@ -148,6 +151,7 @@ def test_ceo_plan_writes_manifest_and_plan(tmp_path: Path) -> None:
     assert result["run_id"] == "ceo_test"
     assert result["paths"]["manifest"].exists()
     assert result["paths"]["plan"].exists()
+    assert "ceo execute-next" in result["plan"]["next_command"]
     assert result["plan"]["production_effect"] == "none"
 
 
@@ -189,6 +193,95 @@ def test_product_delta_extracts_shadow_candidates() -> None:
     assert scoreboard["production_effect"] == "none"
 
 
+def test_champion_challenger_action_plan_prioritizes_shadow_candidates() -> None:
+    product_delta = {
+        "champion": "core_signal_v0",
+        "required_metrics": ["forward_relative_return_vs_basket", "hit_rate"],
+        "candidates": [
+            {
+                "belief_id": "reset_candidate",
+                "product_role": "reset_quality",
+                "current_gate": "G2_discovered",
+                "validation_decision": "hold_for_validation",
+                "evidence_level": "L2_discovered",
+                "confidence_score": 70,
+                "champion": "core_signal_v0",
+                "challenger": "core_signal_v0_plus_reset_candidate",
+                "comparison_status": "needs_champion_challenger",
+            },
+            {
+                "belief_id": "warning_candidate",
+                "product_role": "warning_blocker",
+                "current_gate": "G2_discovered",
+                "validation_decision": "hold_for_blocker_audit",
+                "evidence_level": "L2_discovered",
+                "confidence_score": 60,
+                "champion": "core_signal_v0",
+                "challenger": "core_signal_v0_plus_warning_candidate",
+                "comparison_status": "needs_champion_challenger",
+            },
+        ],
+    }
+
+    plan = build_champion_challenger_action_plan(product_delta)
+
+    assert plan["status"] == "ready"
+    assert plan["candidate_count"] == 2
+    assert plan["work_items"][0]["belief_id"] == "warning_candidate"
+    assert plan["work_items"][0]["minimum_decision"] == "compare_against_core_signal_v0_before_more_recovery_expansion"
+    assert plan["production_effect"] == "none"
+
+
+def test_ceo_champion_challenger_writes_gap_when_metric_sources_are_missing(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+
+    result = run_ceo_champion_challenger(options)
+
+    assert result["results"]["status"] == "blocked_missing_metric_sources"
+    assert result["paths"]["results"].exists()
+    assert result["paths"]["capability_gap"].exists()
+    assert result["paths"]["binding_action_result"].exists()
+    action_result = yaml.safe_load(result["paths"]["binding_action_result"].read_text(encoding="utf-8"))
+    assert action_result["decision"] == "run_champion_challenger"
+    assert action_result["action_taken"] == "champion_challenger"
+    assert action_result["production_effect"] == "none"
+
+
+def test_ceo_execute_next_runs_champion_challenger_not_another_lab_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+
+    def fail_run_lab_ops_run(_lab_options):
+        raise AssertionError("execute-next must not run a generic lab block for champion/challenger decisions")
+
+    monkeypatch.setattr(ceo_ops, "run_lab_ops_run", fail_run_lab_ops_run)
+
+    result = run_ceo_execute_next(options)
+
+    assert result["action_result"]["decision"] == "run_champion_challenger"
+    assert result["action_result"]["action_taken"] == "champion_challenger"
+    assert result["paths"]["results"].exists()
+    assert result["paths"]["action_ledger"].exists()
+
+
+def test_ceo_execute_next_records_capability_gap_for_missing_executor(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=False, stop_reason="governed_recovery_no_supported_specs")
+
+    result = run_ceo_execute_next(options)
+
+    assert result["action_result"]["decision"] == "patch_research_infra"
+    assert result["action_result"]["action_taken"] == "capability_gap_recorded"
+    assert result["action_result"]["status"] == "capability_gap"
+    assert result["paths"]["capability_gap"].exists()
+
+
 def test_ceo_review_writes_decision_packet_for_product_candidate(tmp_path: Path) -> None:
     options = _options(tmp_path)
     _write_lab_artifacts(tmp_path, with_candidate=True)
@@ -198,6 +291,7 @@ def test_ceo_review_writes_decision_packet_for_product_candidate(tmp_path: Path)
     assert result["decision"]["decision"] == "run_champion_challenger"
     assert result["paths"]["latest_decision_packet"].exists()
     assert result["paths"]["product_delta"].exists()
+    assert result["paths"]["champion_challenger_action_plan"].exists()
     packet = result["paths"]["latest_decision_packet"].read_text(encoding="utf-8")
     assert "Riskflow CEO Decision Packet" in packet
     assert "Chart-facing value: candidate_pipeline" in packet

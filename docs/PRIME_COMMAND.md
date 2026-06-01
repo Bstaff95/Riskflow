@@ -247,8 +247,12 @@ The Grammar Candidate Sprint now has lab-loop, lab-director, lab-meta,
 governed lab-ops, and a first CEO autopilot layer. The preferred operating mode
 for strategic autonomous work is a Codex-supervised heartbeat loop: inspect
 `python3 -m riskflow ceo heartbeat-status --run-id <run_id>` and the latest CEO
-decision packet, decide the next action, then run at most one bounded CEO block
-with `python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply`.
+decision packet, then run at most one binding CEO action with
+`python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply`.
+The executor must follow the packet: champion/challenger decisions run
+champion/challenger preparation, governed-research decisions run one bounded
+block, and unsupported decisions write a capability-gap artifact instead of
+falling back to blind loop execution.
 Use `python3 -m riskflow ceo stop --run-id <run_id> --reason <reason>` to stop
 both the CEO run and its underlying lab runtime. The CEO layer separates
 research-infra delta, understanding delta, and chart-facing product delta. It is

@@ -399,7 +399,9 @@ than launch one long script-governed run.
 ```bash
 PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo plan --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply
 PYTHONPATH=src python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply
+PYTHONPATH=src python3 -m riskflow ceo champion-challenger --run-id <run_id> --apply
 PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason user_requested
 PYTHONPATH=src python3 -m riskflow ceo review --run-id <run_id>
@@ -414,10 +416,13 @@ not considered useful merely because loops ran; it must improve one of those
 buckets or stop with a clear reason.
 
 For overnight supervision, use a thread heartbeat automation instead of a giant
-Python loop. A heartbeat should wake Codex roughly every 15 minutes, inspect
-`heartbeat_status.yaml` and the latest decision packet, decide whether the next
-bounded block is justified, then run at most one additional `ceo run-block`
-with the same `--run-id`. The CEO layer writes
+Python loop. A heartbeat should wake Codex, inspect `heartbeat_status.yaml` and
+the latest decision packet, then run at most one
+`ceo execute-next --run-id <run_id> --apply`. The executor binds CEO decisions
+to specific actions: champion/challenger decisions run product-delta preparation,
+governed-research decisions run one bounded block, and unsupported decisions
+write `capability_gap.yaml` instead of falling back to blind loop execution.
+The CEO layer writes
 `reports/ceo_runs/<run_id>/heartbeat_status.yaml` after reviews and stop
 requests. `ceo heartbeat-status` is read-only; it must not create a new
 decision packet. `ceo stop` writes both
@@ -429,6 +434,19 @@ CEO mode may build sidecar and shadow product candidates, but product-facing
 changes still require explicit promotion approval. It must not silently change
 `core_signal_v0`, Pine/TradingView defaults, production scores, state labels, or
 leaderboard ranking.
+
+Binding CEO action artifacts:
+
+- `binding_action_result.yaml`: the latest decision, action taken, command,
+  outputs, and next allowed actions;
+- `ceo_action_ledger.jsonl`: append-only action history for no-op and repeated
+  decision audits;
+- `ceo_self_audit.yaml`: repeated-decision/no-progress checks;
+- `capability_gap.yaml`: exact missing research-infra command or executor when
+  CEO mode cannot execute its own decision;
+- `champion_challenger_results.yaml`: shadow candidate comparison readiness and
+  missing metric-source gaps. This artifact is not production evidence unless it
+  has exact metric sources.
 
 Standalone governance tools are available for auditing existing director
 artifacts:

@@ -117,7 +117,7 @@ The working research method is documented in `docs/VISUAL_INDICATOR_LEARNING_LOO
 
 The observation library is the Karpathy-style LLM wiki layer for this loop. Machine-readable records live under `research/observations/`; Obsidian synthesis pages live under `obsidian/wiki/`. Python remains the evidence engine, while Obsidian stores connected cases, pattern pages, concepts, and human notes.
 
-The Obsidian knowledge-graph bridge (`obsidian_kg.py`) makes that synthesis layer actionable without turning it into a proof engine. It parses curated case, concept, setup-journey, and evidence-summary notes, exports node/edge tables, validates required graph metadata, and compiles bullish setup journeys into lab-loop hypothesis queues plus generated grammar grids. The grammar lab still decides truth through CSV/YAML evidence, strict referee checks, and promotion gates.
+The Obsidian knowledge-graph bridge (`obsidian_kg.py`) makes that synthesis layer actionable without turning it into a proof engine. It parses curated case, concept, setup-journey, and evidence-summary notes, exports node/edge tables, validates required graph metadata, writes memory-quality audit reports, and compiles bullish setup journeys into lab-loop hypothesis queues plus generated grammar grids. The grammar lab still decides truth through CSV/YAML evidence, strict referee checks, and promotion gates.
 
 The next research layer is the Signal Grammar Lab, documented in `docs/SIGNAL_GRAMMAR_LAB.md`. It keeps the base oscillator frozen while translating human visual reads into grammar primitives such as `pressure_acceptance`, `failed_weakness`, `zone_reclaim_retest`, `oscillator_structure`, `divergence_quality`, and `curvature_intent`. The primitive registry lives in `research/grammar/primitive_registry.yaml`.
 
@@ -204,13 +204,13 @@ Layer 10 adds `transition_research_v0`, a research-only layer for completed life
 - `meta_research.py`: deterministic process-quality layer above the lab director. It scores whether recent research actually learned, diagnoses process failures such as duplicate research or same-sample overfit, recommends one next intervention, audits that intervention, and writes generated reports without changing production formulas, scores, states, rankings, or TradingView defaults.
 - `lab_ops.py`: run-scoped autonomous lab operations wrapper. It plans, runs, resumes, stops, and reports long research runs with manifests, journals, checkpoints, budgets, process scorecards, and explicit stop reasons while keeping mutable state under generated runtime paths.
 - `blocker_audit.py`, `research_lane_router.py`, `validation_governance.py`, and `research_map.py`: governed research-lab controls above `lab_ops`. They separate failed bullish setups from valid warning/blocker claims, route beliefs into product-relevant research lanes, gate validation/product translation, and maintain a durable map of what the lab knows, what is duplicated, and what remains open. The director can also generate lane-aware recovery queues when governed runs have open lanes but no runnable director queue. These are governance sidecars only and must not change production indicator behavior.
-- `ceo_ops.py`: executive layer above governed `lab_ops`. It runs bounded CEO blocks, aggregates company-level status, writes decision packets, heartbeat status, stop requests, binding action results, append-only action ledgers, self-audits, capability gaps, and champion/challenger shadow artifacts. `ceo execute-next` binds the latest executive decision to the matching action so product-delta decisions cannot silently become another generic research block.
+- `ceo_ops.py`: executive layer above governed `lab_ops`. It runs bounded CEO blocks, aggregates company-level status, writes decision packets, decision-quality cards, operator briefs, heartbeat status, heartbeat plans/tick journals, flight dashboards, operating dashboards, portfolio allocator outputs, memory-delta artifacts, guardrail audits, unified preflight gates, dispatch receipts with immutable snapshots, blocker stacks, operating incident registers, repair plans, action boards, operator steps, artifact-coherence checks, resumption briefs, run indexes, approval queues/status/decision/apply ledgers, executive KPIs, role registries/task queues/dispatch packets/ledgers, capability backlogs, evidence-debt registers, guarded promotion proposals, stop requests, action contracts, binding action results, action outcome cards, append-only action ledgers, self-audits, trace grades, replay reports, eval-suite reports, eval-fixture reports, capability gaps, champion/challenger shadow artifacts, champion/challenger visual-review queues, fresh/control validation plans, fresh-data preflights, frozen-candidate validation specs, frozen-validation source-replay results, frozen adapter rerun results, fresh/withheld validation contracts, fresh/withheld snapshot manifests, manifest-gated and fingerprint-gated fresh/withheld validation execution results, research-infra patch plans, and hypothesis-source broadening plans. Outcome cards, trace grades, replay reports, eval suites, eval fixtures, portfolio allocator outputs, decision-quality cards, operator briefs, memory deltas, guardrail audits, preflight gates, dispatch receipts, blocker stacks, incident registers, repair plans, action boards, operator steps, artifact-coherence checks, resumption briefs, run indexes, and role dispatch packets include evidence-provenance, failure-avoidance, loop-meltdown detection, state-transition checks, approval closure, role-result closure, validation-authority gates, lane value-of-information scoring, durable-memory routing, safety-blocker aggregation, operator next-action routing, alternatives/rejection reasons, specialist result schemas, human-readable refused actions, and process-only product-evidence fields so future wakes can tell whether the loop avoided prior no-progress patterns without mistaking process quality for product proof. `ceo execute-next` binds the latest executive decision to the matching action so product-delta decisions cannot silently become another generic research block or repeat a not-ready data gate, and it now consumes the unified preflight gate before bound dispatch. `ceo operator-step --apply` wraps the action board in one audited transaction and only invokes internal bounded dispatch when the board says it is safe. `heartbeat-tick` also consumes that gate before invoking `execute-next`.
 - `signal_research.py`: experimental Layer 3 challenger signals and variant event studies.
 - `setup_registry.py`: explicit Layer 4 compression/state/setup/opportunity contracts.
 - `setup_quality.py`: setup component scores, setup tags, and versioned opportunity output.
 - `visual_review.py`: local chart-snapshot generation for visual breakout archeology.
 - `observation_library.py`: structured observation records and Obsidian wiki export for indicator-learning cases.
-- `obsidian_kg.py`: Obsidian research-graph parser, validator, index exporter, setup-journey queue compiler, and compact evidence-summary exporter.
+- `obsidian_kg.py`: Obsidian research-graph parser, validator, memory-quality auditor, index exporter, setup-journey queue compiler, and compact evidence-summary exporter.
 - `reports.py`: CSV, HTML, and Obsidian markdown export helpers.
 - `cli.py`: command-line entry points.
 
@@ -223,6 +223,7 @@ python3 -m riskflow signal-research --config configs/meme_universe.yaml --timefr
 python3 -m riskflow visual-review --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow grammar-lab
 PYTHONPATH=src python3 -m riskflow obsidian-kg validate
+PYTHONPATH=src python3 -m riskflow obsidian-kg audit
 PYTHONPATH=src python3 -m riskflow obsidian-kg compile-queue --direction bullish
 python3 -m riskflow grammar-search --config configs/meme_universe.yaml --timeframes 1d 12h 4h 1h
 PYTHONPATH=src python3 -m riskflow lab-loop run --max-loops 100 --max-hours 4 --strict-referee --resume
@@ -231,7 +232,40 @@ PYTHONPATH=src python3 -m riskflow lab-ops plan --objective bullish-positive --m
 PYTHONPATH=src python3 -m riskflow lab-ops run --objective bullish-positive --governed --apply
 PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply
 PYTHONPATH=src python3 -m riskflow ceo champion-challenger --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo fresh-control-validation --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo frozen-candidate-validation --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo frozen-validation-executor --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo frozen-validation-rerun --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo fresh-withheld-validation-contract --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo withheld-split-manifest --run-id <run_id> --apply --withheld-split-id <id> --source-evidence-cutoff <date>
+PYTHONPATH=src python3 -m riskflow ceo fresh-withheld-snapshot-manifest --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo fresh-withheld-snapshot-declare --run-id <run_id> --apply --snapshot-type withheld --withheld-split-id <id> --source-evidence-cutoff <date> --confirm-no-overlap
+PYTHONPATH=src python3 -m riskflow ceo fresh-withheld-validation-executor --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo operating-dashboard --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo capability-backlog --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo promotion-proposal --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo evidence-debt-register --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo patch-research-infra --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo broaden-hypothesis-source --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo trace-grade --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo replay --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo eval-suite --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo eval-fixtures --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo portfolio-allocator --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo mission-score --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo strategy-capital-dashboard --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo memory-delta --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo guardrail-audit --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id <run_id> --enforce-memory-delta
+PYTHONPATH=src python3 -m riskflow ceo dispatch-receipt --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo blocker-stack --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo incident-register --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo repair-plan --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo run-index --limit 25
 PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason user_requested
 python3 -m riskflow setup-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow state-research --config configs/meme_universe.yaml --timeframe 1d
@@ -242,6 +276,11 @@ python3 -m riskflow flow-research --config configs/meme_universe.yaml --timefram
 python3 -m riskflow transition-research --config configs/meme_universe.yaml --timeframe 1d
 python3 -m riskflow resample --config configs/meme_universe.yaml --preset research-mtf
 ```
+
+CEO heartbeat/autonomy default: use `ceo execute-next --apply` or
+`ceo heartbeat-tick --apply`. The direct validation/evidence/authority commands
+above are guarded by `ceo preflight-gate --enforce-memory-delta`; snapshot
+authority commands require `--apply` and remain non-promotional.
 
 Optional scan MTF sidecar:
 

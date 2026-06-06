@@ -1,3 +1,13 @@
+---
+rf_type: concept
+concept_id: lab_loop
+status: active
+updated_at: 2026-06-05
+production_effect: none
+future_action_changed: Use the governed research loop and promotion ladder before interpreting lab outputs as product candidates.
+not_product_proof: true
+---
+
 # Lab Loop
 
 The Lab Loop is the operating system for autonomous Riskflow research.
@@ -47,4 +57,7 @@ Related:
 - [[Signal Grammar Lab]]
 - [[Grammar Map]]
 - [[Indicator Grammar]]
-
+- [[Agentic Research Loop]]
+- [[Trace Grading For Riskflow]]
+- [[Process Score Is Not Product Evidence]]
+- [[Agentic Loop Research Map]]

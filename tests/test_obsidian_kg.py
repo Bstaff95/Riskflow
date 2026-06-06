@@ -8,12 +8,14 @@ from riskflow.lab_loop import validate_lab_queue
 from riskflow.obsidian_kg import (
     GENERATED_END,
     GENERATED_START,
+    audit_knowledge_graph,
     build_knowledge_graph,
     compile_setup_journey_queue,
     compile_targeted_bullish_queue,
     export_evidence_summaries,
     load_obsidian_notes,
     validate_knowledge_graph,
+    write_knowledge_audit_outputs,
     write_knowledge_graph_outputs,
 )
 
@@ -50,6 +52,9 @@ measurable: true
 canonical_primitives: [viscosity_reclaim]
 canonical_detectors: [failed_weakness_reclaim]
 status: defined
+production_effect: none
+future_action_changed: Use viscosity reclaim as a measurable setup trigger candidate, not product proof.
+not_product_proof: true
 ---
 
 # Viscosity Reclaim
@@ -96,6 +101,21 @@ def test_obsidian_kg_loads_validates_and_indexes(tmp_path: Path) -> None:
     assert paths["nodes_csv"].exists()
     assert paths["edges_csv"].exists()
     assert paths["graph_json"].exists()
+
+
+def test_obsidian_kg_audit_reports_memory_quality_issues(tmp_path: Path) -> None:
+    obsidian = _write_obsidian_fixture(tmp_path)
+    loose = obsidian / "wiki" / "concepts" / "Loose Concept.md"
+    loose.write_text("# Loose Concept\n\nNo frontmatter yet.\n", encoding="utf-8")
+
+    graph = build_knowledge_graph(load_obsidian_notes(obsidian))
+    audit = audit_knowledge_graph(graph)
+    paths = write_knowledge_audit_outputs(audit, tmp_path / "kg")
+
+    assert audit["status"] == "attention_required"
+    assert any(item["node_id"] == "loose_concept" for item in audit["concept_quality_issues"])
+    assert paths["audit_yaml"].exists()
+    assert paths["audit_md"].exists()
 
 
 def test_compile_setup_journey_queue_writes_lab_compatible_queue(tmp_path: Path) -> None:
@@ -225,6 +245,31 @@ direction: bullish
 
     assert any("setup_conditions" in error for error in result.errors)
     assert any("source_cases" in error for error in result.errors)
+
+
+def test_validate_rejects_incomplete_concept_metadata(tmp_path: Path) -> None:
+    obsidian = tmp_path / "obsidian"
+    path = obsidian / "wiki" / "concepts" / "Bad Concept.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """---
+rf_type: concept
+concept_id: bad_concept
+production_effect: maybe
+not_product_proof: false
+---
+
+# Bad Concept
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_knowledge_graph(load_obsidian_notes(obsidian))
+    result = validate_knowledge_graph(graph)
+
+    assert any("future_action_changed" in error for error in result.errors)
+    assert any("production_effect must be none" in error for error in result.errors)
+    assert any("not_product_proof must be true" in error for error in result.errors)
 
 
 def test_export_evidence_summaries_preserves_manual_tail(tmp_path: Path) -> None:

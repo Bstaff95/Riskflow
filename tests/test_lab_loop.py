@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
 
 from riskflow.lab_loop import (
@@ -12,6 +13,7 @@ from riskflow.lab_loop import (
     acquire_lock,
     analyze_recent_loops,
     apply_checkpoint_interventions,
+    atomic_write_text,
     build_refinement_grid,
     create_bullish_control_followups,
     create_research_gate_followups,
@@ -56,6 +58,26 @@ def _queue() -> dict:
             },
         ],
     }
+
+
+def test_atomic_write_text_uses_unique_temp_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import riskflow.lab_loop as lab_loop
+
+    class FakeUuid:
+        def __init__(self, value: str) -> None:
+            self.hex = value
+
+    values = iter([FakeUuid("aaa"), FakeUuid("bbb")])
+    monkeypatch.setattr(lab_loop.uuid, "uuid4", lambda: next(values))
+    path = tmp_path / "artifact.yaml"
+
+    atomic_write_text(path, "first\n")
+    atomic_write_text(path, "second\n")
+
+    assert path.read_text(encoding="utf-8") == "second\n"
+    assert not (tmp_path / "artifact.yaml.tmp").exists()
+    assert not (tmp_path / ".artifact.yaml.aaa.tmp").exists()
+    assert not (tmp_path / ".artifact.yaml.bbb.tmp").exists()
 
 
 def test_validate_lab_queue_accepts_seed_shape() -> None:

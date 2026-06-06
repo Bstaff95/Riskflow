@@ -49,14 +49,34 @@ Python remains the evidence engine. Obsidian stores the research memory, not the
 
 Use `python3 -m riskflow obsidian-kg` to turn curated notes into a research graph.
 
+Useful commands:
+
+```bash
+PYTHONPATH=src python3 -m riskflow obsidian-kg validate
+PYTHONPATH=src python3 -m riskflow obsidian-kg audit
+PYTHONPATH=src python3 -m riskflow obsidian-kg index
+```
+
+`validate` enforces hard graph rules. `audit` writes
+`research/knowledge_graph/obsidian_kg_audit.yaml` and `.md` with memory-quality
+issues such as orphaned notes, unresolved wikilinks, missing action-changing
+concept metadata, and maps without linked concepts. Audit findings are a cleanup
+queue, not product evidence.
+
 Allowed durable note types:
 
 - `case`: one chart/date/symbol/timeframe observation
 - `concept`: reusable visual or measurable Riskflow idea
 - `setup_journey`: staged setup hypothesis such as context -> repair -> trigger -> confirmation -> invalidation
 - `evidence_summary`: compact reviewed result pointing back to exact local CSV/YAML/report evidence
+- `ceo_session_map`: curated CEO/agentic session memory that records run id, runtime state, source artifacts, next allowed action, reopen conditions, and production effect
+- `ceo_run_registry`: compact routing note for which CEO runs are active, stopped, smoke-only, or do-not-resume
 
 Generated graph tables, compiled queues, and generated grammar grids remain outside the curated vault unless a human or Codex intentionally promotes a concise summary.
+
+If Obsidian memory conflicts with generated CEO artifacts, generated artifacts
+win for runtime decisions. The next action is reconcile or report the conflict,
+not `ceo execute-next`.
 
 Do not call a setup validated from Obsidian links alone. A bullish setup requires Python evidence, strict referee checks, controls, and promotion gates.
 

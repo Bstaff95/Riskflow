@@ -397,16 +397,17 @@ actively supervise Riskflow as a company-style research/product system rather
 than launch one long script-governed run.
 
 ```bash
-PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id>
-PYTHONPATH=src python3 -m riskflow ceo plan --run-id <run_id>
-PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply
-PYTHONPATH=src python3 -m riskflow ceo run-block --run-id <run_id> --objective bullish-positive --apply
-PYTHONPATH=src python3 -m riskflow ceo champion-challenger --run-id <run_id> --apply
+PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id> --show-lab-status
 PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>
+PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id <run_id> --enforce-memory-delta
+PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply
 PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason user_requested
-PYTHONPATH=src python3 -m riskflow ceo review --run-id <run_id>
 PYTHONPATH=src python3 -m riskflow ceo report --run-id <run_id>
 ```
+
+Use `ceo execute-next --apply` as the canonical CEO dispatch path. Use
+`ceo run-block` only when `execute-next`, a capability gap, or the active user
+explicitly requires that lower-level governed research command.
 
 The default CEO block is two supervised epochs of five loops each. After each
 block, the CEO layer writes `reports/ceo_runs/<run_id>/` artifacts that separate
@@ -416,12 +417,14 @@ not considered useful merely because loops ran; it must improve one of those
 buckets or stop with a clear reason.
 
 For overnight supervision, use a thread heartbeat automation instead of a giant
-Python loop. A heartbeat should wake Codex, inspect `heartbeat_status.yaml` and
-the latest decision packet, then run at most one
+Python loop. A heartbeat should wake Codex, inspect heartbeat status, trace
+grade, replay, eval suite, guardrail audit, memory delta, approval state,
+preflight gate, and the latest decision packet, then run at most one
 `ceo execute-next --run-id <run_id> --apply`. The executor binds CEO decisions
-to specific actions: champion/challenger decisions run product-delta preparation,
-governed-research decisions run one bounded block, and unsupported decisions
-write `capability_gap.yaml` instead of falling back to blind loop execution.
+to specific actions: champion/challenger decisions run product-delta
+preparation, governed-research decisions run one bounded block, and unsupported
+decisions write `capability_gap.yaml` instead of falling back to blind loop
+execution.
 The CEO layer writes
 `reports/ceo_runs/<run_id>/heartbeat_status.yaml` after reviews and stop
 requests. `ceo heartbeat-status` is read-only; it must not create a new

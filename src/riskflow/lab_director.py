@@ -1065,6 +1065,187 @@ def _lane_recovery_specs(lane: str, belief: dict[str, Any], family: dict[str, An
             }
         )
 
+    elif lane == "cross_asset_regime":
+        regime_updates: dict[str, Any] = {}
+        if "min_benchmark_return" in parameter_grid:
+            regime_updates["min_benchmark_return"] = [-0.05, 0.0, 0.02]
+        if "min_relative_slope" in parameter_grid:
+            base_slope = _as_float(_first_param(parameter_grid, "min_relative_slope")) or 0.05
+            regime_updates["min_relative_slope"] = sorted({0.0, round(base_slope / 2, 4), base_slope})
+        if "benchmark_window" in parameter_grid:
+            regime_updates["benchmark_window"] = sorted({3, 5, int(_first_param(parameter_grid, "benchmark_window") or 5)})
+        if regime_updates:
+            specs.append(
+                {
+                    "name": "regime_context_sensitivity",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "control",
+                    "track": "mtf_context",
+                    "direction": direction,
+                    "updates": regime_updates,
+                    "question": "Does parent/regime context add incremental quality beyond the local setup?",
+                    "failure_mode": "regime_context_not_incremental",
+                    "expected_information_gain": 0.82,
+                }
+            )
+        specs.append(
+            {
+                "name": "regime_timeframe_transfer",
+                "stage": "validation",
+                "discovery_mode": "validation",
+                "claim_type": "control",
+                "track": "mtf_context",
+                "direction": direction,
+                "updates": {},
+                "timeframes": ["12h", "4h"],
+                "question": "Does the regime-dependent edge survive adjacent timeframe transfer?",
+                "failure_mode": "regime_timeframe_not_transferable",
+                "expected_information_gain": 0.69,
+            }
+        )
+
+    elif lane == "path_management":
+        specs.extend(
+            [
+                {
+                    "name": "path_entry_lag2_stress",
+                    "stage": "validation",
+                    "discovery_mode": "validation",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": direction,
+                    "updates": {},
+                    "entry_lag_bars": 2,
+                    "question": "Does the setup retain path quality after a two-bar delayed entry?",
+                    "failure_mode": "path_quality_lag_sensitive",
+                    "expected_information_gain": 0.73,
+                },
+                {
+                    "name": "path_cooldown90_stress",
+                    "stage": "validation",
+                    "discovery_mode": "validation",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": direction,
+                    "updates": {},
+                    "cooldown_bars": 90,
+                    "question": "Does the path edge survive stricter event de-duplication?",
+                    "failure_mode": "path_quality_cluster_sensitive",
+                    "expected_information_gain": 0.71,
+                },
+            ]
+        )
+        path_updates: dict[str, Any] = {}
+        if "min_compression" in parameter_grid:
+            path_updates["min_compression"] = [0.0, _first_param(parameter_grid, "min_compression")]
+        if "min_recent_signal_low" in parameter_grid:
+            path_updates["min_recent_signal_low"] = [-2.25, -1.5, -0.75]
+        if path_updates:
+            specs.append(
+                {
+                    "name": "path_quality_driver_ablation",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": direction,
+                    "updates": path_updates,
+                    "question": "Which measurable path constraint is carrying the favorable MFE/MAE profile?",
+                    "failure_mode": "path_driver_not_causal",
+                    "expected_information_gain": 0.79,
+                }
+            )
+
+    elif lane == "invalidation":
+        specs.extend(
+            [
+                {
+                    "name": "invalidation_active_negative",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "warning_blocker",
+                    "track": "warning",
+                    "direction": negative,
+                    "updates": {},
+                    "question": "Does the invalidation shape identify avoidable downside?",
+                    "failure_mode": "invalidation_not_harm_avoiding",
+                    "expected_information_gain": 0.82,
+                },
+                {
+                    "name": "invalidation_missed_upside_cost",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "control",
+                    "track": "bullish_setup",
+                    "direction": positive,
+                    "updates": {},
+                    "question": "How much upside is lost when invalidation is treated as a blocker?",
+                    "failure_mode": "invalidation_too_costly",
+                    "expected_information_gain": 0.80,
+                },
+            ]
+        )
+        invalidation_updates: dict[str, Any] = {}
+        if "require_warning_absent" in parameter_grid:
+            invalidation_updates["require_warning_absent"] = [False]
+        if "trigger" in parameter_grid:
+            invalidation_updates["trigger"] = ["zero_reclaim", "viscosity_reclaim"]
+        if "min_benchmark_return" in parameter_grid:
+            invalidation_updates["min_benchmark_return"] = [-0.05, 0.0]
+        if invalidation_updates:
+            specs.append(
+                {
+                    "name": "invalidation_relaxed_context",
+                    "stage": "counterexample",
+                    "discovery_mode": "counterexample",
+                    "claim_type": "warning_blocker",
+                    "track": "warning",
+                    "direction": negative,
+                    "updates": invalidation_updates,
+                    "question": "Does invalidation remain useful when confirmation filters are relaxed?",
+                    "failure_mode": "invalidation_context_not_causal",
+                    "expected_information_gain": 0.76,
+                }
+            )
+
+    elif lane == "gradient_interpretation":
+        gradient_updates: dict[str, Any] = {}
+        if "min_relative_slope" in parameter_grid:
+            base_slope = _as_float(_first_param(parameter_grid, "min_relative_slope")) or 0.05
+            gradient_updates["min_relative_slope"] = sorted({-0.05, 0.0, round(base_slope / 2, 4), base_slope})
+        if "max_signal" in parameter_grid:
+            gradient_updates["max_signal"] = [0.5, 1.0]
+        if gradient_updates:
+            specs.append(
+                {
+                    "name": "gradient_incremental_context",
+                    "stage": "causal_decomposition",
+                    "discovery_mode": "attribution",
+                    "claim_type": "control",
+                    "track": "gradient_translation",
+                    "direction": direction,
+                    "updates": gradient_updates,
+                    "question": "Does gradient interpretation add signal beyond static level and relative context?",
+                    "failure_mode": "gradient_not_incremental",
+                    "expected_information_gain": 0.80,
+                }
+            )
+        specs.append(
+            {
+                "name": "gradient_direction_flip_counterexample",
+                "stage": "counterexample",
+                "discovery_mode": "counterexample",
+                "claim_type": "warning_blocker",
+                "track": "gradient_translation",
+                "direction": negative,
+                "updates": {},
+                "question": "Does the opposite gradient state behave like a blocker rather than permission?",
+                "failure_mode": "gradient_direction_not_specific",
+                "expected_information_gain": 0.75,
+            }
+        )
+
     return specs
 
 
@@ -1233,7 +1414,15 @@ def design_lane_recovery_experiments(
     skipped: list[dict[str, str]] = []
     blocked_lanes: list[dict[str, str]] = []
     priority = 1
-    supported_lanes = {"reset_quality", "warning_blocker", "bullish_permission"}
+    supported_lanes = {
+        "reset_quality",
+        "warning_blocker",
+        "bullish_permission",
+        "cross_asset_regime",
+        "path_management",
+        "invalidation",
+        "gradient_interpretation",
+    }
 
     for assignment in assignments:
         if len(queue_items) >= max_new_hypotheses:

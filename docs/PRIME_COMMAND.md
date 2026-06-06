@@ -250,12 +250,37 @@ governed lab-ops, and a binding CEO autopilot layer. The preferred operating
 mode for strategic autonomous work is a Codex-supervised heartbeat loop: inspect
 `PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>`,
 `PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id> --show-lab-status`,
-and the latest CEO decision packet, then run at most one binding CEO action with
+`PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id <run_id> --enforce-memory-delta`,
+the latest CEO decision packet, and `action_contract.yaml` / `action_outcome_card.yaml` if present; then
+use replay/eval/guardrail/memory diagnostics to refresh the gate only when
+needed. Run at most one binding CEO action through
 `PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id <run_id> --objective bullish-positive --apply`.
+`ceo status` is the quick operator view: it now prints existing blocker stack
+status, top blocker, operating incident count, dispatch receipt status, and
+safe-to-dispatch state alongside lab status, plus the blocker stack's next
+repair command when one is known. It also prints resumption status and the
+default handoff command; if no resumption brief exists, the default handoff
+command is `ceo resumption-brief`. If a repair plan exists, it prints repair
+plan status, runnable repair count, diagnostic refresh count, top repair, top
+repair kind, and repair next command.
+Do this only if there is no stop request, true blocker, promotion gate,
+unresolved self-audit intervention, failed guardrail audit, or failed preflight
+gate, unless the sole blocker is a trace-only failure routed to an explicit
+repair action.
 The executor must follow the packet: champion/challenger decisions run
-champion/challenger preparation, governed-research decisions run one bounded
-block, and unsupported decisions write a capability-gap artifact instead of
-falling back to blind loop execution.
+champion/challenger preparation, completed champion/challenger work can route
+into `ceo fresh-control-validation`, `request_fresh_data` runs
+`ceo fresh-data-preflight`, safe data preflights can route into
+`ceo frozen-candidate-validation`, frozen source replay can route into
+`ceo frozen-validation-rerun`, adapter reruns can route into
+`ceo fresh-withheld-validation-contract`, ready contracts can route into
+`ceo fresh-withheld-validation-executor`, missing snapshot manifests can route
+into `ceo fresh-withheld-snapshot-manifest`, governed-research decisions run
+one bounded block, `patch_research_infra` runs a governed lane-recovery patch plan,
+`broaden_hypothesis_source` compiles Obsidian/research-source hypotheses into
+shadow runtime queue items, manual data-import gates stop instead of looping,
+and unsupported decisions write a capability-gap artifact instead of falling
+back to blind loop execution.
 Use `PYTHONPATH=src python3 -m riskflow ceo stop --run-id <run_id> --reason <reason>`
 to stop both the CEO run and its underlying lab runtime. The CEO layer separates
 research-infra delta, understanding delta, and chart-facing product delta. It is
@@ -263,13 +288,56 @@ not a production ranking, state, score, or TradingView formula change.
 For 8+ hour heartbeat runs, follow `docs/CEO_HEARTBEAT_AUTONOMY.md`; heartbeat
 prompts should point Codex there as the durable operating contract.
 
-Latest CEO run checkpoint as of 2026-06-01:
+Latest CEO run checkpoint as of 2026-06-05:
 
 - Run id: `ceo_supervised_chain_20260531`.
 - Lab run id: `ceo_supervised_chain_20260531_lab`.
 - The 8-hour heartbeat was stopped for `time_budget_elapsed`; stop files are expected under `reports/ceo_runs/ceo_supervised_chain_20260531/` and `research/lab_loop/autonomous_runs/ceo_supervised_chain_20260531_lab/`.
 - Latest binding action completed `run_champion_challenger` with `status: shadow_comparison_complete`.
 - `champion_challenger_results.yaml` had 24 candidates, 0 missing metric sources, and the next allowed action was fresh/control validation for promising shadow challengers.
+- `ceo fresh-control-validation` is now a supported planner for that next action; it writes `fresh_control_validation_plan.yaml` and `.md` without promoting anything.
+- Champion/challenger now also writes `champion_challenger_visual_review_queue.yaml` / `.md` with candidate-level review questions and evidence paths for human or agent chart review.
+- `ceo fresh-data-preflight` checks local OHLCV coverage/freshness before validation and writes `fresh_data_preflight.yaml` / `.md`; ready assets include CSV hashes that snapshot authority carries into executor lineage checks.
+- `ceo frozen-candidate-validation` converts a safe preflight plus the fresh/control plan into frozen validation specs in `frozen_candidate_validation_plan.yaml` / `.md`; it keeps candidates in shadow mode.
+- `ceo frozen-validation-executor` replays frozen specs against existing source artifacts and writes `frozen_validation_execution_result.yaml` / `.md` plus `frozen_validation_rerun_grid.yaml` when adapters are ready; this is source replay only, not fresh validation or product proof.
+- `ceo frozen-validation-rerun` runs that frozen adapter grid through grammar-search on local data and writes `frozen_validation_rerun_result.yaml` / `.md` plus CSV artifacts under `frozen_validation_rerun/`; it is still non-promotional and should route next to fresh/withheld snapshot rules and pass/fail thresholds.
+- `ceo fresh-withheld-validation-contract` freezes snapshot rules, pass/fail gates, and promotion constraints in `fresh_withheld_validation_contract.yaml` / `.md`; it does not execute validation and routes next to `ceo fresh-withheld-validation-executor`.
+- `ceo withheld-split-manifest --apply --withheld-split-id <id> --source-evidence-cutoff <date>` writes `withheld_split_manifest.yaml` / `.md` as guarded withheld split authority metadata; it does not execute validation or authorize product language.
+- `ceo fresh-withheld-snapshot-manifest --apply` writes `fresh_withheld_snapshot_manifest.yaml` / `.md` as a conservative snapshot authority draft; it leaves proof fields unset unless fresh/withheld status, active assets, source-evidence cutoff, and fresh cutoff or withheld split id are explicit. Use `ceo fresh-withheld-snapshot-declare --apply --snapshot-type fresh|withheld --source-evidence-cutoff <date> --snapshot-cutoff <date>` or `--withheld-split-id <id>` with `--confirm-no-overlap` to mark the manifest authority-ready without hand-editing YAML. Fresh snapshot declarations must use parseable dates, snapshot cutoff after source-evidence cutoff, and active assets whose latest dates reach the claimed cutoff. Withheld declarations require a ready matching `withheld_split_manifest.yaml` with the same source-evidence cutoff and a recorded fingerprint.
+- `ceo fresh-withheld-validation-executor` writes `fresh_withheld_validation_execution_result.yaml` / `.md`, refuses to run without valid snapshot authority, blocks if contract/manifest/grid/active-CSV/split-manifest fingerprints drift, and runs only the frozen grammar-search grid in shadow mode when the manifest is valid. Completed execution is not a passing validation result unless the frozen contract thresholds pass semantically: matched-null status or p-value must pass, directional forward relative return must clear the minimum, and required lag/cooldown controls need explicit pass statuses.
+- Direct validation/evidence/authority commands, including `ceo run-block`, frozen/fresh-withheld validation commands, and snapshot authority commands, are preflight-guarded. A stop request, true blocker, pending approval, failed guardrail, replay/eval gap, or unresolved hard memory delta should block them before mutation.
+- `ceo approval-queue` writes `approval_queue.yaml` / `.md` plus `approval_status.yaml` for red-authority decisions such as promotion approval or stopped-run resume/clear-stop. `ceo approval-record --approval-id <id> --decision approved|rejected --user-confirmed` appends `approval_decision_ledger.jsonl`; it records user authority but does not apply product changes.
+- `ceo executive-kpis` writes `executive_kpis.yaml` / `.md` as a compact operating scoreboard for approvals, evidence debt, candidates, capability backlog, trace health, validation gate, top blocker, operating incidents, repair-plan status, top repair, top repair kind, repair next command, and product-language safety.
+- `ceo heartbeat-plan` writes `heartbeat_plan.yaml` / `.md`; `ceo heartbeat-tick --apply` performs one persisted heartbeat wake, refuses red gates, delegates trace-only failures to `execute-next` for bounded repair or a blocked preflight result, runs at most one bound action, and appends `heartbeat_journal.jsonl`; `ceo heartbeat-journal` renders that journal.
+- `ceo role-queue` writes `role_registry.yaml`, `role_task_queue.yaml` / `.md`, and `role_orchestration_status.yaml` by routing approvals, evidence debts, and capability gaps to specialist CEO roles. `ceo role-dispatch` writes `role_dispatch.yaml` / `.md` plus review-only markdown packets under `role_dispatch_packets/` with exact questions, source refs, authority limits, and expected specialist-result schema. `ceo role-result --task-id <id> --status complete|blocked` appends `role_task_ledger.jsonl`. Promotion gates require completed validation-referee plus product-translator or risk-officer tasks to point at structured passing YAML review artifacts; a completed ledger row alone is not enough.
+- `ceo patch-research-infra` and `ceo broaden-hypothesis-source` are now bounded routes for the two main research-infra/source-broadening decisions; both keep `production_effect: none`.
+- `ceo trace-grade` now treats the fresh/control, preflight, and frozen-validation actions as supported and reports failure-avoidance plus evidence-provenance fields, but the old run should still honor its stop request.
+- `ceo trace-grade` and `ceo_self_audit.yaml` now include `loop_meltdown`; repeated manual gates or repeated no-progress fingerprints require a strategy change or stop.
+- `ceo operating-dashboard` writes `ceo_operating_dashboard.yaml` / `.md` as a CEO portfolio view: candidates, capability backlog, data gate, memory/trace status, and risk.
+- `ceo portfolio-allocator` writes `portfolio_allocator.yaml` / `.md` as a lane selector across approval governance, validation authority, candidate translation, evidence debt, research infrastructure, specialist review, trace reliability, and memory handoff.
+- `ceo mission-score` writes `mission_score.yaml` / `.md` as an eight-dimension Riskflow mission coverage score across bullish permission, warning/blocker, invalidation, reset, gradient, path, regime, and archive memory.
+- `ceo strategy-capital-dashboard` writes `strategy_capital_dashboard.yaml` / `.md` as a 100-point CEO attention allocation across safety, validation, translation, mission gaps, and memory. These are `ceo_attention_points`, not trading or production capital.
+- `ceo decision-quality` writes `decision_quality.yaml` / `.md` as the explainable executive routing card: selected action, runner-up, confidence, expected artifact, stop condition, and scored alternatives with rejection reasons.
+- `ceo replay`, `ceo eval-suite`, and `ceo eval-fixtures` reconstruct CEO actions, fingerprint ledgers, safety artifacts, and dispatch receipts, score 9.9-readiness gates, and regression-test critical policy transitions.
+- `ceo memory-delta` writes `memory_delta.yaml` / `.md` and can optionally write a curated Obsidian handoff note; memory notes are routing context, not runtime authority.
+- `ceo guardrail-audit` writes `guardrail_audit.yaml` / `.md` and flags non-`none` production effects or product-language permission inside CEO YAML artifacts.
+- `ceo preflight-gate` writes `preflight_gate.yaml` / `.md` and unifies trace, approval, replay, eval, guardrail, memory, and heartbeat-budget status before direct `execute-next` or heartbeat dispatch.
+- `ceo dispatch-receipt` writes `dispatch_receipt.yaml` / `.md` and fingerprints the exact trust artifacts that allow or block one `execute-next --apply` dispatch. Direct receipt generation is diagnostic-only and must not overwrite `action_contract.yaml`; `execute-next` writes an immutable `dispatch_receipts/<receipt_id>.yaml` snapshot and attaches that snapshot path/hash to the receipt-backed binding action result.
+- `ceo blocker-stack` writes `blocker_stack.yaml` / `.md` as the ordered "why can't CEO mode act?" synthesis across stop, approval, preflight, dispatch, replay, eval, memory, and evidence-debt blockers.
+- `ceo incident-register` writes `operating_incident_register.yaml` / `.md` as grouped repair memory for blocked dispatches, repeated preflight blockers, replay gaps, eval failures, artifact-coherence failures, and guardrail failures.
+- `ceo repair-plan` writes `repair_plan.yaml` / `.md` as the ranked repair backlog across blocker-stack and incident-register findings, including the top repair, next command, closure condition, manual-gate flag, and command kind (`runnable_cli`, `diagnostic_refresh`, `manual_gate`, or `implementation_required`) so symbolic repair labels are not mistaken for executable commands and diagnostic refreshes are not counted as completed repairs.
+- `ceo action-board` writes `action_board.yaml` / `.md` as the CEO operator cockpit. It refreshes resumption, repair-plan, dispatch receipt, and executive-KPI artifacts, then separates the primary action from manual gates, runnable repairs, diagnostic refreshes, implementation repairs, and blocked actions. It is diagnostic-only and should be the first place a fresh session looks when it needs one next-action surface.
+- `ceo operator-step --apply` writes `operator_step.yaml` / `.md` as one audited CEO transaction. It refreshes the action board, executes exactly one internal bounded `execute-next` dispatch only when the board marks that dispatch safe, refreshes the board again, and records before/after status. It refuses manual gates, diagnostic refreshes, implementation repairs, unsupported command kinds, and arbitrary shell commands from YAML.
+- `ceo operator-brief` writes `operator_brief.yaml` / `.md` as the plain-English CEO handoff card: current situation, primary action, recommended next command, why, refused actions, and evidence refs.
+- `ceo artifact-coherence` writes `artifact_coherence.yaml` / `.md` and checks whether trust artifacts are from the same run/lab ids and fresh relative to the latest binding action.
+- `ceo resumption-brief` writes `resumption_brief.yaml` / `.md` as the fresh-session cockpit handoff: stopped, blocked, diagnostic-only, or safe for one bound action, with the exact next command.
+- `ceo run-index` writes `run_index.yaml` / `.md` as a CEO fleet board across recent runs: stopped, blocked, diagnostic, actionable, or missing resumption brief, with dispatch status, top blocker, incident count, repair-plan status, top repair, operator-brief status/summary, resumption next command, and repair next command for each.
+- `ceo capability-backlog` writes `capability_backlog.yaml` / `.md` as a standalone research-infra backlog from capability gaps, trace gaps, visual-source gaps, data gates, and frozen-executor gaps.
+- `ceo promotion-proposal` writes `promotion_proposal.yaml` / `.md` for user review only; it blocks when fresh/frozen validation or visual evidence is missing and never applies product changes.
+- `ceo evidence-debt-register` writes `evidence_debt_register.yaml` / `.md` as a per-candidate queue of missing product evidence, owner commands, and promotion blockers; it never validates or promotes candidates.
+- `ceo report` now includes links/status for trace grade, flight dashboard, operating dashboard, mission score, strategy capital dashboard, decision quality, replay, eval suite, guardrail audit, preflight gate, dispatch receipt, blocker stack, operating incident register, repair plan, action board, operator brief, artifact coherence, resumption brief, approval queue, executive KPIs, role dispatch, capability backlog, promotion proposal, and evidence-debt register in addition to the decision packet.
+- `obsidian-kg audit` writes `research/knowledge_graph/obsidian_kg_audit.yaml` / `.md` as a memory-quality cleanup queue; current vault audits may show older notes that predate the stricter action-metadata standard.
+- New `ceo execute-next` actions write `action_contract.yaml` before acting and `action_outcome_card.yaml` after the binding result; the outcome card records next actions, provenance, failure-avoidance status, and memory-delta requirements.
 - Do not resume this old run blindly. If the user wants another overnight run, start or plan a new run id, then follow `docs/CEO_HEARTBEAT_AUTONOMY.md`.
 
 Current next implementation mission:

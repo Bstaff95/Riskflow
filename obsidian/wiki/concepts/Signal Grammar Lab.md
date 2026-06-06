@@ -1,3 +1,13 @@
+---
+rf_type: concept
+concept_id: signal_grammar_lab
+status: active
+updated_at: 2026-06-05
+production_effect: none
+future_action_changed: Translate oscillator chart grammar into measurable sidecars before changing formulas, weights, or product behavior.
+not_product_proof: true
+---
+
 # Signal Grammar Lab
 
 The Signal Grammar Lab is the research process for learning what the Riskflow oscillator is saying before changing the formula.
@@ -71,3 +81,4 @@ Related:
 - [[Indicator Observation Library]]
 - [[Breakout Archetypes]]
 - [[False Positive Atlas]]
+- [[Agentic Loop Research Map]]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -79,17 +80,65 @@ from .lab_ops import (
 )
 from .ceo_ops import (
     CEO_REPORT_ROOT,
+    run_ceo_action_board,
+    run_ceo_artifact_coherence,
+    run_ceo_approval_apply,
+    run_ceo_approval_queue,
+    run_ceo_approval_record,
+    run_ceo_blocker_stack,
+    run_ceo_capability_backlog,
+    run_ceo_dispatch_receipt,
     run_ceo_heartbeat_status,
     CeoOpsOptions,
     run_ceo_champion_challenger,
+    run_ceo_broaden_hypothesis_source,
+    run_ceo_decision_quality,
+    run_ceo_evidence_debt_register,
     run_ceo_execute_next,
+    run_ceo_executive_kpis,
+    run_ceo_eval_suite,
+    run_ceo_eval_fixtures,
+    run_ceo_fresh_withheld_validation_contract,
+    run_ceo_withheld_split_manifest,
+    run_ceo_fresh_withheld_snapshot_declare,
+    run_ceo_fresh_withheld_snapshot_manifest,
+    run_ceo_fresh_withheld_validation_executor,
+    run_ceo_fresh_control_validation,
+    run_ceo_fresh_data_preflight,
+    run_ceo_flight_dashboard,
+    run_ceo_frozen_candidate_validation,
+    run_ceo_frozen_validation_executor,
+    run_ceo_frozen_validation_rerun,
+    run_ceo_guardrail_audit,
+    run_ceo_heartbeat_journal,
+    run_ceo_heartbeat_plan,
     run_ceo_lab_status_text,
+    run_ceo_memory_delta,
+    run_ceo_mission_score,
+    run_ceo_operating_dashboard,
+    run_ceo_operating_incident_register,
+    run_ceo_operator_brief,
+    run_ceo_operator_step,
+    run_ceo_patch_research_infra,
     run_ceo_plan,
+    run_ceo_portfolio_allocator,
+    run_ceo_preflight_gate,
+    run_ceo_promotion_proposal,
+    run_ceo_repair_plan,
     run_ceo_report,
+    run_ceo_replay,
+    run_ceo_resumption_brief,
     run_ceo_review,
+    run_ceo_role_dispatch,
+    run_ceo_role_queue,
+    run_ceo_role_result,
     run_ceo_run_block,
+    run_ceo_run_index,
+    run_ceo_strategy_capital_dashboard,
     run_ceo_status,
     run_ceo_stop,
+    run_ceo_heartbeat_tick,
+    run_ceo_trace_grade,
 )
 from .meta_research import (
     DEFAULT_META_REPORT_ROOT,
@@ -127,12 +176,14 @@ from .obsidian_kg import (
     DEFAULT_OBSIDIAN_GRID_DIR,
     DEFAULT_OBSIDIAN_QUEUE_PATH,
     DEFAULT_TARGETED_BULLISH_QUEUE_PATH,
+    audit_knowledge_graph,
     build_knowledge_graph,
     compile_setup_journey_queue,
     compile_targeted_bullish_queue,
     export_evidence_summaries,
     load_obsidian_notes,
     validate_knowledge_graph,
+    write_knowledge_audit_outputs,
     write_knowledge_graph_outputs,
 )
 from .observation_library import export_observation_library
@@ -1065,6 +1116,19 @@ def obsidian_kg_command(args: argparse.Namespace) -> int:
         print(f"Wrote Obsidian KG JSON: {paths['graph_json']}")
         return 0
 
+    if args.obsidian_kg_action == "audit":
+        try:
+            audit = audit_knowledge_graph(graph)
+            paths = write_knowledge_audit_outputs(audit, args.output_dir)
+        except Exception as exc:
+            print(f"Obsidian KG audit failed: {exc}")
+            return 1
+        print(f"Wrote Obsidian KG audit YAML: {paths['audit_yaml']}")
+        print(f"Wrote Obsidian KG audit report: {paths['audit_md']}")
+        print(f"Status: {audit.get('status')}")
+        print(f"Issues: {audit.get('issue_count')}")
+        return 0
+
     if args.obsidian_kg_action == "compile-queue":
         result = validate_knowledge_graph(graph)
         if result.errors:
@@ -1806,8 +1870,86 @@ def ceo_command(args: argparse.Namespace) -> int:
     action = args.ceo_action
     options = _ceo_options_from_args(args)
     try:
-        if action in {"review", "report", "heartbeat-status", "stop"} and not args.run_id:
+        if action in {
+            "review",
+            "report",
+            "heartbeat-status",
+            "heartbeat-plan",
+            "heartbeat-tick",
+            "heartbeat-journal",
+            "stop",
+            "trace-grade",
+            "flight-dashboard",
+            "operating-dashboard",
+            "portfolio-allocator",
+            "mission-score",
+            "strategy-capital-dashboard",
+            "decision-quality",
+            "action-board",
+            "operator-step",
+            "operator-brief",
+            "artifact-coherence",
+            "resumption-brief",
+            "dispatch-receipt",
+            "blocker-stack",
+            "incident-register",
+            "promotion-proposal",
+            "evidence-debt-register",
+            "approval-queue",
+            "approval-record",
+            "executive-kpis",
+            "role-queue",
+            "role-dispatch",
+            "role-result",
+            "capability-backlog",
+            "fresh-data-preflight",
+            "frozen-candidate-validation",
+            "frozen-validation-executor",
+            "frozen-validation-rerun",
+            "fresh-withheld-validation-contract",
+            "withheld-split-manifest",
+            "fresh-withheld-snapshot-manifest",
+            "fresh-withheld-snapshot-declare",
+            "fresh-withheld-validation-executor",
+            "fresh-control-validation",
+            "patch-research-infra",
+            "broaden-hypothesis-source",
+        } and not args.run_id:
             print(f"ceo {action} requires --run-id")
+            return 1
+        guarded_direct_actions = {
+            "run-block",
+            "champion-challenger",
+            "promotion-proposal",
+            "evidence-debt-register",
+            "fresh-control-validation",
+            "fresh-data-preflight",
+            "frozen-candidate-validation",
+            "frozen-validation-executor",
+            "frozen-validation-rerun",
+            "fresh-withheld-validation-contract",
+            "withheld-split-manifest",
+            "fresh-withheld-snapshot-manifest",
+            "fresh-withheld-snapshot-declare",
+            "fresh-withheld-validation-executor",
+        }
+        if action in guarded_direct_actions:
+            preflight_result = run_ceo_preflight_gate(options, enforce_memory_delta=True)
+            preflight_gate = preflight_result["preflight_gate"]
+            if preflight_gate.get("safe_to_execute") is False:
+                print(f"Direct ceo {action} blocked by preflight gate: {preflight_result['paths']['preflight_gate']}")
+                print(f"Preflight gate report: {preflight_result['paths']['preflight_gate_report']}")
+                print(f"Status: {preflight_gate.get('status')}")
+                print(f"Blockers: {[item.get('blocker') for item in preflight_gate.get('blockers', []) or []]}")
+                return 1
+            options = replace(options, ceo_context="guarded_direct", ceo_authorized_action=action)
+        authority_mutating_actions = {
+            "withheld-split-manifest",
+            "fresh-withheld-snapshot-manifest",
+            "fresh-withheld-snapshot-declare",
+        }
+        if action in authority_mutating_actions and not getattr(args, "apply", False):
+            print(f"ceo {action} requires --apply because it writes validation authority artifacts")
             return 1
         if action == "status":
             result = run_ceo_status(options)
@@ -1820,6 +1962,33 @@ def ceo_command(args: argparse.Namespace) -> int:
             open_lanes = status.get("governance", {}).get("open_lanes", [])
             print(f"Open lanes: {', '.join(open_lanes) or 'none'}")
             print(f"True blocker: {status.get('true_blocker')}")
+            operating = status.get("operating_artifacts", {}) or {}
+            print(f"Blocker stack: {operating.get('blocker_stack_status')}")
+            print(f"Top blocker: {operating.get('top_blocker') or 'none'}")
+            print(f"Operating incidents: {operating.get('operating_incident_count', 0)}")
+            print(f"Dispatch receipt: {operating.get('dispatch_receipt_status')}")
+            print(f"Safe to dispatch: {operating.get('dispatch_safe_to_dispatch')}")
+            print(f"Resumption status: {operating.get('resumption_status')}")
+            print(f"Default handoff command: {operating.get('default_handoff_command')}")
+            if operating.get("blocker_next_command"):
+                print(f"Next blocker command: {operating.get('blocker_next_command')}")
+            print(f"Repair plan: {operating.get('repair_plan_status')}")
+            print(f"Runnable repairs: {operating.get('runnable_repair_count', 0)}")
+            print(f"Diagnostic refreshes: {operating.get('diagnostic_refresh_count', 0)}")
+            print(f"Top repair: {operating.get('top_repair') or 'none'}")
+            print(f"Top repair kind: {operating.get('top_repair_kind') or 'none'}")
+            if operating.get("repair_next_command"):
+                print(f"Repair next command: {operating.get('repair_next_command')}")
+            print(f"Action board: {operating.get('action_board_status')}")
+            print(f"Action board primary: {operating.get('action_board_primary_action') or 'none'}")
+            print(f"Action board kind: {operating.get('action_board_primary_kind') or 'none'}")
+            if operating.get("action_board_command"):
+                print(f"Action board command: {operating.get('action_board_command')}")
+            print(f"Operator brief: {operating.get('operator_brief_status')}")
+            if operating.get("operator_brief_summary"):
+                print(f"Operator brief summary: {operating.get('operator_brief_summary')}")
+            if operating.get("operator_brief_next_action"):
+                print(f"Operator brief next action: {operating.get('operator_brief_next_action')}")
             if getattr(args, "show_lab_status", False):
                 print(run_ceo_lab_status_text(options))
             return 0
@@ -1865,6 +2034,133 @@ def ceo_command(args: argparse.Namespace) -> int:
             if result["paths"].get("capability_gap"):
                 print(f"Capability gap: {result['paths']['capability_gap']}")
             return 0
+        if action == "fresh-control-validation":
+            result = run_ceo_fresh_control_validation(options)
+            action_result = result["action_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Status: {action_result.get('status')}")
+            print(f"Plan: {result['paths']['plan']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if action_result.get("status") not in {"blocked_missing_champion_challenger_results"} else 1
+        if action == "fresh-data-preflight":
+            result = run_ceo_fresh_data_preflight(options)
+            preflight = result["preflight"]
+            print(f"Fresh data preflight: {result['paths']['preflight']}")
+            print(f"Preflight report: {result['paths']['report']}")
+            print(f"Overall status: {preflight.get('overall_status')}")
+            print(f"Safe to run fresh validation: {preflight.get('safe_to_run_fresh_validation')}")
+            print(f"Next action: {preflight.get('next_action')}")
+            return 0 if preflight.get("safe_to_run_fresh_validation") else 1
+        if action == "frozen-candidate-validation":
+            result = run_ceo_frozen_candidate_validation(options)
+            plan = result["plan"]
+            print(f"Frozen candidate validation plan: {result['paths']['plan']}")
+            print(f"Frozen candidate validation report: {result['paths']['report']}")
+            print(f"Status: {plan.get('status')}")
+            print(f"Ready specs: {plan.get('ready_spec_count')}/{plan.get('spec_count')}")
+            print(f"Next action: {plan.get('next_action')}")
+            return 0 if plan.get("safe_to_execute_specs") else 1
+        if action == "frozen-validation-executor":
+            result = run_ceo_frozen_validation_executor(options)
+            execution = result["execution"]
+            print(f"Frozen validation execution result: {result['paths']['result']}")
+            print(f"Frozen validation execution report: {result['paths']['report']}")
+            print(f"Frozen validation rerun grid: {result['paths']['rerun_grid']}")
+            print(f"Status: {execution.get('status')}")
+            print(f"Executed specs: {execution.get('executed_spec_count')}/{execution.get('spec_count')}")
+            print(f"Validation result: {execution.get('validation_result')}")
+            print(f"Next action: {execution.get('next_action')}")
+            return 0 if execution.get("validation_completed") else 1
+        if action == "frozen-validation-rerun":
+            result = run_ceo_frozen_validation_rerun(options)
+            rerun = result["rerun"]
+            print(f"Frozen validation rerun result: {result['paths']['result']}")
+            print(f"Frozen validation rerun report: {result['paths']['report']}")
+            print(f"Frozen validation rerun output dir: {result['paths']['output_dir']}")
+            print(f"Status: {rerun.get('status')}")
+            print(f"Records: {rerun.get('record_rows')}")
+            print(f"Strict referee rows: {rerun.get('strict_referee_rows')}")
+            print(f"Next action: {rerun.get('next_action')}")
+            return 0 if str(rerun.get("status", "")).startswith("adapter_rerun_") else 1
+        if action == "fresh-withheld-validation-contract":
+            result = run_ceo_fresh_withheld_validation_contract(options)
+            contract = result["contract"]
+            print(f"Fresh/withheld validation contract: {result['paths']['contract']}")
+            print(f"Fresh/withheld validation report: {result['paths']['report']}")
+            print(f"Status: {contract.get('status')}")
+            print(f"Ready specs: {contract.get('ready_spec_count')}/{contract.get('candidate_spec_count')}")
+            print(f"Next action: {contract.get('next_action')}")
+            return 0 if contract.get("status") == "fresh_withheld_validation_contract_ready" else 1
+        if action == "withheld-split-manifest":
+            result = run_ceo_withheld_split_manifest(
+                options,
+                withheld_split_id=args.withheld_split_id,
+                source_evidence_cutoff=args.source_evidence_cutoff,
+                description=args.description,
+            )
+            manifest = result["manifest"]
+            print(f"Withheld split manifest: {result['paths']['manifest']}")
+            print(f"Withheld split manifest report: {result['paths']['report']}")
+            print(f"Status: {manifest.get('status')}")
+            print(f"Withheld split id: {manifest.get('withheld_split_id') or 'unset'}")
+            print(f"Blocked reasons: {manifest.get('blocked_reasons') or []}")
+            print(f"Next action: {result['action_result'].get('next_allowed_actions', [''])[0]}")
+            return 0 if manifest.get("status") == "withheld_split_manifest_ready" else 1
+        if action == "fresh-withheld-snapshot-manifest":
+            result = run_ceo_fresh_withheld_snapshot_manifest(options)
+            manifest = result["manifest"]
+            print(f"Fresh/withheld snapshot manifest: {result['paths']['manifest']}")
+            print(f"Fresh/withheld snapshot manifest report: {result['paths']['report']}")
+            print(f"Status: {manifest.get('status')}")
+            print(f"Snapshot type: {manifest.get('snapshot_type') or 'unset'}")
+            print(f"Active assets: {manifest.get('active_asset_count')}")
+            print(f"Next action: {manifest.get('next_action')}")
+            return 0 if manifest.get("status") == "draft_requires_manual_snapshot_authority" else 1
+        if action == "fresh-withheld-snapshot-declare":
+            result = run_ceo_fresh_withheld_snapshot_declare(
+                options,
+                snapshot_type=args.snapshot_type,
+                snapshot_cutoff=args.snapshot_cutoff,
+                withheld_split_id=args.withheld_split_id,
+                source_evidence_cutoff=args.source_evidence_cutoff,
+                confirm_no_overlap=args.confirm_no_overlap,
+            )
+            manifest = result["manifest"]
+            print(f"Fresh/withheld snapshot manifest: {result['paths']['manifest']}")
+            print(f"Fresh/withheld snapshot manifest report: {result['paths']['report']}")
+            print(f"Status: {manifest.get('status')}")
+            print(f"Blocked reasons: {manifest.get('blocked_reasons') or []}")
+            print(f"Next action: {manifest.get('next_action')}")
+            return 0 if manifest.get("status") == "snapshot_authority_ready" else 1
+        if action == "fresh-withheld-validation-executor":
+            result = run_ceo_fresh_withheld_validation_executor(options)
+            execution = result["execution"]
+            print(f"Fresh/withheld validation execution result: {result['paths']['result']}")
+            print(f"Fresh/withheld validation execution report: {result['paths']['report']}")
+            print(f"Status: {execution.get('status')}")
+            print(f"Validation completed: {execution.get('validation_completed')}")
+            print(f"Validation result: {execution.get('validation_result')}")
+            print(f"Next action: {execution.get('next_action')}")
+            return 0 if execution.get("validation_completed") else 1
+        if action == "patch-research-infra":
+            result = run_ceo_patch_research_infra(options)
+            action_result = result["action_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Status: {action_result.get('status')}")
+            print(f"Plan: {result['paths']['plan']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if action_result.get("status") not in {"blocked_missing_recovery_inputs", "blocked_recovery_audit_failed"} else 1
+        if action == "broaden-hypothesis-source":
+            result = run_ceo_broaden_hypothesis_source(options)
+            action_result = result["action_result"]
+            print(f"CEO run id: {result['run_id']}")
+            print(f"Lab run id: {result['lab_run_id']}")
+            print(f"Status: {action_result.get('status')}")
+            print(f"Plan: {result['paths']['plan']}")
+            print(f"Report: {result['paths']['report']}")
+            return 0 if action_result.get("status") != "no_broadening_sources" else 1
         if action == "heartbeat-status":
             result = run_ceo_heartbeat_status(options)
             status = result["status"]
@@ -1877,6 +2173,32 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Stop requested: {status.get('stop_requested')}")
             print(f"True blocker: {status.get('true_blocker')}")
             print(f"Next action: {status.get('next_recommended_action')}")
+            return 0
+        if action == "heartbeat-plan":
+            result = run_ceo_heartbeat_plan(
+                options,
+                interval_minutes=args.interval_minutes,
+                max_hours=args.max_hours if args.max_hours is not None else 8.0,
+            )
+            print(f"Heartbeat plan: {result['paths']['heartbeat_plan']}")
+            print(f"Heartbeat plan report: {result['paths']['heartbeat_plan_report']}")
+            print(f"Tick command: {result['plan']['tick_command']}")
+            return 0
+        if action == "heartbeat-tick":
+            result = run_ceo_heartbeat_tick(options)
+            tick = result["tick"]
+            print(f"Heartbeat state: {result['paths']['heartbeat_state']}")
+            print(f"Heartbeat journal: {result['paths']['heartbeat_journal']}")
+            print(f"Status: {tick.get('status')}")
+            print(f"Blockers: {tick.get('blockers') or []}")
+            print(f"Action: {tick.get('action_decision') or 'none'}")
+            print(f"Next action: {tick.get('next_action')}")
+            return 0 if tick.get("status") != "blocked_before_action" else 1
+        if action == "heartbeat-journal":
+            result = run_ceo_heartbeat_journal(options)
+            print(f"Heartbeat journal: {result['paths']['heartbeat_journal']}")
+            print(f"Heartbeat journal report: {result['paths']['heartbeat_journal_report']}")
+            print(f"Ticks: {len(result['entries'])}")
             return 0
         if action == "stop":
             result = run_ceo_stop(options, reason=args.reason)
@@ -1893,6 +2215,361 @@ def ceo_command(args: argparse.Namespace) -> int:
             result = run_ceo_report(options)
             print(f"CEO report: {result['paths']['report']}")
             return 0
+        if action == "trace-grade":
+            result = run_ceo_trace_grade(options)
+            grade = result["grade"]
+            print(f"CEO trace grade: {result['paths']['trace_grade']}")
+            print(f"Trace grade report: {result['paths']['trace_grade_report']}")
+            print(f"Verdict: {grade.get('verdict')}")
+            print(f"Score: {grade.get('score')}")
+            print(f"Recommended next action: {grade.get('recommended_next_action')}")
+            return 0 if grade.get("verdict") != "fail" else 1
+        if action == "flight-dashboard":
+            result = run_ceo_flight_dashboard(options)
+            dashboard = result["dashboard"]
+            print(f"CEO flight dashboard: {result['paths']['dashboard']}")
+            print(f"Dashboard report: {result['paths']['dashboard_report']}")
+            print(f"Safe to continue: {dashboard.get('safe_to_continue')}")
+            print(f"Blockers: {', '.join(dashboard.get('blockers', []) or []) or 'none'}")
+            print(f"Next action: {dashboard.get('next_recommended_action')}")
+            return 0
+        if action == "operating-dashboard":
+            result = run_ceo_operating_dashboard(options)
+            dashboard = result["dashboard"]
+            print(f"CEO operating dashboard: {result['paths']['dashboard']}")
+            print(f"Dashboard report: {result['paths']['dashboard_report']}")
+            print(f"Candidate portfolio: {dashboard.get('candidate_portfolio_count')}")
+            print(f"Capability backlog: {dashboard.get('capability_backlog_count')}")
+            print(f"Next recommended action: {dashboard.get('next_recommended_action')}")
+            return 0
+        if action == "portfolio-allocator":
+            result = run_ceo_portfolio_allocator(options)
+            allocator = result["allocator"]
+            selected = allocator.get("selected_lane", {}) or {}
+            print(f"Portfolio allocator: {result['paths']['portfolio_allocator']}")
+            print(f"Portfolio allocator report: {result['paths']['portfolio_allocator_report']}")
+            print(f"Selected lane: {selected.get('lane_id')}")
+            print(f"Score: {selected.get('score')}")
+            print(f"Next action: {selected.get('next_action')}")
+            return 0
+        if action == "mission-score":
+            result = run_ceo_mission_score(options)
+            score = result["mission_score"]
+            print(f"Mission score: {result['paths']['mission_score']}")
+            print(f"Mission score report: {result['paths']['mission_score_report']}")
+            print(f"Status: {score.get('status')}")
+            print(f"Overall mission score: {score.get('overall_mission_score')}")
+            print(f"Lowest dimension: {score.get('lowest_dimension')}")
+            print(f"Next action: {score.get('next_best_mission_action')}")
+            return 0
+        if action == "strategy-capital-dashboard":
+            result = run_ceo_strategy_capital_dashboard(options)
+            dashboard = result["dashboard"]
+            print(f"Strategy capital dashboard: {result['paths']['strategy_capital_dashboard']}")
+            print(f"Strategy capital dashboard report: {result['paths']['strategy_capital_dashboard_report']}")
+            print(f"Safe to continue: {dashboard.get('safe_to_continue')}")
+            print(f"Selected bucket: {dashboard.get('selected_capital_bucket')}")
+            print(f"Selected strategy: {dashboard.get('selected_strategy')}")
+            print(f"Capital points: {dashboard.get('total_points')}")
+            return 0
+        if action == "decision-quality":
+            result = run_ceo_decision_quality(options)
+            quality = result["decision_quality"]
+            print(f"Decision quality: {result['paths']['decision_quality']}")
+            print(f"Decision quality report: {result['paths']['decision_quality_report']}")
+            print(f"Selected action: {quality.get('selected_action')}")
+            print(f"Selected score: {quality.get('selected_score')}")
+            print(f"Runner-up action: {quality.get('runner_up_action') or 'none'}")
+            print(f"Confidence: {quality.get('confidence')}")
+            print(f"Expected artifact: {quality.get('expected_artifact')}")
+            return 0
+        if action == "action-board":
+            result = run_ceo_action_board(options)
+            board = result["action_board"]
+            primary = board.get("primary_action", {}) or {}
+            print(f"CEO action board: {result['paths']['action_board']}")
+            print(f"CEO action board report: {result['paths']['action_board_report']}")
+            print(f"Status: {board.get('status')}")
+            print(f"Autonomy mode: {board.get('autonomy_mode')}")
+            print(f"Primary action: {primary.get('action_id') or 'none'}")
+            print(f"Primary kind: {primary.get('command_kind') or 'none'}")
+            print(f"Can execute now: {primary.get('can_execute_now')}")
+            print(f"Command: {primary.get('command')}")
+            counts = board.get("counts", {}) or {}
+            print(f"Manual gates: {counts.get('manual_gates', 0)}")
+            print(f"Runnable repairs: {counts.get('runnable_repairs', 0)}")
+            print(f"Diagnostic refreshes: {counts.get('diagnostic_refreshes', 0)}")
+            print(f"Implementation repairs: {counts.get('implementation_repairs', 0)}")
+            return 0 if board.get("status") not in {"manual_gate_required", "implementation_repair_required"} else 1
+        if action == "operator-step":
+            result = run_ceo_operator_step(options)
+            step = result["operator_step"]
+            primary = step.get("primary_action", {}) or {}
+            print(f"CEO operator step: {result['paths']['operator_step']}")
+            print(f"CEO operator step report: {result['paths']['operator_step_report']}")
+            print(f"Status: {step.get('status')}")
+            print(f"Reason: {step.get('reason')}")
+            print(f"Primary action: {primary.get('action_id') or 'none'}")
+            print(f"Primary kind: {primary.get('command_kind') or 'none'}")
+            print(f"Action attempted: {step.get('action_attempted')}")
+            print(f"Action executed: {step.get('action_executed')}")
+            print(f"Execution status: {step.get('execution_status') or 'n/a'}")
+            print(f"After board: {step.get('after_board_status')}")
+            return 0 if step.get("action_executed") else 1
+        if action == "operator-brief":
+            result = run_ceo_operator_brief(options)
+            brief = result["operator_brief"]
+            situation = brief.get("current_situation", {}) or {}
+            print(f"CEO operator brief: {result['paths']['operator_brief']}")
+            print(f"CEO operator brief report: {result['paths']['operator_brief_report']}")
+            print(f"Status: {brief.get('status')}")
+            print(f"Summary: {brief.get('plain_english_summary')}")
+            print(f"Primary action: {situation.get('primary_action') or 'none'}")
+            print(f"Primary kind: {situation.get('primary_kind') or 'none'}")
+            print(f"Recommended next action: {brief.get('recommended_next_action')}")
+            return 0
+        if action == "memory-delta":
+            result = run_ceo_memory_delta(options)
+            delta = result["memory_delta"]
+            print(f"Memory delta: {result['paths']['memory_delta']}")
+            print(f"Memory delta report: {result['paths']['memory_delta_report']}")
+            if "memory_delta_note" in result["paths"]:
+                print(f"Memory delta note: {result['paths']['memory_delta_note']}")
+            print(f"Status: {delta.get('status')}")
+            print(f"Required: {delta.get('memory_delta_required')}")
+            print(f"Reasons: {delta.get('reasons') or []}")
+            return 0
+        if action == "guardrail-audit":
+            result = run_ceo_guardrail_audit(options)
+            audit = result["guardrail_audit"]
+            print(f"Guardrail audit: {result['paths']['guardrail_audit']}")
+            print(f"Guardrail audit report: {result['paths']['guardrail_audit_report']}")
+            print(f"Status: {audit.get('status')}")
+            print(f"Violations: {audit.get('violation_count')}")
+            return 0 if audit.get("status") == "pass" else 1
+        if action == "preflight-gate":
+            result = run_ceo_preflight_gate(options, enforce_memory_delta=args.enforce_memory_delta)
+            gate = result["preflight_gate"]
+            print(f"Preflight gate: {result['paths']['preflight_gate']}")
+            print(f"Preflight gate report: {result['paths']['preflight_gate_report']}")
+            print(f"Status: {gate.get('status')}")
+            print(f"Safe to execute: {gate.get('safe_to_execute')}")
+            print(f"Blockers: {[item.get('blocker') for item in gate.get('blockers', []) or []]}")
+            return 0 if gate.get("safe_to_execute") else 1
+        if action == "promotion-proposal":
+            result = run_ceo_promotion_proposal(options)
+            proposal = result["proposal"]
+            print(f"Promotion proposal: {result['paths']['proposal']}")
+            print(f"Proposal report: {result['paths']['proposal_report']}")
+            print(f"Status: {proposal.get('status')}")
+            print(f"Missing evidence: {proposal.get('missing_evidence') or []}")
+            print(f"Approval required: {proposal.get('approval_required')}")
+            return 0 if proposal.get("status") == "ready_for_user_approval" else 1
+        if action == "evidence-debt-register":
+            result = run_ceo_evidence_debt_register(options)
+            register = result["register"]
+            print(f"Evidence debt register: {result['paths']['register']}")
+            print(f"Evidence debt report: {result['paths']['register_report']}")
+            print(f"Status: {register.get('status')}")
+            print(f"Debts: {register.get('debt_count')}")
+            print(f"Next action: {register.get('next_action')}")
+            return 0
+        if action == "approval-queue":
+            result = run_ceo_approval_queue(options)
+            queue = result["queue"]
+            print(f"Approval queue: {result['paths']['queue']}")
+            print(f"Approval queue report: {result['paths']['queue_report']}")
+            print(f"Approval status: {result['paths']['approval_status']}")
+            print(f"Status: {queue.get('status')}")
+            print(f"Pending approvals: {queue.get('pending_count')}")
+            print(f"Next action: {queue.get('next_action')}")
+            return 0
+        if action == "approval-record":
+            result = run_ceo_approval_record(
+                options,
+                approval_id=args.approval_id,
+                decision=args.decision,
+                user_confirmed=args.user_confirmed,
+            )
+            print(f"Approval decision ledger: {result['paths']['approval_decision_ledger']}")
+            print(f"Approval queue: {result['paths']['approval_queue']}")
+            print(f"Approval status: {result['paths']['approval_status']}")
+            print(f"Decision: {result['decision']['decision']}")
+            return 0
+        if action == "approval-apply":
+            preflight_result = run_ceo_preflight_gate(options, enforce_memory_delta=True)
+            preflight_gate = preflight_result["preflight_gate"]
+            blockers = {str(item.get("blocker", "")) for item in preflight_gate.get("blockers", []) or []}
+            allowed_blockers_by_approval = {
+                "promotion_proposal": {"pending_user_approval"},
+                "clear_stop_request": {"pending_user_approval", "stop_requested"},
+            }
+            allowed_blockers = allowed_blockers_by_approval.get(str(args.approval_id), set())
+            unexpected_blockers = sorted(blockers - allowed_blockers)
+            if unexpected_blockers:
+                print(f"Approval apply blocked by unrelated preflight blockers: {preflight_result['paths']['preflight_gate']}")
+                print(f"Preflight gate report: {preflight_result['paths']['preflight_gate_report']}")
+                print(f"Status: {preflight_gate.get('status')}")
+                print(f"Unexpected blockers: {unexpected_blockers}")
+                return 1
+            result = run_ceo_approval_apply(
+                replace(options, ceo_context="guarded_direct", ceo_authorized_action="approval-apply"),
+                approval_id=args.approval_id,
+                user_confirmed=args.user_confirmed,
+            )
+            approval_apply = result["approval_apply"]
+            print(f"Approval apply: {result['paths']['approval_apply']}")
+            print(f"Approval apply report: {result['paths']['approval_apply_report']}")
+            print(f"Status: {approval_apply.get('status')}")
+            print(f"Action taken: {approval_apply.get('action_taken')}")
+            return 0 if not str(approval_apply.get("status", "")).startswith("blocked") else 1
+        if action == "executive-kpis":
+            result = run_ceo_executive_kpis(options)
+            kpis = result["kpis"]
+            print(f"Executive KPIs: {result['paths']['executive_kpis']}")
+            print(f"Executive KPI report: {result['paths']['executive_kpis_report']}")
+            print(f"Status: {kpis.get('status')}")
+            print(f"Next action: {kpis.get('next_action')}")
+            print(f"Open approvals: {(kpis.get('kpis', {}) or {}).get('open_approval_count')}")
+            print(f"Evidence debt: {(kpis.get('kpis', {}) or {}).get('evidence_debt_count')}")
+            print(f"Top blocker: {(kpis.get('kpis', {}) or {}).get('top_blocker') or 'none'}")
+            print(f"Repair plan status: {(kpis.get('kpis', {}) or {}).get('repair_plan_status') or 'none'}")
+            print(f"Top repair: {(kpis.get('kpis', {}) or {}).get('top_repair') or 'none'}")
+            print(f"Top repair kind: {(kpis.get('kpis', {}) or {}).get('top_repair_kind') or 'none'}")
+            print(f"Repair next command: {(kpis.get('kpis', {}) or {}).get('repair_next_command') or 'none'}")
+            return 0
+        if action == "role-queue":
+            result = run_ceo_role_queue(options)
+            queue = result["queue"]
+            print(f"Role registry: {result['paths']['role_registry']}")
+            print(f"Role task queue: {result['paths']['role_task_queue']}")
+            print(f"Role task queue report: {result['paths']['role_task_queue_report']}")
+            print(f"Status: {queue.get('status')}")
+            print(f"Tasks: {queue.get('task_count')}")
+            print(f"Next action: {queue.get('next_action')}")
+            return 0
+        if action == "role-dispatch":
+            result = run_ceo_role_dispatch(options)
+            dispatch = result["role_dispatch"]
+            print(f"Role dispatch: {result['paths']['role_dispatch']}")
+            print(f"Role dispatch report: {result['paths']['role_dispatch_report']}")
+            print(f"Packet dir: {result['paths']['packet_dir']}")
+            print(f"Status: {dispatch.get('status')}")
+            print(f"Packets: {dispatch.get('packet_count')}")
+            return 0
+        if action == "role-result":
+            result = run_ceo_role_result(
+                options,
+                task_id=args.task_id,
+                status=args.status,
+                result_path=args.result_path,
+            )
+            print(f"Role task ledger: {result['paths']['role_task_ledger']}")
+            print(f"Task: {result['result']['task_id']}")
+            print(f"Status: {result['result']['status']}")
+            return 0
+        if action == "capability-backlog":
+            result = run_ceo_capability_backlog(options)
+            backlog = result["backlog"]
+            print(f"Capability backlog: {result['paths']['backlog']}")
+            print(f"Backlog report: {result['paths']['backlog_report']}")
+            print(f"Status: {backlog.get('status')}")
+            print(f"Items: {backlog.get('backlog_count')}")
+            return 0
+        if action == "replay":
+            result = run_ceo_replay(options)
+            replay = result["replay"]
+            print(f"CEO replay: {result['paths']['replay']}")
+            print(f"CEO replay report: {result['paths']['replay_report']}")
+            print(f"Status: {replay.get('status')}")
+            print(f"Actions: {replay.get('action_count')}")
+            print(f"Issues: {replay.get('issues') or []}")
+            return 0 if replay.get("status") == "replayable" else 1
+        if action == "resumption-brief":
+            result = run_ceo_resumption_brief(options)
+            brief = result["brief"]
+            print(f"CEO resumption brief: {result['paths']['resumption_brief']}")
+            print(f"CEO resumption brief report: {result['paths']['resumption_brief_report']}")
+            print(f"Resume status: {brief.get('resume_status')}")
+            print(f"Next command: {brief.get('next_command')}")
+            print(f"Preflight blockers: {brief.get('preflight_blockers') or []}")
+            return 0 if brief.get("resume_status") in {"safe_for_one_bound_action", "diagnostic_advisory_before_extended_autonomy"} else 1
+        if action == "artifact-coherence":
+            result = run_ceo_artifact_coherence(options)
+            coherence = result["coherence"]
+            print(f"CEO artifact coherence: {result['paths']['artifact_coherence']}")
+            print(f"CEO artifact coherence report: {result['paths']['artifact_coherence_report']}")
+            print(f"Status: {coherence.get('status')}")
+            print(f"Issues: {coherence.get('issue_count')}")
+            return 0 if coherence.get("status") == "pass" else 1
+        if action == "run-index":
+            result = run_ceo_run_index(options, limit=args.limit)
+            index = result["run_index"]
+            print(f"CEO run index: {result['paths']['run_index']}")
+            print(f"CEO run index report: {result['paths']['run_index_report']}")
+            print(f"Status: {index.get('status')}")
+            print(f"Run count: {index.get('run_count')}")
+            print(f"Status counts: {index.get('status_counts')}")
+            return 0
+        if action == "dispatch-receipt":
+            result = run_ceo_dispatch_receipt(options)
+            receipt = result["receipt"]
+            print(f"CEO dispatch receipt: {result['paths']['dispatch_receipt']}")
+            print(f"CEO dispatch receipt report: {result['paths']['dispatch_receipt_report']}")
+            print(f"Status: {receipt.get('status')}")
+            print(f"Safe to dispatch: {receipt.get('safe_to_dispatch')}")
+            print(f"Reason: {receipt.get('reason')}")
+            return 0 if receipt.get("safe_to_dispatch") else 1
+        if action == "blocker-stack":
+            result = run_ceo_blocker_stack(options)
+            stack = result["stack"]
+            print(f"CEO blocker stack: {result['paths']['blocker_stack']}")
+            print(f"CEO blocker stack report: {result['paths']['blocker_stack_report']}")
+            print(f"Status: {stack.get('status')}")
+            print(f"Top blocker: {stack.get('top_blocker') or 'none'}")
+            print(f"Next command: {stack.get('next_command')}")
+            return 0 if stack.get("status") == "clear_for_one_bound_action" else 1
+        if action == "incident-register":
+            result = run_ceo_operating_incident_register(options)
+            register = result["register"]
+            print(f"CEO incident register: {result['paths']['incident_register']}")
+            print(f"CEO incident register report: {result['paths']['incident_register_report']}")
+            print(f"Status: {register.get('status')}")
+            print(f"Incidents: {register.get('incident_count')}")
+            return 0
+        if action == "repair-plan":
+            result = run_ceo_repair_plan(options)
+            plan = result["repair_plan"]
+            print(f"CEO repair plan: {result['paths']['repair_plan']}")
+            print(f"CEO repair plan report: {result['paths']['repair_plan_report']}")
+            print(f"Status: {plan.get('status')}")
+            print(f"Repairs: {plan.get('repair_count')}")
+            print(f"Runnable repairs: {plan.get('runnable_repair_count', plan.get('autonomous_repair_count'))}")
+            print(f"Diagnostic refreshes: {plan.get('diagnostic_refresh_count', 0)}")
+            print(f"Top repair: {plan.get('top_repair') or 'none'}")
+            print(f"Top repair kind: {plan.get('top_repair_kind') or 'none'}")
+            print(f"Next command: {plan.get('next_command')}")
+            return 0
+        if action == "eval-suite":
+            result = run_ceo_eval_suite(options)
+            eval_suite = result["eval_suite"]
+            print(f"CEO eval suite: {result['paths']['eval_suite']}")
+            print(f"CEO eval suite report: {result['paths']['eval_suite_report']}")
+            print(f"Replay: {result['paths']['replay']}")
+            print(f"Eval fixtures: {result['paths']['eval_fixtures']}")
+            print(f"Status: {eval_suite.get('status')}")
+            print(f"Score: {eval_suite.get('score')}")
+            print(f"9.9 readiness: {(eval_suite.get('nine_nine_readiness', {}) or {}).get('status')}")
+            return 0 if eval_suite.get("status") != "fail" else 1
+        if action == "eval-fixtures":
+            result = run_ceo_eval_fixtures(options)
+            fixtures = result["fixtures"]
+            print(f"CEO eval fixtures: {result['paths']['eval_fixtures']}")
+            print(f"CEO eval fixtures report: {result['paths']['eval_fixtures_report']}")
+            print(f"Status: {fixtures.get('status')}")
+            print(f"Cases: {fixtures.get('case_count')}")
+            print(f"Failed: {fixtures.get('failed_case_count')}")
+            return 0 if fixtures.get("status") == "pass" else 1
     except Exception as exc:
         print(f"CEO {action} failed: {exc}")
         return 1
@@ -2419,6 +3096,11 @@ def build_parser() -> argparse.ArgumentParser:
     kg_index.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
     kg_index.add_argument("--output-dir", default=str(DEFAULT_KG_OUTPUT_DIR), help="Generated KG output directory.")
     kg_index.set_defaults(func=obsidian_kg_command)
+
+    kg_audit = obsidian_kg_subparsers.add_parser("audit", help="Write an Obsidian KG memory-quality audit report.")
+    kg_audit.add_argument("--obsidian-dir", default=str(DEFAULT_OBSIDIAN_DIR), help="Obsidian vault directory.")
+    kg_audit.add_argument("--output-dir", default=str(DEFAULT_KG_OUTPUT_DIR), help="Generated KG output directory.")
+    kg_audit.set_defaults(func=obsidian_kg_command)
 
     kg_compile = obsidian_kg_subparsers.add_parser(
         "compile-queue",
@@ -3215,12 +3897,157 @@ def build_parser() -> argparse.ArgumentParser:
     ceo_champion_challenger.add_argument("--top-n", type=int, default=None, help="Limit comparison work items.")
     ceo_champion_challenger.set_defaults(func=ceo_command)
 
+    ceo_fresh_control_validation = ceo_subparsers.add_parser(
+        "fresh-control-validation",
+        help="Plan fresh or control validation for promising champion/challenger shadow candidates.",
+    )
+    add_ceo_common(ceo_fresh_control_validation)
+    ceo_fresh_control_validation.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow fresh/control validation plan artifacts to be written.",
+    )
+    ceo_fresh_control_validation.set_defaults(func=ceo_command)
+
+    ceo_fresh_data_preflight = ceo_subparsers.add_parser(
+        "fresh-data-preflight",
+        help="Check local OHLCV coverage/freshness before fresh/control validation.",
+    )
+    add_ceo_common(ceo_fresh_data_preflight)
+    ceo_fresh_data_preflight.set_defaults(func=ceo_command)
+
+    ceo_frozen_candidate_validation = ceo_subparsers.add_parser(
+        "frozen-candidate-validation",
+        help="Compile frozen validation specs from a fresh/control plan and data preflight.",
+    )
+    add_ceo_common(ceo_frozen_candidate_validation)
+    ceo_frozen_candidate_validation.set_defaults(func=ceo_command)
+
+    ceo_frozen_validation_executor = ceo_subparsers.add_parser(
+        "frozen-validation-executor",
+        help="Replay frozen validation specs against existing source artifacts without promotion authority.",
+    )
+    add_ceo_common(ceo_frozen_validation_executor)
+    ceo_frozen_validation_executor.set_defaults(func=ceo_command)
+
+    ceo_frozen_validation_rerun = ceo_subparsers.add_parser(
+        "frozen-validation-rerun",
+        help="Run the frozen validation adapter rerun grid on local data without promotion authority.",
+    )
+    add_ceo_common(ceo_frozen_validation_rerun)
+    ceo_frozen_validation_rerun.set_defaults(func=ceo_command)
+
+    ceo_fresh_withheld_validation_contract = ceo_subparsers.add_parser(
+        "fresh-withheld-validation-contract",
+        help="Freeze fresh/withheld validation snapshot rules and pass/fail gates without executing validation.",
+    )
+    add_ceo_common(ceo_fresh_withheld_validation_contract)
+    ceo_fresh_withheld_validation_contract.set_defaults(func=ceo_command)
+
+    ceo_withheld_split_manifest = ceo_subparsers.add_parser(
+        "withheld-split-manifest",
+        help="Write withheld split authority metadata without executing validation.",
+    )
+    add_ceo_common(ceo_withheld_split_manifest)
+    ceo_withheld_split_manifest.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow withheld split authority artifacts to be written.",
+    )
+    ceo_withheld_split_manifest.add_argument("--withheld-split-id", required=True)
+    ceo_withheld_split_manifest.add_argument("--source-evidence-cutoff", required=True)
+    ceo_withheld_split_manifest.add_argument("--description", default="")
+    ceo_withheld_split_manifest.set_defaults(func=ceo_command)
+
+    ceo_fresh_withheld_snapshot_manifest = ceo_subparsers.add_parser(
+        "fresh-withheld-snapshot-manifest",
+        help="Write a fresh/withheld snapshot authority manifest draft without executing validation.",
+    )
+    add_ceo_common(ceo_fresh_withheld_snapshot_manifest)
+    ceo_fresh_withheld_snapshot_manifest.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow snapshot authority manifest artifacts to be written.",
+    )
+    ceo_fresh_withheld_snapshot_manifest.set_defaults(func=ceo_command)
+
+    ceo_fresh_withheld_snapshot_declare = ceo_subparsers.add_parser(
+        "fresh-withheld-snapshot-declare",
+        help="Declare fresh/withheld snapshot authority from explicit cutoff or split inputs without executing validation.",
+    )
+    add_ceo_common(ceo_fresh_withheld_snapshot_declare)
+    ceo_fresh_withheld_snapshot_declare.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow snapshot authority declaration artifacts to be written.",
+    )
+    ceo_fresh_withheld_snapshot_declare.add_argument("--snapshot-type", required=True, choices=("fresh", "withheld"))
+    ceo_fresh_withheld_snapshot_declare.add_argument("--snapshot-cutoff", default="")
+    ceo_fresh_withheld_snapshot_declare.add_argument("--withheld-split-id", default="")
+    ceo_fresh_withheld_snapshot_declare.add_argument("--source-evidence-cutoff", required=True)
+    ceo_fresh_withheld_snapshot_declare.add_argument("--confirm-no-overlap", action="store_true")
+    ceo_fresh_withheld_snapshot_declare.set_defaults(func=ceo_command)
+
+    ceo_fresh_withheld_validation_executor = ceo_subparsers.add_parser(
+        "fresh-withheld-validation-executor",
+        help="Run the manifest-gated fresh/withheld validation executor without promotion authority.",
+    )
+    add_ceo_common(ceo_fresh_withheld_validation_executor)
+    ceo_fresh_withheld_validation_executor.set_defaults(func=ceo_command)
+
+    ceo_patch_research_infra = ceo_subparsers.add_parser(
+        "patch-research-infra",
+        help="Plan/apply governed lane-recovery queue items for a CEO research-infra gap.",
+    )
+    add_ceo_common(ceo_patch_research_infra)
+    ceo_patch_research_infra.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow recovery plan artifacts and runtime queue additions to be written.",
+    )
+    ceo_patch_research_infra.set_defaults(func=ceo_command)
+
+    ceo_broaden_hypothesis_source = ceo_subparsers.add_parser(
+        "broaden-hypothesis-source",
+        help="Compile Obsidian/research source hypotheses into the lab runtime queue.",
+    )
+    add_ceo_common(ceo_broaden_hypothesis_source)
+    ceo_broaden_hypothesis_source.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow broadening artifacts and runtime queue additions to be written.",
+    )
+    ceo_broaden_hypothesis_source.set_defaults(func=ceo_command)
+
     ceo_heartbeat_status = ceo_subparsers.add_parser(
         "heartbeat-status",
         help="Read the latest CEO heartbeat status without writing a new decision packet.",
     )
     add_ceo_common(ceo_heartbeat_status)
     ceo_heartbeat_status.set_defaults(func=ceo_command)
+
+    ceo_heartbeat_plan = ceo_subparsers.add_parser(
+        "heartbeat-plan",
+        help="Write a bounded CEO heartbeat plan for external scheduler or Codex cadence.",
+    )
+    add_ceo_common(ceo_heartbeat_plan)
+    ceo_heartbeat_plan.add_argument("--interval-minutes", type=int, default=15)
+    ceo_heartbeat_plan.set_defaults(func=ceo_command)
+
+    ceo_heartbeat_tick = ceo_subparsers.add_parser(
+        "heartbeat-tick",
+        help="Run one persisted CEO heartbeat tick: inspect gates, optionally execute one bound action, and append the journal.",
+    )
+    add_ceo_common(ceo_heartbeat_tick)
+    ceo_heartbeat_tick.add_argument("--apply", action="store_true", help="Required to write heartbeat state and run one bound action.")
+    ceo_heartbeat_tick.set_defaults(func=ceo_command)
+
+    ceo_heartbeat_journal = ceo_subparsers.add_parser(
+        "heartbeat-journal",
+        help="Render the persisted CEO heartbeat journal for a run.",
+    )
+    add_ceo_common(ceo_heartbeat_journal)
+    ceo_heartbeat_journal.set_defaults(func=ceo_command)
 
     ceo_stop = ceo_subparsers.add_parser("stop", help="Request a graceful stop for a CEO-supervised run.")
     add_ceo_common(ceo_stop)
@@ -3234,6 +4061,250 @@ def build_parser() -> argparse.ArgumentParser:
     ceo_report = ceo_subparsers.add_parser("report", help="Write the final CEO report.")
     add_ceo_common(ceo_report)
     ceo_report.set_defaults(func=ceo_command)
+
+    ceo_trace_grade = ceo_subparsers.add_parser(
+        "trace-grade",
+        help="Grade CEO heartbeat trace artifacts for no-progress, safety, and next-action support.",
+    )
+    add_ceo_common(ceo_trace_grade)
+    ceo_trace_grade.set_defaults(func=ceo_command)
+
+    ceo_flight_dashboard = ceo_subparsers.add_parser(
+        "flight-dashboard",
+        help="Write a plain-English CEO state dashboard for long supervised runs.",
+    )
+    add_ceo_common(ceo_flight_dashboard)
+    ceo_flight_dashboard.set_defaults(func=ceo_command)
+
+    ceo_operating_dashboard = ceo_subparsers.add_parser(
+        "operating-dashboard",
+        help="Write a CEO operating portfolio dashboard across candidates, capabilities, data gates, and risk.",
+    )
+    add_ceo_common(ceo_operating_dashboard)
+    ceo_operating_dashboard.set_defaults(func=ceo_command)
+
+    ceo_portfolio_allocator = ceo_subparsers.add_parser(
+        "portfolio-allocator",
+        help="Score CEO operating lanes and select the highest-value bottleneck to address next.",
+    )
+    add_ceo_common(ceo_portfolio_allocator)
+    ceo_portfolio_allocator.set_defaults(func=ceo_command)
+
+    ceo_mission_score = ceo_subparsers.add_parser(
+        "mission-score",
+        help="Score Riskflow mission coverage across permission, warning, invalidation, reset, gradient, path, regime, and archive dimensions.",
+    )
+    add_ceo_common(ceo_mission_score)
+    ceo_mission_score.set_defaults(func=ceo_command)
+
+    ceo_strategy_capital_dashboard = ceo_subparsers.add_parser(
+        "strategy-capital-dashboard",
+        help="Allocate CEO attention points across safety, validation, translation, mission gaps, and memory work.",
+    )
+    add_ceo_common(ceo_strategy_capital_dashboard)
+    ceo_strategy_capital_dashboard.set_defaults(func=ceo_command)
+
+    ceo_decision_quality = ceo_subparsers.add_parser(
+        "decision-quality",
+        help="Write an explainable CEO decision-quality card with alternatives, confidence, and expected artifacts.",
+    )
+    add_ceo_common(ceo_decision_quality)
+    ceo_decision_quality.set_defaults(func=ceo_command)
+
+    ceo_action_board = ceo_subparsers.add_parser(
+        "action-board",
+        help="Write the CEO operator action board with the primary safe next action and non-actions.",
+    )
+    add_ceo_common(ceo_action_board)
+    ceo_action_board.set_defaults(func=ceo_command)
+
+    ceo_operator_step = ceo_subparsers.add_parser(
+        "operator-step",
+        help="Run one audited CEO operator transaction from the action board when bounded dispatch is safe.",
+    )
+    add_ceo_common(ceo_operator_step)
+    ceo_operator_step.add_argument("--apply", action="store_true", help="Required to write the operator step and run one safe bounded dispatch.")
+    ceo_operator_step.set_defaults(func=ceo_command)
+
+    ceo_operator_brief = ceo_subparsers.add_parser(
+        "operator-brief",
+        help="Write a plain-English CEO operator brief from status, action-board, and decision-quality artifacts.",
+    )
+    add_ceo_common(ceo_operator_brief)
+    ceo_operator_brief.set_defaults(func=ceo_command)
+
+    ceo_memory_delta = ceo_subparsers.add_parser(
+        "memory-delta",
+        help="Write a governed CEO memory-delta artifact and optionally a curated Obsidian handoff note.",
+    )
+    add_ceo_common(ceo_memory_delta)
+    ceo_memory_delta.add_argument("--apply", action="store_true", help="Write the curated Obsidian memory-delta note when required.")
+    ceo_memory_delta.set_defaults(func=ceo_command)
+
+    ceo_guardrail_audit = ceo_subparsers.add_parser(
+        "guardrail-audit",
+        help="Scan CEO run artifacts for production-effect and product-language guardrail violations.",
+    )
+    add_ceo_common(ceo_guardrail_audit)
+    ceo_guardrail_audit.set_defaults(func=ceo_command)
+
+    ceo_preflight_gate = ceo_subparsers.add_parser(
+        "preflight-gate",
+        help="Build the unified CEO dispatch preflight gate from trace, replay, eval, approval, memory, and budget artifacts.",
+    )
+    add_ceo_common(ceo_preflight_gate)
+    ceo_preflight_gate.add_argument("--enforce-memory-delta", action="store_true")
+    ceo_preflight_gate.set_defaults(func=ceo_command)
+
+    ceo_promotion_proposal = ceo_subparsers.add_parser(
+        "promotion-proposal",
+        help="Write a guarded promotion proposal for user review without applying product changes.",
+    )
+    add_ceo_common(ceo_promotion_proposal)
+    ceo_promotion_proposal.set_defaults(func=ceo_command)
+
+    ceo_evidence_debt_register = ceo_subparsers.add_parser(
+        "evidence-debt-register",
+        help="Write a CEO register of candidate evidence debts blocking product-language or promotion gates.",
+    )
+    add_ceo_common(ceo_evidence_debt_register)
+    ceo_evidence_debt_register.set_defaults(func=ceo_command)
+
+    ceo_approval_queue = ceo_subparsers.add_parser(
+        "approval-queue",
+        help="Write a CEO queue of red-authority decisions waiting for explicit user approval.",
+    )
+    add_ceo_common(ceo_approval_queue)
+    ceo_approval_queue.set_defaults(func=ceo_command)
+
+    ceo_approval_record = ceo_subparsers.add_parser(
+        "approval-record",
+        help="Append an explicit user-confirmed approval or rejection decision to the CEO approval ledger.",
+    )
+    add_ceo_common(ceo_approval_record)
+    ceo_approval_record.add_argument("--approval-id", required=True, help="Approval id from approval_queue.yaml.")
+    ceo_approval_record.add_argument("--decision", required=True, choices=("approved", "rejected"))
+    ceo_approval_record.add_argument("--user-confirmed", action="store_true", help="Required explicit confirmation flag.")
+    ceo_approval_record.set_defaults(func=ceo_command)
+
+    ceo_approval_apply = ceo_subparsers.add_parser(
+        "approval-apply",
+        help="Apply a recorded CEO approval through a second explicit guarded step.",
+    )
+    add_ceo_common(ceo_approval_apply)
+    ceo_approval_apply.add_argument("--approval-id", required=True, help="Approval id from approval_queue.yaml.")
+    ceo_approval_apply.add_argument("--user-confirmed", action="store_true", help="Required explicit confirmation flag.")
+    ceo_approval_apply.add_argument("--apply", action="store_true", help="Required to apply the recorded approval closure.")
+    ceo_approval_apply.set_defaults(func=ceo_command)
+
+    ceo_executive_kpis = ceo_subparsers.add_parser(
+        "executive-kpis",
+        help="Write compact CEO operating KPIs for approvals, evidence debt, candidates, validation, and trace health.",
+    )
+    add_ceo_common(ceo_executive_kpis)
+    ceo_executive_kpis.set_defaults(func=ceo_command)
+
+    ceo_role_queue = ceo_subparsers.add_parser(
+        "role-queue",
+        help="Write specialist CEO role registry and task queue from approvals, evidence debt, and capability backlog.",
+    )
+    add_ceo_common(ceo_role_queue)
+    ceo_role_queue.set_defaults(func=ceo_command)
+
+    ceo_role_dispatch = ceo_subparsers.add_parser(
+        "role-dispatch",
+        help="Write specialist role dispatch packets with exact questions, refs, authority, and result schema.",
+    )
+    add_ceo_common(ceo_role_dispatch)
+    ceo_role_dispatch.set_defaults(func=ceo_command)
+
+    ceo_role_result = ceo_subparsers.add_parser(
+        "role-result",
+        help="Append a specialist role task result to the CEO role task ledger.",
+    )
+    add_ceo_common(ceo_role_result)
+    ceo_role_result.add_argument("--task-id", required=True)
+    ceo_role_result.add_argument("--status", required=True, choices=("complete", "blocked"))
+    ceo_role_result.add_argument("--result-path", default="")
+    ceo_role_result.set_defaults(func=ceo_command)
+
+    ceo_capability_backlog = ceo_subparsers.add_parser(
+        "capability-backlog",
+        help="Write a standalone CEO research-infrastructure capability backlog.",
+    )
+    add_ceo_common(ceo_capability_backlog)
+    ceo_capability_backlog.set_defaults(func=ceo_command)
+
+    ceo_replay = ceo_subparsers.add_parser(
+        "replay",
+        help="Reconstruct a CEO run from append-only ledgers and key artifacts.",
+    )
+    add_ceo_common(ceo_replay)
+    ceo_replay.set_defaults(func=ceo_command)
+
+    ceo_resumption_brief = ceo_subparsers.add_parser(
+        "resumption-brief",
+        help="Write a compact fresh-session brief that says whether a CEO run can resume, wait, repair, or stop.",
+    )
+    add_ceo_common(ceo_resumption_brief)
+    ceo_resumption_brief.set_defaults(func=ceo_command)
+
+    ceo_artifact_coherence = ceo_subparsers.add_parser(
+        "artifact-coherence",
+        help="Check whether CEO handoff artifacts are current and internally consistent.",
+    )
+    add_ceo_common(ceo_artifact_coherence)
+    ceo_artifact_coherence.set_defaults(func=ceo_command)
+
+    ceo_run_index = ceo_subparsers.add_parser(
+        "run-index",
+        help="Write a diagnostic index of CEO runs and the safest next command for each.",
+    )
+    add_ceo_common(ceo_run_index)
+    ceo_run_index.add_argument("--limit", type=int, default=25, help="Maximum number of recent CEO runs to include.")
+    ceo_run_index.set_defaults(func=ceo_command)
+
+    ceo_dispatch_receipt = ceo_subparsers.add_parser(
+        "dispatch-receipt",
+        help="Write a diagnostic receipt of the trust artifacts that would allow or block execute-next dispatch.",
+    )
+    add_ceo_common(ceo_dispatch_receipt)
+    ceo_dispatch_receipt.set_defaults(func=ceo_command)
+
+    ceo_blocker_stack = ceo_subparsers.add_parser(
+        "blocker-stack",
+        help="Write an ordered CEO blocker stack with authority, evidence, and the safest next command.",
+    )
+    add_ceo_common(ceo_blocker_stack)
+    ceo_blocker_stack.set_defaults(func=ceo_command)
+
+    ceo_incident_register = ceo_subparsers.add_parser(
+        "incident-register",
+        help="Write a diagnostic CEO operating incident register from blocked dispatch, replay, eval, guardrail, and coherence artifacts.",
+    )
+    add_ceo_common(ceo_incident_register)
+    ceo_incident_register.set_defaults(func=ceo_command)
+
+    ceo_repair_plan = ceo_subparsers.add_parser(
+        "repair-plan",
+        help="Write a ranked CEO repair plan from the blocker stack and operating incident register.",
+    )
+    add_ceo_common(ceo_repair_plan)
+    ceo_repair_plan.set_defaults(func=ceo_command)
+
+    ceo_eval_suite = ceo_subparsers.add_parser(
+        "eval-suite",
+        help="Grade CEO-mode replayability, guardrails, approval gates, validation authority, and role closure.",
+    )
+    add_ceo_common(ceo_eval_suite)
+    ceo_eval_suite.set_defaults(func=ceo_command)
+
+    ceo_eval_fixtures = ceo_subparsers.add_parser(
+        "eval-fixtures",
+        help="Run deterministic CEO policy fixtures for transition and approval-routing rules.",
+    )
+    add_ceo_common(ceo_eval_fixtures)
+    ceo_eval_fixtures.set_defaults(func=ceo_command)
 
     lab_ops = subparsers.add_parser(
         "lab-ops",

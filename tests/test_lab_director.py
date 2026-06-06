@@ -254,6 +254,49 @@ def test_lane_recovery_generates_valid_reset_quality_queue(tmp_path: Path) -> No
     assert {item["production_effect"] for item in queue["queue"]} == {"none"}
 
 
+def test_lane_recovery_supports_extended_research_lanes(tmp_path: Path) -> None:
+    options = _write_director_fixture(tmp_path)
+    mart = build_evidence_mart(options)
+    graph = build_belief_graph(mart)
+    expected_tracks = {
+        "cross_asset_regime": "mtf_context",
+        "path_management": "bullish_setup",
+        "invalidation": "warning",
+        "gradient_interpretation": "gradient_translation",
+    }
+
+    for lane, expected_track in expected_tracks.items():
+        lane_assignment = {
+            "model": "riskflow_research_lane_assignment_v0",
+            "open_lanes": [lane],
+            "assignments": [
+                {
+                    "belief_id": "deep_reset_regime_reclaim_entry_1d",
+                    "lane": lane,
+                    "blocked": False,
+                    "confidence_score": 60,
+                }
+            ],
+        }
+        plan = design_lane_recovery_experiments(
+            mart,
+            graph,
+            lane_assignment,
+            output_queue_path=tmp_path / f"{lane}_recovery_candidate_queue.yaml",
+            generated_grid_dir=tmp_path / "research" / "lab_loop" / "generated_grids" / lane,
+            max_new_hypotheses=8,
+            source_root=tmp_path,
+        )
+
+        assert plan["generated_count"] > 0, lane
+        assert plan["blocked_lanes"] == [], lane
+        queue = plan["generated_queue"]
+        assert validate_lab_queue(queue, validate_sources=True, source_root=tmp_path) == []
+        assert {item["research_lane"] for item in queue["queue"]} == {lane}
+        assert expected_track in {item["track"] for item in queue["queue"]}
+        assert {item["production_effect"] for item in queue["queue"]} == {"none"}
+
+
 def test_lane_recovery_skips_already_seen_ids(tmp_path: Path) -> None:
     options = _write_director_fixture(tmp_path)
     mart = build_evidence_mart(options)

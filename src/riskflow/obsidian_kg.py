@@ -66,6 +66,13 @@ EVIDENCE_REQUIRED_FIELDS = (
     "verdict",
 )
 
+CONCEPT_REQUIRED_FIELDS = (
+    "concept_id",
+    "production_effect",
+    "future_action_changed",
+    "not_product_proof",
+)
+
 EDGE_FIELD_TYPES = {
     "linked_concepts": "uses_concept",
     "concept_tags": "uses_concept",
@@ -319,14 +326,159 @@ def validate_knowledge_graph(graph: KnowledgeGraph) -> ValidationResult:
             if not any(node.frontmatter.get(field) for field in ("source_report", "source_csv", "source_yaml")):
                 errors.append(f"{node.path}: evidence_summary missing source_report/source_csv/source_yaml")
         elif node.node_type == "concept" and node.frontmatter:
-            if not node.frontmatter.get("concept_id"):
-                warnings.append(f"{node.path}: concept frontmatter has no concept_id")
+            for field in CONCEPT_REQUIRED_FIELDS:
+                if node.frontmatter.get(field) in (None, ""):
+                    errors.append(f"{node.path}: concept missing {field}")
+            if str(node.frontmatter.get("production_effect", "")).lower() != "none":
+                errors.append(f"{node.path}: concept production_effect must be none")
+            if node.frontmatter.get("not_product_proof") is not True:
+                errors.append(f"{node.path}: concept not_product_proof must be true")
 
     for edge in graph.edges:
         if edge.edge_type == "wikilink" and not edge.target_resolved_id:
             warnings.append(f"{edge.source_path}: unresolved wikilink [[{edge.target}]]")
 
     return ValidationResult(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def audit_knowledge_graph(graph: KnowledgeGraph) -> dict[str, Any]:
+    incoming_counts: dict[str, int] = {node.node_id: 0 for node in graph.nodes}
+    outgoing_counts: dict[str, int] = {node.node_id: 0 for node in graph.nodes}
+    unresolved_links: list[dict[str, str]] = []
+    for edge in graph.edges:
+        outgoing_counts[edge.source] = outgoing_counts.get(edge.source, 0) + 1
+        if edge.target_resolved_id:
+            incoming_counts[edge.target_resolved_id] = incoming_counts.get(edge.target_resolved_id, 0) + 1
+        elif edge.edge_type == "wikilink":
+            unresolved_links.append(
+                {
+                    "source_path": str(edge.source_path),
+                    "source": edge.source,
+                    "target": edge.target,
+                }
+            )
+
+    orphaned_notes: list[dict[str, Any]] = []
+    concept_quality_issues: list[dict[str, Any]] = []
+    map_quality_issues: list[dict[str, Any]] = []
+    for node in graph.nodes:
+        incoming = incoming_counts.get(node.node_id, 0)
+        outgoing = outgoing_counts.get(node.node_id, 0)
+        if incoming == 0 and outgoing == 0 and node.node_type not in {"note"}:
+            orphaned_notes.append(
+                {
+                    "node_id": node.node_id,
+                    "title": node.title,
+                    "node_type": node.node_type,
+                    "path": str(node.path),
+                }
+            )
+        if node.node_type == "concept":
+            missing_fields = [
+                field
+                for field in CONCEPT_REQUIRED_FIELDS
+                if node.frontmatter.get(field) in (None, "")
+            ]
+            if not node.frontmatter:
+                missing_fields = list(CONCEPT_REQUIRED_FIELDS)
+            if missing_fields:
+                concept_quality_issues.append(
+                    {
+                        "node_id": node.node_id,
+                        "title": node.title,
+                        "path": str(node.path),
+                        "issue": "missing_action_quality_metadata",
+                        "missing_fields": missing_fields,
+                    }
+                )
+            elif incoming == 0 and not _as_list(node.frontmatter.get("linked_maps")):
+                concept_quality_issues.append(
+                    {
+                        "node_id": node.node_id,
+                        "title": node.title,
+                        "path": str(node.path),
+                        "issue": "concept_has_no_incoming_links",
+                        "missing_fields": [],
+                    }
+                )
+        if node.node_type == "map":
+            linked_concepts = _as_list(node.frontmatter.get("linked_concepts"))
+            if not linked_concepts:
+                map_quality_issues.append(
+                    {
+                        "node_id": node.node_id,
+                        "title": node.title,
+                        "path": str(node.path),
+                        "issue": "map_missing_linked_concepts",
+                    }
+                )
+    issue_count = len(orphaned_notes) + len(unresolved_links) + len(concept_quality_issues) + len(map_quality_issues)
+    return {
+        "model": "riskflow_obsidian_kg_audit_v0",
+        "generated_at": utc_now_iso(),
+        "node_count": len(graph.nodes),
+        "edge_count": len(graph.edges),
+        "status": "attention_required" if issue_count else "clean",
+        "issue_count": issue_count,
+        "orphaned_notes": orphaned_notes,
+        "unresolved_wikilinks": unresolved_links,
+        "concept_quality_issues": concept_quality_issues,
+        "map_quality_issues": map_quality_issues,
+        "production_effect": "none",
+    }
+
+
+def render_knowledge_audit_report(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Obsidian KG Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Status: {audit.get('status')}",
+        f"Nodes: {audit.get('node_count')}",
+        f"Edges: {audit.get('edge_count')}",
+        f"Issues: {audit.get('issue_count')}",
+        "",
+        "## Orphaned Notes",
+        "",
+    ]
+    for item in audit.get("orphaned_notes", []) or []:
+        lines.append(f"- {item.get('node_id')} ({item.get('node_type')}): {item.get('path')}")
+    if not audit.get("orphaned_notes"):
+        lines.append("- none")
+    lines.extend(["", "## Unresolved Wikilinks", ""])
+    for item in audit.get("unresolved_wikilinks", []) or []:
+        lines.append(f"- {item.get('source_path')}: [[{item.get('target')}]]")
+    if not audit.get("unresolved_wikilinks"):
+        lines.append("- none")
+    lines.extend(["", "## Concept Quality Issues", ""])
+    for item in audit.get("concept_quality_issues", []) or []:
+        lines.append(
+            "- "
+            f"{item.get('node_id')}: {item.get('issue')} "
+            f"missing={item.get('missing_fields') or []} path={item.get('path')}"
+        )
+    if not audit.get("concept_quality_issues"):
+        lines.append("- none")
+    lines.extend(["", "## Map Quality Issues", ""])
+    for item in audit.get("map_quality_issues", []) or []:
+        lines.append(f"- {item.get('node_id')}: {item.get('issue')} path={item.get('path')}")
+    if not audit.get("map_quality_issues"):
+        lines.append("- none")
+    lines.extend(["", "Production effect: none.", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_knowledge_audit_outputs(
+    audit: dict[str, Any],
+    output_dir: str | Path = DEFAULT_KG_OUTPUT_DIR,
+) -> dict[str, Path]:
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    yaml_path = output / "obsidian_kg_audit.yaml"
+    report_path = output / "obsidian_kg_audit.md"
+    yaml_path.write_text(yaml.safe_dump(audit, sort_keys=False), encoding="utf-8")
+    report_path.write_text(render_knowledge_audit_report(audit), encoding="utf-8")
+    return {"audit_yaml": yaml_path, "audit_md": report_path}
 
 
 def write_knowledge_graph_outputs(

@@ -46,6 +46,16 @@ into one ordered action queue.
 Approval, stop, failed preflight, failed trace, and promotion gates outrank
 research allocation.
 
+Non-safety buckets can use `defer_to_runtime_authority_surface` as their owner
+command when they have no concrete work. That is an attention placeholder; it
+does not replace [[CEO Action Board]], [[CEO Resumption Brief]], or [[CEO
+Preflight Gate]] as runtime authority.
+
+The `safe_to_continue` field is an attention-allocation diagnostic, not
+dispatch authority. Read it with `safe_to_continue_scope`,
+`dispatch_authority`, and `runtime_authority_note`; a true value only means this
+dashboard did not find a safety-first allocation blocker.
+
 ## Boundary
 
 The points are CEO attention, not trading capital and not production capital.

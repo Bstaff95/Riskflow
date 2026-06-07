@@ -14,6 +14,15 @@ True CEO Autonomy for Riskflow does not mean unrestricted command execution. It 
 
 The CEO layer should allocate attention, select the next bounded action, inspect evidence, stop bad loops, preserve memory, and escalate product changes for approval.
 
+Outside agent-system research points in the same direction: risky actions need
+approval before execution, paused runs need durable resumable state, guardrails
+need to be separate and inspectable, tools need regression tests from observed
+failures, and parallel specialists need one accountable orchestrator. Riskflow's
+local mapping is tracked in [[CEO Agentic Systems Research Alignment]].
+The current CEO operating-system design target is [[CEO Operating System For
+Riskflow]], and the next specialist harness target is [[Agent Employee
+Organization V2]].
+
 ## Operating Model
 
 The CEO loop should manage five portfolios:
@@ -85,6 +94,11 @@ Build CEO mode toward an operating dashboard:
 The first implementation is [[CEO Operating Dashboard]], which writes
 `ceo_operating_dashboard.yaml` and `.md`.
 
+Dashboard `safe_to_continue` fields are local diagnostics, not operating
+permission. True CEO autonomy requires the authority stack to agree: `ceo status`,
+[[Approval Queue]], [[CEO Action Board]], [[CEO Resumption Brief]], [[CEO
+Preflight Gate]], and [[CEO Dispatch Receipt]].
+
 Related:
 
 - [[CEO Operating Dashboard]]
@@ -97,3 +111,6 @@ Related:
 - [[Frozen Candidate Validation]]
 - [[Agent Memory As Research Infrastructure]]
 - [[Process Score Is Not Product Evidence]]
+- [[CEO Agentic Systems Research Alignment]]
+- [[CEO Operating System For Riskflow]]
+- [[Agent Employee Organization V2]]

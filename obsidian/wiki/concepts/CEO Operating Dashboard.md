@@ -2,9 +2,9 @@
 rf_type: concept
 concept_id: ceo_operating_dashboard
 status: active
-updated_at: 2026-06-05
+updated_at: 2026-06-06
 production_effect: none
-future_action_changed: Use operating-dashboard to inspect candidate, capability, data, memory, trace, and risk portfolios before choosing a CEO action.
+future_action_changed: Use operating-dashboard to inspect candidate, capability, role readiness, data, memory, trace, and risk portfolios before choosing a CEO action.
 not_product_proof: true
 ---
 
@@ -14,8 +14,14 @@ The CEO Operating Dashboard is the portfolio view for Riskflow autonomy.
 
 It differs from the flight dashboard:
 
-- flight dashboard answers whether it is safe to continue
+- flight dashboard answers whether its own process-safety checks found a blocker
 - operating dashboard answers where CEO attention should be allocated
+
+The `safe_to_continue` field is not dispatch authority. The generated YAML,
+markdown, and CLI output include `safe_to_continue_scope`,
+`dispatch_authority`, and `runtime_authority_note`; actual action authority
+still comes from `ceo status`, [[Approval Queue]], [[CEO Action Board]], [[CEO
+Resumption Brief]], [[CEO Preflight Gate]], and [[CEO Dispatch Receipt]].
 
 ## Command
 
@@ -37,9 +43,13 @@ The dashboard combines:
 - [[Evidence Debt Register]]
 - [[Approval Queue]]
 - [[Executive KPIs]]
+- [[Specialist Role Orchestration]]
 - data gate
 - memory portfolio
-- trace and loop-meltdown status
+- trace verdict, score, recommended next action, issues, loop-meltdown status,
+  and manual data-import requirement
+- role orchestration status, pending/completed/blocked counts, and top blocked
+  specialist review/finding/next action
 - risk portfolio
 
 ## CEO Meaning
@@ -57,6 +67,7 @@ Related:
 - [[Executive KPIs]]
 - [[CEO Heartbeat]]
 - [[Action Contract]]
+- [[Trace Grading For Riskflow]]
 - [[Loop Meltdown Detection]]
 - [[Frozen Candidate Validation]]
 - [[Process Score Is Not Product Evidence]]

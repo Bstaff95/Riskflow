@@ -23,6 +23,9 @@ It writes:
 - `reports/ceo_runs/<run_id>/blocker_stack.yaml`
 - `reports/ceo_runs/<run_id>/blocker_stack.md`
 
+The report includes top-blocker evidence and per-blocker evidence, so a fresh
+session can see why the blocker exists without opening every source artifact.
+
 ## What It Orders
 
 - Stop requests.
@@ -33,6 +36,10 @@ It writes:
 - [[CEO Eval Suite]] blocking cases.
 - [[CEO Memory Delta]] requirements.
 - [[Evidence Debt Register]] work.
+
+If a live stop request exists, the top-level `next_command` routes to
+`ceo approval-queue` even when a reused [[CEO Resumption Brief]] still contains
+a stale safe `execute-next` command.
 
 ## Boundary
 

@@ -10,7 +10,9 @@ not_product_proof: true
 
 # CEO Guardrail Audit
 
-The CEO guardrail audit scans CEO YAML artifacts for unsafe claims:
+The CEO guardrail audit scans CEO YAML artifacts, including nested trust
+snapshots under folders such as `dispatch_receipts/` and
+`operator_step_boards/`, for unsafe claims:
 
 - `production_effect` not equal to `none`
 - `product_language_allowed: true`

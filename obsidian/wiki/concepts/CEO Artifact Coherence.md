@@ -30,15 +30,49 @@ It writes:
 - Artifact hashes are recorded.
 - Trust artifacts were generated after the latest binding action when a binding
   action exists.
+- The action contract decision matches the latest binding action decision.
+- The latest binding action points at an immutable `dispatch_receipts/` snapshot
+  whose stored hash still matches the receipt file.
+- Authority trust artifacts that existed when the receipt snapshot was written
+  still match the receipt's recorded SHA-256 fingerprints.
+- Mutable diagnostics such as trace grade, replay, eval suite, guardrail audit,
+  and approval queue/status can refresh during later preflights; drift there is
+  visible evidence but not hard-blocking by itself.
+- Handoff diagnostics such as [[CEO Repair Apply]], [[CEO Action Board]],
+  [[CEO Decision Quality]], and [[CEO Operator Brief]] are tracked for
+  freshness. Missing or stale versions are advisory because they can mislead a
+  fresh session, but they are not direct dispatch authority by themselves.
+- Handoff semantics agree across [[CEO Action Board]], [[CEO Decision Quality]],
+  and [[CEO Operator Brief]]. For example, if the board says manual gate, the
+  decision-quality effective runtime action must also be blocked and the
+  operator brief must say it is waiting on the manual gate. The board primary
+  action also must not remain marked executable under manual-gate status.
+  Semantic mismatches are advisory, but they are high-signal handoff problems.
+- A live `stop.request` plus stale safe handoff artifacts is a handoff semantic
+  issue. If the board, decision-quality, or operator brief still says bounded
+  action while a stop file exists, artifact coherence records
+  `live_stop_runtime_authority_mismatch` as advisory evidence.
+- Legacy actions that were recorded before receipt snapshots or transition
+  policy evidence remain visible as advisory issues when the latest action has
+  no current transition evidence. They should not be treated like hard
+  receipt-backed authority drift.
 
 ## Boundary
 
-This is a freshness and lineage check only. It does not judge market evidence,
-validate candidates, authorize product language, or replace [[CEO Preflight
-Gate]].
+This is a freshness, lineage, and trust-alignment check only. It does not judge
+market evidence, validate candidates, or authorize product language. Hard
+artifact-coherence failures are consumed by [[CEO Preflight Gate]] as dispatch
+blockers.
 
-If [[CEO Resumption Brief]] would otherwise say safe but artifact coherence
-fails, the brief should downgrade to `diagnostic_stale_artifacts`.
+Status values:
+
+- `pass`: no coherence issues.
+- `pass_with_advisory_issues`: visible legacy or non-hard drift exists, but
+  `hard_issue_count` is zero.
+- `fail`: at least one hard trust issue exists.
+
+If [[CEO Resumption Brief]] would otherwise say safe but artifact coherence has
+hard issues, the brief should downgrade to `diagnostic_stale_artifacts`.
 
 Related:
 

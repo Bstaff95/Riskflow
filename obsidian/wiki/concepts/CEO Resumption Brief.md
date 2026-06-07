@@ -27,6 +27,8 @@ It writes:
 
 - Is the run stopped?
 - Is [[CEO Preflight Gate]] blocked?
+- What trace verdict, score, recommended next action, issues, and manual
+  data-import requirement came from preflight source status?
 - Are replay, eval-suite, mission score, and strategy capital artifacts present?
 - Is the next step diagnostic-only, blocked, or safe for one bound action?
 - What exact command should a fresh session run next?
@@ -43,6 +45,7 @@ If the brief says stopped or blocked, the next command must not be
 Related:
 
 - [[CEO Preflight Gate]]
+- [[Trace Grading For Riskflow]]
 - [[CEO Replay]]
 - [[CEO Eval Suite]]
 - [[CEO Mission Score]]

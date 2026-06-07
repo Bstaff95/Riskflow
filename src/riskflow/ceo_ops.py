@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,14 +82,30 @@ CEO_RUN_INDEX_MODEL = "riskflow_ceo_run_index_v0"
 CEO_BLOCKER_STACK_MODEL = "riskflow_ceo_blocker_stack_v0"
 CEO_OPERATING_INCIDENT_REGISTER_MODEL = "riskflow_ceo_operating_incident_register_v0"
 CEO_REPAIR_PLAN_MODEL = "riskflow_ceo_repair_plan_v0"
+CEO_REPAIR_APPLY_MODEL = "riskflow_ceo_repair_apply_v0"
 CEO_ACTION_BOARD_MODEL = "riskflow_ceo_action_board_v0"
 CEO_OPERATOR_STEP_MODEL = "riskflow_ceo_operator_step_v0"
 CEO_OPERATOR_BRIEF_MODEL = "riskflow_ceo_operator_brief_v0"
 CEO_DECISION_QUALITY_MODEL = "riskflow_ceo_decision_quality_v0"
+CEO_ORG_PROGRESS_SCORE_MODEL = "riskflow_ceo_org_progress_score_v0"
 CEO_EVAL_FIXTURES_MODEL = "riskflow_ceo_eval_fixtures_v0"
 CEO_MEMORY_DELTA_MODEL = "riskflow_ceo_memory_delta_v0"
 CEO_GUARDRAIL_AUDIT_MODEL = "riskflow_ceo_guardrail_audit_v0"
 CEO_PREFLIGHT_GATE_MODEL = "riskflow_ceo_preflight_gate_v0"
+CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION = "defer_to_runtime_authority_surface"
+CEO_FLIGHT_SAFETY_SCOPE = "flight_dashboard_only_not_dispatch_authority"
+CEO_STRATEGY_SAFETY_SCOPE = "strategy_attention_only_not_dispatch_authority"
+CEO_RUNTIME_AUTHORITY_NOTE = (
+    "Dispatch authority is decided by ceo status, approval queue, action board, "
+    "resumption brief, preflight gate, and dispatch receipt."
+)
+CEO_HARD_HANDOFF_SEMANTIC_ISSUES = {
+    "live_stop_runtime_authority_mismatch",
+    "manual_gate_has_runnable_actions",
+    "manual_gate_primary_marked_executable",
+    "manual_gate_decision_quality_selected_action_executable",
+    "manual_gate_decision_quality_effective_action_executable",
+}
 
 CEO_REPORT_ROOT = Path("reports/ceo_runs")
 
@@ -179,6 +196,7 @@ class CeoOpsOptions:
     max_new_hypotheses: int = 30
     ceo_context: str = "external"
     ceo_authorized_action: str | None = None
+    skip_eval_fixtures: bool = False
 
 
 def utc_now_iso() -> str:
@@ -213,6 +231,22 @@ def _require_ceo_action_context(options: CeoOpsOptions, *, action: str, aliases:
 
 def _should_write_binding_action_result(options: CeoOpsOptions) -> bool:
     return options.ceo_context not in CEO_DIAGNOSTIC_CONTEXTS
+
+
+def _ceo_approval_record_command(*, ceo_run_id: str, approval_id: str) -> str:
+    return (
+        "PYTHONPATH=src python3 -m riskflow ceo approval-record "
+        f"--run-id {ceo_run_id} --approval-id {approval_id} "
+        "--decision <approved|rejected> --user-confirmed"
+    )
+
+
+def _ceo_approval_apply_command(*, ceo_run_id: str, approval_id: str) -> str:
+    return (
+        "PYTHONPATH=src python3 -m riskflow ceo approval-apply "
+        f"--run-id {ceo_run_id} --approval-id {approval_id} "
+        "--user-confirmed --apply"
+    )
 
 
 def make_ceo_run_id(objective: str = "bullish-positive") -> str:
@@ -1111,7 +1145,7 @@ def build_ceo_self_audit(action_result: dict[str, Any], ledger_entries: list[dic
             else
             "build_missing_capability_or_change_strategy_before_more_lab_blocks"
             if repeated_decisions and len(no_progress) >= 2
-            else "continue_with_bound_action_dispatch"
+            else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
         ),
         "production_effect": "none",
     }
@@ -1185,7 +1219,7 @@ def build_ceo_loop_meltdown_check(
     elif strategy_change_required:
         recommended = "patch_research_infra_or_broaden_hypothesis_source"
     else:
-        recommended = "continue_with_bound_action_dispatch"
+        recommended = CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
     severity = "clear"
     if strategy_change_required:
         severity = "fail" if fingerprint_repeat_count >= 3 or no_progress_count >= 3 else "warn"
@@ -1597,6 +1631,42 @@ def _dispatch_receipt_reference(path: Path) -> dict[str, Any]:
     }
 
 
+def _binding_action_is_blocked_or_noop(action_result: dict[str, Any]) -> bool:
+    action_status = str(action_result.get("status", ""))
+    action_taken = str(action_result.get("action_taken", ""))
+    return action_status in {"blocked", "manual_gate"} or action_taken in {"none", "blocked_preflight_gate"} or action_taken.startswith("blocked_")
+
+
+def _receipt_can_back_binding_action(
+    *,
+    receipt: dict[str, Any],
+    receipt_reference_path: Path,
+    ceo_run_id: str,
+    lab_run_id: str,
+    action_result: dict[str, Any],
+    expected_dispatch_mode: str,
+) -> bool:
+    if (
+        receipt.get("model") != CEO_DISPATCH_RECEIPT_MODEL
+        or receipt.get("run_id") != ceo_run_id
+        or receipt.get("lab_run_id") != lab_run_id
+        or receipt.get("decision") != action_result.get("decision")
+    ):
+        return False
+    if not receipt_reference_path.exists() or receipt_reference_path.name == "dispatch_receipt.yaml":
+        return False
+    if receipt_reference_path.parent.name != "dispatch_receipts":
+        return False
+    accepted_dispatch_modes = {expected_dispatch_mode}
+    if expected_dispatch_mode == "bound_dispatch":
+        accepted_dispatch_modes.add("execute_next")
+    if str(receipt.get("dispatch_mode", "")) not in accepted_dispatch_modes:
+        return False
+    if _binding_action_is_blocked_or_noop(action_result):
+        return receipt.get("safe_to_dispatch") is False and receipt.get("status") == "dispatch_blocked"
+    return receipt.get("safe_to_dispatch") is True and receipt.get("status") == "dispatch_allowed"
+
+
 def _receipt_slug(value: str) -> str:
     slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
     return slug or "unknown"
@@ -1844,6 +1914,11 @@ def build_ceo_trace_grade(
         if item not in supported_next_actions and not item.startswith("build_")
     ]
     manual_next_actions = [item for item in next_actions if item in manual_gate_next_actions]
+    manual_data_import_required = (
+        str(action_result.get("status", "")) == "manual_gate"
+        or str(action_result.get("decision", "")) == "import_or_curate_fresh_ohlcv_data"
+        or "import_or_curate_fresh_ohlcv_data" in manual_next_actions
+    )
     capability_builder_next_actions = [item for item in next_actions if item.startswith("build_")]
     bounded_executor_next_actions = [
         item
@@ -1881,6 +1956,7 @@ def build_ceo_trace_grade(
         "self_audit_intervention_required": bool(self_audit.get("intervention_required")),
         "next_action_supported": not unsupported_next_actions,
         "manual_gate_next_action_count": len(manual_next_actions),
+        "manual_data_import_required": manual_data_import_required,
         "bounded_executor_next_action_count": len(bounded_executor_next_actions),
         "capability_builder_next_action_count": len(capability_builder_next_actions),
         "failure_avoidance_status": failure_avoidance["status"],
@@ -1903,6 +1979,8 @@ def build_ceo_trace_grade(
         issues.append("self_audit_intervention_required")
     if not criteria["next_action_supported"]:
         issues.append("unsupported_next_action")
+    if criteria["manual_data_import_required"]:
+        issues.append("manual_data_import_required")
     if action_result.get("status") == "capability_gap":
         issues.append("capability_gap_open")
     if action_result.get("status") == "blocked" and not criteria["stop_requested"]:
@@ -1921,16 +1999,21 @@ def build_ceo_trace_grade(
     score -= 15 * (not criteria["next_action_supported"])
     score -= 15 * failure_avoidance["repeated_prior_failure"]
     score -= 20 * loop_meltdown["strategy_change_required"]
+    score -= 50 * criteria["manual_data_import_required"]
     score -= 10 * (action_result.get("status") == "capability_gap")
     score -= 10 * (action_result.get("status") == "blocked" and not criteria["stop_requested"])
     score = max(0, int(score))
     verdict = "pass" if score >= 85 and not issues else "warn" if score >= 60 else "fail"
+    if criteria["manual_data_import_required"]:
+        verdict = "fail"
     if criteria["stop_requested"]:
         recommended = "honor_stop_request"
     elif criteria["true_blocker"]:
         recommended = "resolve_true_blocker"
     elif loop_meltdown["strategy_change_required"]:
         recommended = loop_meltdown["recommended_intervention"]
+    elif criteria["manual_data_import_required"]:
+        recommended = "stop_for_manual_data_import"
     elif criteria["self_audit_intervention_required"] or unsupported_next_actions:
         recommended = "patch_research_infra_or_broaden_hypothesis_source"
     elif action_result.get("status") == "capability_gap":
@@ -2165,6 +2248,108 @@ def _decision_quality_candidate(
     }
 
 
+def _decision_quality_runtime_authority(
+    action_board: dict[str, Any] | None,
+    *,
+    selected_action: str,
+) -> dict[str, Any]:
+    if not action_board:
+        return {
+            "runtime_authority_status": "unknown_action_board",
+            "runtime_autonomy_mode": "unknown",
+            "executable_next_action": "",
+            "executable_next_command": "",
+            "executable_next_command_kind": "",
+            "runtime_authorized_strategic_route": "",
+            "runtime_authorized_route_source": "",
+            "effective_runtime_action": "",
+            "effective_runtime_command": "",
+            "effective_runtime_command_kind": "",
+            "effective_runtime_can_execute_now": False,
+            "runtime_blocked": True,
+            "runtime_block_reason": "action_board_missing",
+            "selected_strategic_route_advisory": selected_action,
+            "executable_can_execute_now": False,
+            "selected_action_is_executable_now": False,
+            "selected_action_blocked_by": "action_board_missing",
+            "selected_action_runtime_note": "Decision quality could not compare the selected route with an action board.",
+        }
+    primary = action_board.get("primary_action", {}) or {}
+    board_status = str(action_board.get("status", ""))
+    primary_action = str(primary.get("action_id", ""))
+    command_kind = str(primary.get("command_kind", ""))
+    command = str(primary.get("command", ""))
+    manual_gate_active = board_status == "manual_gate_required" or primary.get("requires_manual_gate") is True
+    can_execute = primary.get("can_execute_now") is True and not manual_gate_active
+    command_tokens: list[str] = []
+    try:
+        command_tokens = shlex.split(command)
+    except ValueError:
+        command_tokens = []
+    bounded_execute_next = (
+        can_execute
+        and command_kind == "bounded_dispatch"
+        and primary_action == "resumption_brief_next_command"
+        and "execute-next" in command_tokens
+        and "riskflow" in command_tokens
+        and "ceo" in command_tokens
+    )
+    authorized_strategic_route = str(primary.get("authorized_strategic_route", ""))
+    authorized_route_source = str(primary.get("authorized_route_source", ""))
+    selected_is_direct_action = bool(selected_action) and can_execute and primary_action == selected_action
+    selected_is_authorized_route = (
+        bool(selected_action)
+        and bounded_execute_next
+        and bool(authorized_strategic_route)
+        and authorized_strategic_route == selected_action
+    )
+    selected_is_executable = selected_is_direct_action or selected_is_authorized_route
+    if selected_is_executable:
+        blocked_by = ""
+        if authorized_strategic_route:
+            runtime_note = (
+                "The action board authorizes a bounded execute-next wrapper; decision quality names the "
+                "strategic route expected behind that wrapper."
+            )
+        else:
+            runtime_note = "The selected route is also the current executable action-board item."
+    elif manual_gate_active:
+        blocked_by = f"manual_gate_required:{primary_action or 'unknown_action'}"
+        runtime_note = "A manual gate outranks the selected strategic route; do not execute autonomously."
+    elif primary.get("needs_implementation"):
+        blocked_by = f"implementation_repair_required:{primary_action or 'unknown_action'}"
+        runtime_note = "An implementation repair outranks the selected strategic route."
+    elif primary.get("diagnostic_only"):
+        blocked_by = f"diagnostic_refresh_required:{primary_action or 'unknown_action'}"
+        runtime_note = "A diagnostic refresh is the only current action-board item; it is not proof the selected route may execute."
+    elif can_execute:
+        blocked_by = f"different_executable_action:{primary_action or 'unknown_action'}"
+        runtime_note = "The action board exposes a different bounded executable action than the selected strategic route."
+    else:
+        blocked_by = f"{board_status or 'no_action_board_status'}:{primary_action or 'none'}"
+        runtime_note = "The action board does not currently authorize the selected strategic route."
+    return {
+        "runtime_authority_status": board_status or "unknown_action_board_status",
+        "runtime_autonomy_mode": str(action_board.get("autonomy_mode", "")),
+        "executable_next_action": primary_action,
+        "executable_next_command": command,
+        "executable_next_command_kind": command_kind,
+        "runtime_authorized_strategic_route": authorized_strategic_route,
+        "runtime_authorized_route_source": authorized_route_source,
+        "effective_runtime_action": primary_action,
+        "effective_runtime_command": command,
+        "effective_runtime_command_kind": command_kind,
+        "effective_runtime_can_execute_now": can_execute,
+        "runtime_blocked": not can_execute,
+        "runtime_block_reason": "" if can_execute else blocked_by,
+        "selected_strategic_route_advisory": "" if selected_is_executable else selected_action,
+        "executable_can_execute_now": can_execute,
+        "selected_action_is_executable_now": selected_is_executable,
+        "selected_action_blocked_by": blocked_by,
+        "selected_action_runtime_note": runtime_note,
+    }
+
+
 def build_ceo_decision_quality(
     *,
     ceo_run_id: str,
@@ -2173,6 +2358,7 @@ def build_ceo_decision_quality(
     product_delta: dict[str, Any],
     infra_delta: dict[str, Any],
     decision: dict[str, Any],
+    action_board: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lab_status = company_status.get("lab_status", {}) or {}
     governance = company_status.get("governance", {}) or {}
@@ -2243,7 +2429,8 @@ def build_ceo_decision_quality(
     runner_up = next((item for item in candidates if not item.get("selected")), {})
     gap = int(selected.get("score", 0) or 0) - int(runner_up.get("score", 0) or 0)
     confidence = "high" if gap >= 20 else "medium" if gap >= 10 else "low"
-    return {
+    runtime_authority = _decision_quality_runtime_authority(action_board, selected_action=selected_action)
+    quality = {
         "model": CEO_DECISION_QUALITY_MODEL,
         "generated_at": utc_now_iso(),
         "run_id": ceo_run_id,
@@ -2257,19 +2444,25 @@ def build_ceo_decision_quality(
         "score_gap": gap,
         "selected_rationale": decision.get("rationale", selected.get("rationale", "")),
         "expected_artifact": _decision_quality_expected_artifact(selected_action),
-        "stop_condition": "Stop or request approval if preflight, approval queue, dispatch receipt, replay, eval, or guardrail artifacts block the selected action.",
+        "stop_condition": (
+            "Stop or request approval if action board, preflight, approval queue, dispatch receipt, replay, eval, "
+            "or guardrail artifacts block the selected action."
+        ),
         "alternatives": candidates,
         "evidence_refs": {
             "company_status": "company_status.yaml",
             "product_delta": "product_delta_scoreboard.yaml",
             "infra_delta": "research_infra_delta.yaml",
             "latest_action_result": "binding_action_result.yaml",
+            "action_board": "action_board.yaml",
         },
         "guardrail": "Decision quality explains routing only. It does not approve execution, product language, or production changes.",
         "product_language_allowed": False,
         "production_effect": "none",
         "promotion_authority": "none",
     }
+    quality.update(runtime_authority)
+    return quality
 
 
 def render_ceo_decision_quality(quality: dict[str, Any]) -> str:
@@ -2279,7 +2472,31 @@ def render_ceo_decision_quality(quality: dict[str, Any]) -> str:
         f"Generated: {quality.get('generated_at')}",
         f"Run: {quality.get('run_id')}",
         f"Lab run: {quality.get('lab_run_id')}",
+        "",
+        "## Runtime Authority",
+        "",
+        f"- Effective runtime action: {quality.get('effective_runtime_action') or 'none'}",
+        f"- Effective runtime command kind: {quality.get('effective_runtime_command_kind') or 'none'}",
+        f"- Effective runtime can execute now: {quality.get('effective_runtime_can_execute_now')}",
+        f"- Runtime blocked: {quality.get('runtime_blocked')}",
+        f"- Runtime block reason: {quality.get('runtime_block_reason') or 'none'}",
+        f"- Effective runtime command: `{quality.get('effective_runtime_command') or ''}`",
+        f"- Authority status: {quality.get('runtime_authority_status')}",
+        f"- Autonomy mode: {quality.get('runtime_autonomy_mode')}",
+        f"- Executable next action: {quality.get('executable_next_action') or 'none'}",
+        f"- Executable command kind: {quality.get('executable_next_command_kind') or 'none'}",
+        f"- Runtime authorized strategic route: {quality.get('runtime_authorized_strategic_route') or 'none'}",
+        f"- Runtime authorized route source: {quality.get('runtime_authorized_route_source') or 'none'}",
+        f"- Can execute now: {quality.get('executable_can_execute_now')}",
+        f"- Selected action executable now: {quality.get('selected_action_is_executable_now')}",
+        f"- Selected action blocked by: {quality.get('selected_action_blocked_by') or 'none'}",
+        f"- Executable command: `{quality.get('executable_next_command') or ''}`",
+        f"- Runtime note: {quality.get('selected_action_runtime_note')}",
+        "",
+        "## Strategic Selection",
+        "",
         f"Selected action: {quality.get('selected_action')}",
+        f"Selected strategic route advisory: {quality.get('selected_strategic_route_advisory') or 'none'}",
         f"Selected score: {quality.get('selected_score')}",
         f"Runner-up action: {quality.get('runner_up_action') or 'none'}",
         f"Runner-up score: {quality.get('runner_up_score')}",
@@ -2305,7 +2522,11 @@ def render_ceo_decision_quality(quality: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_decision_quality(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_decision_quality(
+    options: CeoOpsOptions,
+    *,
+    action_board_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     root = ceo_dir(options, ceo_run_id)
@@ -2316,6 +2537,8 @@ def run_ceo_decision_quality(options: CeoOpsOptions) -> dict[str, Any]:
     infra_delta = build_research_infra_delta(company_status, governance)
     decision = choose_executive_decision(company_status, product_delta, infra_delta)
     decision = _decision_from_previous_next_action(_load_yaml_if_exists(root / "binding_action_result.yaml"), decision)
+    diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
+    action_board_result = action_board_result or run_ceo_action_board(diagnostic_options)
     quality = build_ceo_decision_quality(
         ceo_run_id=ceo_run_id,
         lab_run_id=lab_run_id,
@@ -2323,6 +2546,7 @@ def run_ceo_decision_quality(options: CeoOpsOptions) -> dict[str, Any]:
         product_delta=product_delta,
         infra_delta=infra_delta,
         decision=decision,
+        action_board=action_board_result["action_board"],
     )
     path = root / "decision_quality.yaml"
     report_path = root / "decision_quality.md"
@@ -2332,7 +2556,11 @@ def run_ceo_decision_quality(options: CeoOpsOptions) -> dict[str, Any]:
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
         "decision_quality": quality,
-        "paths": {"decision_quality": path, "decision_quality_report": report_path},
+        "paths": {
+            "decision_quality": path,
+            "decision_quality_report": report_path,
+            "action_board": action_board_result["paths"]["action_board"],
+        },
     }
 
 
@@ -2695,20 +2923,71 @@ def _write_binding_action_result(
     if not _should_write_binding_action_result(options):
         return {}
     dispatch_receipt_path = root / "dispatch_receipt.yaml"
+    receipt_paths: dict[str, Path] = {}
     if (
-        options.ceo_context == "bound_dispatch"
+        options.ceo_context in {"bound_dispatch", "guarded_direct"}
         and dispatch_receipt_path.exists()
         and "dispatch_receipt" not in action_result
     ):
         receipt = _load_yaml_if_exists(dispatch_receipt_path)
-        receipt_reference_path = Path(str(receipt.get("snapshot_path") or dispatch_receipt_path))
-        if (
-            receipt.get("model") == CEO_DISPATCH_RECEIPT_MODEL
-            and receipt.get("run_id") == ceo_run_id
-            and receipt.get("lab_run_id") == lab_run_id
-            and receipt.get("decision") == action_result.get("decision")
+        receipt_reference_path = _resolve_report_ref_path(root, receipt.get("snapshot_path") or dispatch_receipt_path)
+        if _receipt_can_back_binding_action(
+            receipt=receipt,
+            receipt_reference_path=receipt_reference_path,
+            ceo_run_id=ceo_run_id,
+            lab_run_id=lab_run_id,
+            action_result=action_result,
+            expected_dispatch_mode=options.ceo_context,
         ):
             action_result["dispatch_receipt"] = _dispatch_receipt_reference(receipt_reference_path)
+    if options.ceo_context in {"bound_dispatch", "guarded_direct"} and "dispatch_receipt" not in action_result:
+        preflight_gate = _load_yaml_if_exists(root / "preflight_gate.yaml")
+        if (
+            not preflight_gate
+            and str(action_result.get("run_id", "")) == ceo_run_id
+            and str(action_result.get("lab_run_id", "")) == lab_run_id
+        ):
+            preflight_result = run_ceo_preflight_gate(_with_ceo_context(options, context="preflight_refresh"))
+            preflight_gate = preflight_result["preflight_gate"]
+        action_contract_path = root / "action_contract.yaml"
+        if not action_contract_path.exists():
+            atomic_write_yaml(
+                action_contract_path,
+                build_ceo_action_contract(
+                    ceo_run_id=ceo_run_id,
+                    lab_run_id=lab_run_id,
+                    decision=action_result,
+                ),
+            )
+        if preflight_gate.get("safe_to_execute") is not True:
+            if _binding_action_is_blocked_or_noop(action_result):
+                receipt_paths = _write_ceo_dispatch_receipt(
+                    options,
+                    ceo_run_id,
+                    lab_run_id,
+                    action_result,
+                    preflight_gate=preflight_gate,
+                    approval_queue=_load_yaml_if_exists(root / "approval_queue.yaml"),
+                    safe_to_dispatch=False,
+                    reason=f"{options.ceo_context} action writer recorded blocked/no-op result after failed preflight",
+                    dispatch_mode=options.ceo_context,
+                )
+                action_result["dispatch_receipt"] = _dispatch_receipt_reference(receipt_paths["dispatch_receipt_snapshot"])
+            else:
+                raise ValueError("binding action requires a passing preflight gate before writing an immutable dispatch receipt")
+        else:
+            receipt_paths = _write_ceo_dispatch_receipt(
+                options,
+                ceo_run_id,
+                lab_run_id,
+                action_result,
+                preflight_gate=preflight_gate,
+                approval_queue=_load_yaml_if_exists(root / "approval_queue.yaml"),
+                safe_to_dispatch=True,
+                reason=f"{options.ceo_context} action writer required immutable dispatch receipt",
+                dispatch_mode=options.ceo_context,
+            )
+            action_result["dispatch_receipt"] = _dispatch_receipt_reference(receipt_paths["dispatch_receipt_snapshot"])
     action_result_path = root / "binding_action_result.yaml"
     ledger_path = _append_action_ledger(options, ceo_run_id, action_result)
     ledger_entries = _read_action_ledger(options, ceo_run_id)
@@ -2721,13 +3000,15 @@ def _write_binding_action_result(
     atomic_write_yaml(self_audit_path, self_audit)
     atomic_write_yaml(outcome_card_path, outcome_card)
     atomic_write_text(outcome_card_report_path, render_ceo_action_outcome_card(outcome_card))
-    return {
+    paths = {
         "binding_action_result": action_result_path,
         "action_ledger": ledger_path,
         "self_audit": self_audit_path,
         "action_outcome_card": outcome_card_path,
         "action_outcome_card_report": outcome_card_report_path,
     }
+    paths.update(receipt_paths)
+    return paths
 
 
 def render_champion_challenger_report(results: dict[str, Any]) -> str:
@@ -5811,6 +6092,77 @@ def run_ceo_fresh_control_validation(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _effective_operator_status(
+    *,
+    action_board: dict[str, Any],
+    operator_brief: dict[str, Any],
+    decision_quality: dict[str, Any],
+) -> dict[str, Any]:
+    action_board_status = str(action_board.get("status", ""))
+    operator_brief_status = str(operator_brief.get("status", ""))
+    runtime_authority = str(decision_quality.get("runtime_authority_status", ""))
+    primary = action_board.get("primary_action", {}) or {}
+    primary_can_execute = primary.get("can_execute_now") is True
+    runtime_blocked = decision_quality.get("runtime_blocked") is True
+    manual_gate_active = (
+        action_board_status == "manual_gate_required"
+        or operator_brief_status == "waiting_on_manual_gate"
+        or runtime_authority == "manual_gate_required"
+    )
+    effective_runtime_action = str(
+        decision_quality.get("effective_runtime_action")
+        or ((action_board.get("primary_action", {}) or {}).get("action_id"))
+        or ""
+    )
+    runtime_block_reason = str(decision_quality.get("runtime_block_reason") or "")
+    if manual_gate_active:
+        status = "manual_gate_required"
+        runtime_blocked = True
+        if not runtime_block_reason:
+            runtime_block_reason = f"manual_gate_required:{effective_runtime_action or 'unknown_action'}"
+    elif action_board_status == "bounded_action_available" and primary_can_execute:
+        status = "bounded_action_available"
+        runtime_blocked = False
+    elif action_board_status in {"diagnostic_refresh_recommended", "implementation_repair_required", "no_action_available"}:
+        status = action_board_status
+        runtime_blocked = True
+        if not runtime_block_reason:
+            runtime_block_reason = f"{action_board_status}:{effective_runtime_action or 'unknown_action'}"
+    elif runtime_blocked:
+        status = "runtime_blocked"
+    else:
+        status = "unknown_or_diagnostic"
+    return {
+        "effective_operator_status": status,
+        "manual_gate_active": manual_gate_active,
+        "runtime_blocked": runtime_blocked,
+        "runtime_block_reason": runtime_block_reason,
+        "effective_runtime_action": effective_runtime_action,
+        "runtime_authority": runtime_authority,
+        "action_board_status": action_board_status,
+        "operator_brief_status": operator_brief_status,
+    }
+
+
+def _ceo_reused_artifact_payload(
+    result: dict[str, Any] | None,
+    key: str,
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+) -> dict[str, Any] | None:
+    if not result:
+        return None
+    payload = result.get(key)
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("run_id", "")) != ceo_run_id:
+        return None
+    if str(payload.get("lab_run_id", "")) != lab_run_id:
+        return None
+    return payload
+
+
 def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
@@ -5821,41 +6173,208 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
     dispatch_receipt = _load_yaml_if_exists(root / "dispatch_receipt.yaml")
     resumption_brief = _load_yaml_if_exists(root / "resumption_brief.yaml")
     repair_plan = _load_yaml_if_exists(root / "repair_plan.yaml")
+    repair_apply = _load_yaml_if_exists(root / "repair_apply.yaml")
     action_board = _load_yaml_if_exists(root / "action_board.yaml")
     operator_brief = _load_yaml_if_exists(root / "operator_brief.yaml")
+    decision_quality = _load_yaml_if_exists(root / "decision_quality.yaml")
+    operator_step = _load_yaml_if_exists(root / "operator_step.yaml")
+    replay = _load_yaml_if_exists(root / "ceo_replay.yaml")
+    eval_suite = _load_yaml_if_exists(root / "ceo_eval_suite.yaml")
+    artifact_coherence = _load_yaml_if_exists(root / "artifact_coherence.yaml")
+    trace_grade = _load_yaml_if_exists(root / "trace_grade.yaml")
+    approval_queue = _load_yaml_if_exists(root / "approval_queue.yaml")
+    approval_status = _load_yaml_if_exists(root / "approval_status.yaml")
+    role_queue = _load_yaml_if_exists(root / "role_task_queue.yaml")
+    role_result_validation = _load_yaml_if_exists(root / "role_result_validation.yaml")
     action_board_primary = action_board.get("primary_action", {}) or {}
+    eval_readiness = eval_suite.get("nine_nine_readiness", {}) or {}
+    artifact_coherence_issues = artifact_coherence.get("issues", []) or []
+    artifact_coherence_top_issue = artifact_coherence_issues[0] if artifact_coherence_issues else {}
+    approval_top_pending_item = (approval_queue.get("pending_items", []) or [{}])[0]
+    effective_operator = _effective_operator_status(
+        action_board=action_board,
+        operator_brief=operator_brief,
+        decision_quality=decision_quality,
+    )
+    live_stop_requested = status.get("stop_requested") is True
+    live_stop_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
+    if live_stop_requested:
+        effective_operator = {
+            **effective_operator,
+            "effective_operator_status": "manual_gate_required",
+            "manual_gate_active": True,
+            "runtime_blocked": True,
+            "runtime_block_reason": "manual_gate_required:blocker:stop_requested",
+            "effective_runtime_action": "blocker:stop_requested",
+            "runtime_authority": "manual_gate_required",
+        }
     resumption_next_command = str(resumption_brief.get("next_command", ""))
-    default_handoff_command = resumption_next_command or f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {ceo_run_id}"
+    if live_stop_requested:
+        resumption_next_command = live_stop_handoff_command
+        default_handoff_command = live_stop_handoff_command
+        default_handoff_reason = "live_stop_requested"
+        resumption_status = "blocked_stop_requested"
+    else:
+        default_handoff_command = resumption_next_command or f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {ceo_run_id}"
+        default_handoff_reason = "resumption_brief" if resumption_next_command else "missing_resumption_brief"
+        resumption_status = resumption_brief.get("resume_status", "missing_resumption_brief")
     status["operating_artifacts"] = {
+        "live_stop_requested": live_stop_requested,
+        "runtime_authority_override": "stop_requested" if live_stop_requested else "",
         "blocker_stack_status": blocker_stack.get("status", "missing_blocker_stack"),
         "top_blocker": blocker_stack.get("top_blocker", ""),
-        "blocker_next_command": blocker_stack.get("next_command", ""),
+        "blocker_next_command": live_stop_handoff_command if live_stop_requested else blocker_stack.get("next_command", ""),
         "incident_register_status": incident_register.get("status", "missing_incident_register"),
         "operating_incident_count": int(incident_register.get("incident_count", 0) or 0),
         "dispatch_receipt_status": dispatch_receipt.get("status", "missing_dispatch_receipt"),
-        "dispatch_safe_to_dispatch": dispatch_receipt.get("safe_to_dispatch", ""),
-        "resumption_status": resumption_brief.get("resume_status", "missing_resumption_brief"),
+        "dispatch_safe_to_dispatch": False if live_stop_requested else dispatch_receipt.get("safe_to_dispatch", ""),
+        "trace_grade_status": trace_grade.get("verdict", "missing_trace_grade"),
+        "trace_grade_score": trace_grade.get("score", ""),
+        "trace_grade_recommended_next_action": trace_grade.get("recommended_next_action", ""),
+        "trace_grade_issues": trace_grade.get("issues", []),
+        "trace_grade_manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
+        "replay_status": replay.get("status", "missing_replay"),
+        "replay_issue_count": len(replay.get("issues", []) or []),
+        "replay_dispatch_receipt_status": replay.get("dispatch_receipt_status", ""),
+        "operator_step_status": replay.get("operator_step_status", operator_step.get("status", "missing_operator_step")),
+        "operator_step_count": replay.get("operator_step_count", ""),
+        "eval_suite_status": eval_suite.get("status", "missing_eval_suite"),
+        "eval_suite_score": eval_suite.get("score", ""),
+        "nine_nine_readiness": eval_readiness.get("status", ""),
+        "nine_nine_blocking_case_count": len(eval_readiness.get("blocking_case_ids", []) or []),
+        "nine_nine_advisory_case_count": len(eval_readiness.get("advisory_case_ids", []) or []),
+        "artifact_coherence_status": artifact_coherence.get("status", "missing_artifact_coherence"),
+        "artifact_coherence_issue_count": artifact_coherence.get("issue_count", ""),
+        "artifact_coherence_top_issue_artifact": artifact_coherence_top_issue.get("artifact", ""),
+        "artifact_coherence_top_issue_types": artifact_coherence_top_issue.get("issues", []),
+        "artifact_coherence_top_issue_severity": artifact_coherence_top_issue.get(
+            "severity",
+            "unknown" if artifact_coherence_top_issue else "",
+        ),
+        "effective_operator_status": effective_operator["effective_operator_status"],
+        "manual_gate_active": effective_operator["manual_gate_active"],
+        "effective_operator_runtime_blocked": effective_operator["runtime_blocked"],
+        "effective_operator_runtime_block_reason": effective_operator["runtime_block_reason"],
+        "resumption_status": resumption_status,
         "resumption_next_command": resumption_next_command,
         "default_handoff_command": default_handoff_command,
-        "default_handoff_reason": "resumption_brief" if resumption_next_command else "missing_resumption_brief",
+        "default_handoff_reason": default_handoff_reason,
         "repair_plan_status": repair_plan.get("status", "missing_repair_plan"),
         "runnable_repair_count": int(repair_plan.get("runnable_repair_count", repair_plan.get("autonomous_repair_count", 0)) or 0),
         "diagnostic_refresh_count": int(repair_plan.get("diagnostic_refresh_count", 0) or 0),
         "top_repair": repair_plan.get("top_repair", ""),
         "top_repair_kind": repair_plan.get("top_repair_kind", ""),
         "repair_next_command": repair_plan.get("next_command", ""),
-        "action_board_status": action_board.get("status", "missing_action_board"),
-        "action_board_primary_action": action_board_primary.get("action_id", ""),
-        "action_board_primary_kind": action_board_primary.get("command_kind", ""),
-        "action_board_command": action_board_primary.get("command", ""),
-        "operator_brief_status": operator_brief.get("status", "missing_operator_brief"),
-        "operator_brief_summary": operator_brief.get("plain_english_summary", ""),
-        "operator_brief_next_action": operator_brief.get("recommended_next_action", ""),
+        "repair_apply_status": repair_apply.get("status", "missing_repair_apply"),
+        "repair_apply_key": repair_apply.get("repair_key", ""),
+        "repair_apply_executed": repair_apply.get("action_executed", ""),
+        "repair_apply_closed": repair_apply.get("repair_closed", ""),
+        "approval_queue_status": approval_queue.get("status", "missing_approval_queue"),
+        "approval_pending_count": approval_queue.get("pending_count", approval_status.get("pending_count", "")),
+        "approval_top_pending_id": approval_queue.get("top_pending_approval_id", ""),
+        "approval_top_pending_kind": approval_top_pending_item.get("kind", ""),
+        "approval_top_pending_reason": approval_top_pending_item.get("reason", ""),
+        "approval_top_pending_source": approval_top_pending_item.get("source_artifact", ""),
+        "approval_top_pending_required_user_decision": approval_top_pending_item.get("required_user_decision", ""),
+        "approval_top_pending_authority": approval_top_pending_item.get("approval_authority", approval_top_pending_item.get("authority", "")),
+        "approval_top_pending_fingerprint": approval_top_pending_item.get("approval_item_fingerprint", ""),
+        "approval_record_command": approval_queue.get("top_pending_approval_record_command", ""),
+        "approval_apply_command": approval_queue.get("top_pending_approval_apply_command", ""),
+        "approval_status": approval_status.get("status", "missing_approval_status"),
+        "action_board_status": "manual_gate_required" if live_stop_requested else action_board.get("status", "missing_action_board"),
+        "action_board_primary_action": "blocker:stop_requested" if live_stop_requested else action_board_primary.get("action_id", ""),
+        "action_board_primary_kind": "manual_gate" if live_stop_requested else action_board_primary.get("command_kind", ""),
+        "action_board_command": live_stop_handoff_command if live_stop_requested else action_board_primary.get("command", ""),
+        "decision_quality_status": decision_quality.get("status", "missing_decision_quality"),
+        "decision_quality_effective_runtime_action": (
+            "blocker:stop_requested" if live_stop_requested else decision_quality.get("effective_runtime_action", "")
+        ),
+        "decision_quality_effective_runtime_command_kind": (
+            "manual_gate" if live_stop_requested else decision_quality.get("effective_runtime_command_kind", "")
+        ),
+        "decision_quality_effective_runtime_can_execute_now": (
+            False if live_stop_requested else decision_quality.get("effective_runtime_can_execute_now", "")
+        ),
+        "decision_quality_runtime_blocked": True if live_stop_requested else decision_quality.get("runtime_blocked", ""),
+        "decision_quality_runtime_block_reason": (
+            "manual_gate_required:blocker:stop_requested"
+            if live_stop_requested
+            else decision_quality.get("runtime_block_reason", "")
+        ),
+        "decision_quality_selected_action": decision_quality.get("selected_action", ""),
+        "decision_quality_selected_strategic_route_advisory": decision_quality.get("selected_strategic_route_advisory", ""),
+        "decision_quality_confidence": decision_quality.get("confidence", ""),
+        "decision_quality_runtime_authority": "manual_gate_required" if live_stop_requested else decision_quality.get("runtime_authority_status", ""),
+        "decision_quality_executable_next_action": "blocker:stop_requested" if live_stop_requested else decision_quality.get("executable_next_action", ""),
+        "decision_quality_executable_command_kind": "manual_gate" if live_stop_requested else decision_quality.get("executable_next_command_kind", ""),
+        "decision_quality_runtime_authorized_strategic_route": decision_quality.get("runtime_authorized_strategic_route", ""),
+        "decision_quality_runtime_authorized_route_source": decision_quality.get("runtime_authorized_route_source", ""),
+        "decision_quality_executable_can_execute_now": False if live_stop_requested else decision_quality.get("executable_can_execute_now", ""),
+        "decision_quality_selected_action_is_executable_now": (
+            False if live_stop_requested else decision_quality.get("selected_action_is_executable_now", "")
+        ),
+        "decision_quality_selected_action_blocked_by": (
+            "manual_gate_required:blocker:stop_requested"
+            if live_stop_requested
+            else decision_quality.get("selected_action_blocked_by", "")
+        ),
+        "operator_brief_status": "waiting_on_manual_gate" if live_stop_requested else operator_brief.get("status", "missing_operator_brief"),
+        "operator_brief_summary": (
+            "CEO mode is stopped at a manual gate. It should not take another autonomous action."
+            if live_stop_requested
+            else operator_brief.get("plain_english_summary", "")
+        ),
+        "operator_brief_next_action": live_stop_handoff_command if live_stop_requested else operator_brief.get("recommended_next_action", ""),
+        "role_queue_status": role_queue.get("status", "missing_role_task_queue"),
+        "role_pending_task_count": role_queue.get("pending_task_count", ""),
+        "role_pending_manual_task_count": role_queue.get("pending_manual_task_count", ""),
+        "role_pending_autonomous_task_count": role_queue.get("pending_autonomous_task_count", ""),
+        "role_completed_task_count": role_queue.get("completed_task_count", ""),
+        "role_blocked_task_count": role_queue.get("blocked_task_count", ""),
+        "role_top_pending_task_id": role_queue.get("top_pending_task_id", ""),
+        "role_top_pending_role_id": role_queue.get("top_pending_role_id", ""),
+        "role_top_pending_packet_path": role_queue.get("top_pending_packet_path", ""),
+        "role_top_pending_result_resolution_mode": role_queue.get("top_pending_result_resolution_mode", ""),
+        "role_top_pending_requires_manual_gate": role_queue.get("top_pending_requires_manual_gate", ""),
+        "role_top_pending_closure_command": role_queue.get("top_pending_closure_command", ""),
+        "role_top_autonomous_pending_task_id": role_queue.get("top_autonomous_pending_task_id", ""),
+        "role_top_autonomous_pending_role_id": role_queue.get("top_autonomous_pending_role_id", ""),
+        "role_top_autonomous_pending_packet_path": role_queue.get("top_autonomous_pending_packet_path", ""),
+        "role_top_autonomous_next_result_command": role_queue.get("top_autonomous_next_role_result_command", ""),
+        "role_top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+        "role_top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+        "role_top_blocked_packet_path": role_queue.get("top_blocked_packet_path", ""),
+        "role_top_blocked_result_resolution_mode": role_queue.get("top_blocked_result_resolution_mode", ""),
+        "role_top_blocked_validation_status": role_queue.get("top_blocked_validation_status", ""),
+        "role_top_blocked_closure_command": _ceo_role_queue_top_blocked_closure_command(
+            ceo_run_id=ceo_run_id,
+            role_queue=role_queue,
+        ),
+        "role_top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+        "role_top_blocked_result_path": role_queue.get("top_blocked_result_path", ""),
+        "role_top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+        "role_top_blocked_finding": role_queue.get("top_blocked_finding", ""),
+        "role_next_result_command": role_queue.get("next_role_result_command", ""),
+        "role_result_validation_status": role_result_validation.get("status", "missing_role_result_validation"),
+        "role_result_validation_task": role_result_validation.get("task_id", ""),
+        "role_result_validation_issues": role_result_validation.get("issues", []),
         "production_effect": "none",
     }
     if root.exists():
         atomic_write_yaml(root / "company_status.yaml", status)
     return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "company_status": status}
+
+
+def _trace_grade_manual_data_import_required(trace_grade: dict[str, Any]) -> bool | str:
+    if not trace_grade:
+        return ""
+    criteria = trace_grade.get("criteria", {}) or {}
+    if "manual_data_import_required" in criteria:
+        return bool(criteria.get("manual_data_import_required"))
+    issues = {str(item) for item in trace_grade.get("issues", []) or []}
+    if "manual_data_import_required" in issues:
+        return True
+    return False
 
 
 def build_ceo_flight_dashboard(
@@ -5897,6 +6416,9 @@ def build_ceo_flight_dashboard(
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
         "safe_to_continue": safe_to_continue,
+        "safe_to_continue_scope": CEO_FLIGHT_SAFETY_SCOPE,
+        "dispatch_authority": "not_granted_by_flight_dashboard",
+        "runtime_authority_note": CEO_RUNTIME_AUTHORITY_NOTE,
         "blockers": blockers,
         "next_recommended_action": heartbeat_status.get("next_recommended_action"),
         "last_decision": action_result.get("decision") or heartbeat_status.get("last_decision"),
@@ -5914,6 +6436,7 @@ def build_ceo_flight_dashboard(
             "verdict": trace_grade.get("verdict"),
             "recommended_next_action": trace_grade.get("recommended_next_action"),
             "issues": trace_grade.get("issues", []),
+            "manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
             "manual_next_actions": trace_grade.get("manual_next_actions", []),
             "bounded_executor_next_actions": trace_grade.get("bounded_executor_next_actions", []),
             "product_evidence_status": trace_grade.get("product_evidence_status"),
@@ -5965,6 +6488,9 @@ def render_ceo_flight_dashboard(dashboard: dict[str, Any]) -> str:
         "## Continue Decision",
         "",
         f"- Safe to continue: {dashboard.get('safe_to_continue')}",
+        f"- Safety scope: {dashboard.get('safe_to_continue_scope') or CEO_FLIGHT_SAFETY_SCOPE}",
+        f"- Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_flight_dashboard'}",
+        f"- Runtime authority note: {dashboard.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         f"- Blockers: {', '.join(blockers) if blockers else 'none'}",
         f"- Next recommended action: {dashboard.get('next_recommended_action')}",
         "",
@@ -5980,6 +6506,7 @@ def render_ceo_flight_dashboard(dashboard: dict[str, Any]) -> str:
         f"- Verdict: {trace.get('verdict')}",
         f"- Score: {trace.get('score')}",
         f"- Recommended next action: {trace.get('recommended_next_action')}",
+        f"- Manual data import required: {trace.get('manual_data_import_required')}",
         f"- Issues: {trace.get('issues') or []}",
         f"- Manual gates: {trace.get('manual_next_actions') or []}",
         f"- Bounded executors: {trace.get('bounded_executor_next_actions') or []}",
@@ -6331,6 +6858,9 @@ def build_ceo_operating_dashboard(
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
         "safe_to_continue": flight_dashboard.get("safe_to_continue"),
+        "safe_to_continue_scope": flight_dashboard.get("safe_to_continue_scope") or CEO_FLIGHT_SAFETY_SCOPE,
+        "dispatch_authority": "not_granted_by_operating_dashboard",
+        "runtime_authority_note": flight_dashboard.get("runtime_authority_note") or CEO_RUNTIME_AUTHORITY_NOTE,
         "next_recommended_action": trace_grade.get("recommended_next_action")
         or flight_dashboard.get("next_recommended_action"),
         "candidate_portfolio_count": len(candidate_portfolio),
@@ -6367,12 +6897,26 @@ def build_ceo_operating_dashboard(
         "role_orchestration": {
             "status": role_queue.get("status", ""),
             "task_count": role_queue.get("task_count", 0),
+            "pending_task_count": role_queue.get("pending_task_count", 0),
+            "pending_manual_task_count": role_queue.get("pending_manual_task_count", 0),
+            "pending_autonomous_task_count": role_queue.get("pending_autonomous_task_count", 0),
+            "completed_task_count": role_queue.get("completed_task_count", 0),
+            "blocked_task_count": role_queue.get("blocked_task_count", 0),
+            "top_pending_task_id": role_queue.get("top_pending_task_id", ""),
+            "top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+            "top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+            "top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+            "top_blocked_result_path": role_queue.get("top_blocked_result_path", ""),
+            "top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+            "top_blocked_finding": role_queue.get("top_blocked_finding", ""),
             "next_action": role_queue.get("next_action", ""),
         },
         "risk_portfolio": risks,
         "trace": {
             "score": trace_grade.get("score"),
             "verdict": trace_grade.get("verdict"),
+            "recommended_next_action": trace_grade.get("recommended_next_action", ""),
+            "manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
             "issues": trace_grade.get("issues", []),
             "loop_meltdown": loop_meltdown,
         },
@@ -6390,6 +6934,9 @@ def render_ceo_operating_dashboard(dashboard: dict[str, Any]) -> str:
         f"Run: {dashboard.get('run_id')}",
         f"Lab run: {dashboard.get('lab_run_id')}",
         f"Safe to continue: {dashboard.get('safe_to_continue')}",
+        f"Safety scope: {dashboard.get('safe_to_continue_scope') or CEO_FLIGHT_SAFETY_SCOPE}",
+        f"Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_operating_dashboard'}",
+        f"Runtime authority note: {dashboard.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         f"Next recommended action: {dashboard.get('next_recommended_action')}",
         "",
         "## Candidate Portfolio",
@@ -6440,6 +6987,9 @@ def render_ceo_operating_dashboard(dashboard: dict[str, Any]) -> str:
             f"- Memory delta required: {memory.get('memory_delta_required')}",
             f"- Knowledge graph delta status: {memory.get('knowledge_graph_delta_status') or 'none'}",
             f"- Trace verdict: {trace.get('verdict')}",
+            f"- Trace score: {trace.get('score') if trace.get('score') != '' else 'n/a'}",
+            f"- Trace recommended next action: {trace.get('recommended_next_action') or 'none'}",
+            f"- Trace manual data import required: {trace.get('manual_data_import_required') if trace.get('manual_data_import_required') != '' else 'n/a'}",
             f"- Trace issues: {trace.get('issues') or []}",
             "",
             "## Product Governance",
@@ -6464,6 +7014,18 @@ def render_ceo_operating_dashboard(dashboard: dict[str, Any]) -> str:
             "",
             f"- Status: {role_orchestration.get('status') or 'none'}",
             f"- Tasks: {role_orchestration.get('task_count', 0)}",
+            f"- Pending: {role_orchestration.get('pending_task_count', 0)}",
+            f"- Pending manual: {role_orchestration.get('pending_manual_task_count', 0)}",
+            f"- Pending autonomous: {role_orchestration.get('pending_autonomous_task_count', 0)}",
+            f"- Completed: {role_orchestration.get('completed_task_count', 0)}",
+            f"- Blocked: {role_orchestration.get('blocked_task_count', 0)}",
+            f"- Top pending task: {role_orchestration.get('top_pending_task_id') or 'none'}",
+            f"- Top blocked task: {role_orchestration.get('top_blocked_task_id') or 'none'}",
+            f"- Top blocked role: {role_orchestration.get('top_blocked_role_id') or 'none'}",
+            f"- Top blocked review: {role_orchestration.get('top_blocked_review_status') or 'none'}",
+            f"- Top blocked result path: {role_orchestration.get('top_blocked_result_path') or 'none'}",
+            f"- Top blocked next action: {role_orchestration.get('top_blocked_next_action') or 'none'}",
+            f"- Top blocked finding: {role_orchestration.get('top_blocked_finding') or 'none'}",
             f"- Next action: {role_orchestration.get('next_action') or 'none'}",
             "",
             "## Risks",
@@ -7332,6 +7894,32 @@ def _load_approval_decisions(root: Path) -> dict[str, dict[str, Any]]:
     return decisions
 
 
+def _approval_item_fingerprint(item: dict[str, Any]) -> str:
+    payload = {
+        "approval_id": item.get("approval_id", ""),
+        "kind": item.get("kind", ""),
+        "source_artifact": item.get("source_artifact", ""),
+        "required_user_decision": item.get("required_user_decision", ""),
+        "reason": item.get("reason", ""),
+        "forbidden_auto_actions": item.get("forbidden_auto_actions", []),
+    }
+    return hashlib.sha256(json.dumps(_json_safe(payload), sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _pending_approval_by_id(queue: dict[str, Any], approval_id: str) -> dict[str, Any]:
+    for item in queue.get("pending_items", []) or []:
+        if str(item.get("approval_id", "")) == approval_id:
+            return item
+    return {}
+
+
+def _approval_item_by_id(queue: dict[str, Any], approval_id: str) -> dict[str, Any]:
+    for item in queue.get("items", []) or []:
+        if str(item.get("approval_id", "")) == approval_id:
+            return item
+    return {}
+
+
 def build_ceo_approval_queue(
     *,
     ceo_run_id: str,
@@ -7372,10 +7960,20 @@ def build_ceo_approval_queue(
         )
     for item in items:
         approval_id = str(item.get("approval_id", ""))
+        item["approval_record_command"] = _ceo_approval_record_command(ceo_run_id=ceo_run_id, approval_id=approval_id)
+        item["approval_apply_command"] = _ceo_approval_apply_command(ceo_run_id=ceo_run_id, approval_id=approval_id)
+        item["approval_closure_steps"] = [
+            "User decides approved or rejected.",
+            "Record the user-confirmed decision with approval-record.",
+            "If approved and an apply executor exists, run approval-apply as a second user-confirmed step.",
+        ]
+        item["approval_authority"] = "user_only"
+        item["approval_item_fingerprint"] = _approval_item_fingerprint(item)
         if approval_id in decisions:
             item["status"] = str(decisions[approval_id].get("decision", "recorded"))
             item["decision_recorded_at"] = decisions[approval_id].get("generated_at", "")
     pending_items = [item for item in items if item.get("status") == "pending"]
+    top_pending_item = pending_items[0] if pending_items else {}
     return {
         "model": CEO_APPROVAL_QUEUE_MODEL,
         "generated_at": utc_now_iso(),
@@ -7386,7 +7984,10 @@ def build_ceo_approval_queue(
         "item_count": len(items),
         "items": items,
         "pending_items": pending_items,
-        "next_action": "wait_for_user_approval" if pending_items else "continue_with_bound_action_dispatch",
+        "top_pending_approval_id": top_pending_item.get("approval_id", ""),
+        "top_pending_approval_record_command": top_pending_item.get("approval_record_command", ""),
+        "top_pending_approval_apply_command": top_pending_item.get("approval_apply_command", ""),
+        "next_action": "wait_for_user_approval" if pending_items else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
         "guardrail": "This queue records red-authority decisions for user review. It never applies product or runtime changes.",
         "product_language_allowed": False,
         "production_effect": "none",
@@ -7402,17 +8003,31 @@ def render_ceo_approval_queue(queue: dict[str, Any]) -> str:
         f"Lab run: {queue.get('lab_run_id')}",
         f"Status: {queue.get('status')}",
         f"Pending approvals: {queue.get('pending_count')}",
+        f"Top pending approval: {queue.get('top_pending_approval_id') or 'none'}",
+        f"Record command: `{queue.get('top_pending_approval_record_command') or ''}`",
+        f"Apply command: `{queue.get('top_pending_approval_apply_command') or ''}`",
         f"Next action: {queue.get('next_action')}",
         "",
         "## Items",
         "",
     ]
     for item in queue.get("items", []) or []:
-        lines.append(
-            "- "
-            f"{item.get('approval_id')} kind={item.get('kind')} "
-            f"authority={item.get('authority')} status={item.get('status')} "
-            f"source={item.get('source_artifact')}"
+        lines.extend(
+            [
+                f"- {item.get('approval_id')}",
+                f"  - kind: {item.get('kind')}",
+                f"  - authority: {item.get('authority')}",
+                f"  - approval authority: {item.get('approval_authority')}",
+                f"  - status: {item.get('status')}",
+                f"  - reason: {item.get('reason')}",
+                f"  - source: {item.get('source_artifact')}",
+                f"  - required user decision: {item.get('required_user_decision')}",
+                f"  - fingerprint: {item.get('approval_item_fingerprint')}",
+                f"  - record command: `{item.get('approval_record_command')}`",
+                f"  - apply command: `{item.get('approval_apply_command')}`",
+                f"  - forbidden auto actions: {item.get('forbidden_auto_actions') or []}",
+                f"  - closure steps: {' | '.join(str(step) for step in item.get('approval_closure_steps', []) or [])}",
+            ]
         )
     if not queue.get("items"):
         lines.append("- none")
@@ -7451,6 +8066,9 @@ def run_ceo_approval_queue(options: CeoOpsOptions) -> dict[str, Any]:
         "status": queue.get("status"),
         "pending_count": queue.get("pending_count"),
         "pending_approval_ids": [item.get("approval_id") for item in queue.get("pending_items", []) or []],
+        "top_pending_approval_id": queue.get("top_pending_approval_id", ""),
+        "top_pending_approval_record_command": queue.get("top_pending_approval_record_command", ""),
+        "top_pending_approval_apply_command": queue.get("top_pending_approval_apply_command", ""),
         "next_action": queue.get("next_action"),
         "production_effect": "none",
     }
@@ -7485,6 +8103,10 @@ def run_ceo_approval_record(
         raise ValueError("approval decision must be approved or rejected")
     if not user_confirmed:
         raise ValueError("approval-record requires --user-confirmed")
+    queue_before = run_ceo_approval_queue(options)["queue"]
+    pending_item = _pending_approval_by_id(queue_before, approval_id)
+    if not pending_item:
+        raise ValueError(f"approval-record approval_id is not currently pending: {approval_id}")
     entry = {
         "model": CEO_APPROVAL_DECISION_MODEL,
         "generated_at": utc_now_iso(),
@@ -7493,6 +8115,9 @@ def run_ceo_approval_record(
         "approval_id": approval_id,
         "decision": normalized_decision,
         "user_confirmed": True,
+        "approval_kind": pending_item.get("kind", ""),
+        "source_artifact": pending_item.get("source_artifact", ""),
+        "approval_item_fingerprint": pending_item.get("approval_item_fingerprint", ""),
         "production_effect": "none",
     }
     ledger_path = _approval_decision_ledger_path(root)
@@ -7521,6 +8146,9 @@ def render_ceo_approval_apply(result: dict[str, Any]) -> str:
         f"Lab run: {result.get('lab_run_id')}",
         f"Approval id: {result.get('approval_id')}",
         f"Decision: {result.get('recorded_decision')}",
+        f"Approval kind: {result.get('approval_kind')}",
+        f"Source artifact: {result.get('source_artifact')}",
+        f"Approval item current: {result.get('approval_item_current')}",
         f"Status: {result.get('status')}",
         f"Action taken: {result.get('action_taken')}",
         f"Production effect: {result.get('production_effect')}",
@@ -7555,11 +8183,21 @@ def run_ceo_approval_apply(
     decisions = _load_approval_decisions(root)
     recorded = decisions.get(approval_id, {})
     recorded_decision = str(recorded.get("decision", ""))
+    queue_before = run_ceo_approval_queue(options)["queue"]
+    current_item = _approval_item_by_id(queue_before, approval_id)
+    recorded_fingerprint = str(recorded.get("approval_item_fingerprint", ""))
+    current_fingerprint = str(current_item.get("approval_item_fingerprint", ""))
     audit: list[str] = []
     action_taken = "none"
     status = "blocked_missing_recorded_approval"
     if not recorded:
         audit.append("No approval decision ledger row exists for this approval id.")
+    elif not current_item:
+        status = "blocked_approval_not_currently_pending"
+        audit.append("Recorded approval does not match a currently pending approval queue item.")
+    elif not recorded_fingerprint or recorded_fingerprint != current_fingerprint:
+        status = "blocked_stale_approval_record"
+        audit.append("Recorded approval fingerprint does not match the current approval queue item.")
     elif recorded_decision != "approved":
         status = "closed_without_apply"
         action_taken = "recorded_rejection_honored"
@@ -7593,6 +8231,11 @@ def run_ceo_approval_apply(
         "lab_run_id": lab_run_id,
         "approval_id": approval_id,
         "recorded_decision": recorded_decision,
+        "approval_kind": recorded.get("approval_kind", ""),
+        "source_artifact": recorded.get("source_artifact", ""),
+        "recorded_approval_item_fingerprint": recorded_fingerprint,
+        "current_approval_item_fingerprint": current_fingerprint,
+        "approval_item_current": bool(current_item),
         "status": status,
         "action_taken": action_taken,
         "audit": audit,
@@ -7614,7 +8257,7 @@ def run_ceo_approval_apply(
         "status": status,
         "meaningful_progress": status in {"promotion_approval_closed_shadow_only", "clear_stop_request_applied", "closed_without_apply"},
         "outputs": {"approval_apply": path, "approval_apply_report": report_path},
-        "next_allowed_actions": ["continue_with_bound_action_dispatch"],
+        "next_allowed_actions": [CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION],
         "production_effect": "none",
     }
     binding_paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
@@ -7645,10 +8288,12 @@ def build_ceo_executive_kpis(
     blocker_stack: dict[str, Any] | None = None,
     incident_register: dict[str, Any] | None = None,
     repair_plan: dict[str, Any] | None = None,
+    role_queue: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocker_stack = blocker_stack or {}
     incident_register = incident_register or {}
     repair_plan = repair_plan or {}
+    role_queue = role_queue or {}
     validation_gate = {
         "execution_status": fresh_withheld_execution.get("status", ""),
         "validation_completed": bool(fresh_withheld_execution.get("validation_completed")),
@@ -7656,13 +8301,43 @@ def build_ceo_executive_kpis(
         "threshold_status": (fresh_withheld_execution.get("threshold_results", {}) or {}).get("status", ""),
     }
     loop_meltdown = trace_grade.get("loop_meltdown", {}) or {}
+    trace_verdict = str(trace_grade.get("verdict", ""))
+    trace_recommended_next_action = str(trace_grade.get("recommended_next_action", ""))
+    trace_manual_data_import_required = _trace_grade_manual_data_import_required(trace_grade)
+    role_pending_count = int(role_queue.get("pending_task_count", 0) or 0)
+    role_pending_manual_count = int(role_queue.get("pending_manual_task_count", 0) or 0)
+    role_pending_autonomous_count = int(role_queue.get("pending_autonomous_task_count", 0) or 0)
+    role_blocked_count = int(role_queue.get("blocked_task_count", 0) or 0)
+    role_completed_count = int(role_queue.get("completed_task_count", 0) or 0)
+    role_top_blocked_finding = str(role_queue.get("top_blocked_finding", "") or "").replace("\n", " ").strip()
+    if len(role_top_blocked_finding) > 180:
+        role_top_blocked_finding = f"{role_top_blocked_finding[:177]}..."
+    role_readiness_attention_required = bool(
+        role_pending_count
+        or role_blocked_count
+        or str(role_queue.get("status", "")) in {"pending_role_tasks", "blocked_role_tasks"}
+    )
+    role_next_action = ""
+    if role_pending_manual_count:
+        role_next_action = str(role_queue.get("top_pending_closure_command", "") or "wait_for_user_approval_or_record_manual_gate_blocked")
+    elif role_pending_autonomous_count:
+        role_next_action = str(role_queue.get("next_role_result_command", "") or "record_next_autonomous_specialist_result")
+    elif role_blocked_count:
+        role_next_action = str(
+            role_queue.get("top_blocked_next_action", "")
+            or role_queue.get("top_blocked_closure_command", "")
+            or "review_blocked_role_tasks_or_complete_missing_evidence"
+        )
     kpis = {
         "open_approval_count": int(approval_queue.get("pending_count", 0) or 0),
         "evidence_debt_count": int(evidence_debt_register.get("debt_count", 0) or 0),
         "candidate_count": len(candidate_portfolio),
         "capability_backlog_count": len(capability_backlog),
         "trace_score": trace_grade.get("score"),
-        "trace_verdict": trace_grade.get("verdict", ""),
+        "trace_verdict": trace_verdict,
+        "trace_recommended_next_action": trace_recommended_next_action,
+        "trace_issues": trace_grade.get("issues", []),
+        "trace_manual_data_import_required": trace_manual_data_import_required,
         "no_progress_fingerprint_repeats": loop_meltdown.get("fingerprint_repeat_count", 0),
         "manual_gate_repeat_count": loop_meltdown.get("manual_gate_repeat_count", 0),
         "validation_threshold_status": validation_gate["threshold_status"],
@@ -7673,14 +8348,47 @@ def build_ceo_executive_kpis(
         "top_repair": repair_plan.get("top_repair", ""),
         "top_repair_kind": repair_plan.get("top_repair_kind", ""),
         "repair_next_command": repair_plan.get("next_command", ""),
+        "role_queue_status": role_queue.get("status", ""),
+        "role_pending_count": role_pending_count,
+        "role_pending_manual_count": role_pending_manual_count,
+        "role_pending_autonomous_count": role_pending_autonomous_count,
+        "role_completed_count": role_completed_count,
+        "role_blocked_count": role_blocked_count,
+        "role_top_pending_task": role_queue.get("top_pending_task_id", ""),
+        "role_top_blocked_task": role_queue.get("top_blocked_task_id", ""),
+        "role_top_blocked_role": role_queue.get("top_blocked_role_id", ""),
+        "role_top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+        "role_top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+        "role_top_blocked_finding": role_top_blocked_finding,
+        "role_next_action": role_next_action,
         "product_language_allowed": False,
     }
     repair_attention_required = bool(kpis["top_repair"]) or kpis["repair_plan_status"] in {"manual_gate_first", "repair_plan_ready"}
+    trace_attention_required = trace_verdict in {"fail", "warn"} or trace_manual_data_import_required is True
     status = (
         "attention_required"
-        if kpis["open_approval_count"] or kpis["evidence_debt_count"] or kpis["operating_incident_count"] or repair_attention_required
+        if (
+            kpis["open_approval_count"]
+            or kpis["evidence_debt_count"]
+            or kpis["operating_incident_count"]
+            or repair_attention_required
+            or trace_attention_required
+            or role_readiness_attention_required
+        )
         else "operating_clear"
     )
+    if kpis["open_approval_count"]:
+        next_action = "wait_for_user_approval"
+    elif repair_attention_required and kpis["repair_next_command"]:
+        next_action = kpis["repair_next_command"]
+    elif trace_attention_required:
+        next_action = trace_recommended_next_action or "run_ceo_trace_grade"
+    elif role_readiness_attention_required:
+        next_action = role_next_action or "review_role_queue"
+    elif kpis["evidence_debt_count"]:
+        next_action = evidence_debt_register.get("next_action")
+    else:
+        next_action = CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
     return {
         "model": CEO_EXECUTIVE_KPIS_MODEL,
         "generated_at": utc_now_iso(),
@@ -7689,18 +8397,14 @@ def build_ceo_executive_kpis(
         "status": status,
         "kpis": kpis,
         "validation_gate": validation_gate,
-        "next_action": (
-            "wait_for_user_approval"
-            if kpis["open_approval_count"]
-            else kpis["repair_next_command"]
-            if repair_attention_required and kpis["repair_next_command"]
-            else evidence_debt_register.get("next_action")
-            if kpis["evidence_debt_count"]
-            else "continue_with_bound_action_dispatch"
-        ),
-        "guardrail": "Executive KPIs score operating-system health only. They do not validate or promote product behavior.",
+        "next_action": next_action,
+        "next_action_scope": "executive_health_diagnostic_only",
+        "dispatch_authority": "not_granted_by_executive_kpis",
+        "runtime_authority_note": CEO_RUNTIME_AUTHORITY_NOTE,
+        "guardrail": "Executive KPIs score operating-system health only. They do not validate, promote, or authorize runtime dispatch.",
         "product_language_allowed": False,
         "production_effect": "none",
+        "promotion_authority": "none",
     }
 
 
@@ -7713,7 +8417,10 @@ def render_ceo_executive_kpis(kpis: dict[str, Any]) -> str:
         f"Run: {kpis.get('run_id')}",
         f"Lab run: {kpis.get('lab_run_id')}",
         f"Status: {kpis.get('status')}",
-        f"Next action: {kpis.get('next_action')}",
+        f"Attention next action: {kpis.get('next_action')}",
+        f"Next action scope: {kpis.get('next_action_scope') or 'executive_health_diagnostic_only'}",
+        f"Dispatch authority: {kpis.get('dispatch_authority') or 'not_granted_by_executive_kpis'}",
+        f"Runtime authority note: {kpis.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         "",
         "## KPIs",
         "",
@@ -7787,6 +8494,7 @@ def run_ceo_executive_kpis(options: CeoOpsOptions) -> dict[str, Any]:
         blocker_stack=_load_yaml_if_exists(root / "blocker_stack.yaml"),
         incident_register=_load_yaml_if_exists(root / "operating_incident_register.yaml"),
         repair_plan=_load_yaml_if_exists(root / "repair_plan.yaml"),
+        role_queue=_load_yaml_if_exists(root / "role_task_queue.yaml"),
     )
     path = root / "executive_kpis.yaml"
     report_path = root / "executive_kpis.md"
@@ -8178,6 +8886,91 @@ def _role_for_debt(debt: dict[str, Any]) -> str:
     return "research_director"
 
 
+def _ceo_role_result_resolution_mode(task: dict[str, Any]) -> str:
+    if (
+        str(task.get("owner_command", "")) == "wait_for_user_approval"
+        or str(task.get("source_type", "")) == "approval"
+    ):
+        return "manual_gate_blocked_record"
+    return "specialist_result_required"
+
+
+def _ceo_role_result_command(*, ceo_run_id: str, task: dict[str, Any]) -> str:
+    task_id = str(task.get("task_id", ""))
+    if not task_id:
+        return ""
+    command = (
+        "PYTHONPATH=src python3 -m riskflow ceo role-result "
+        f"--run-id {ceo_run_id} --task-id {task_id} "
+    )
+    if _ceo_role_result_resolution_mode(task) == "manual_gate_blocked_record":
+        return command + "--status blocked"
+    return command + "--status complete --result-path <path-to-specialist-result.yaml>"
+
+
+def _ceo_role_closure_command(*, ceo_run_id: str, task: dict[str, Any]) -> str:
+    if _ceo_role_result_resolution_mode(task) == "manual_gate_blocked_record":
+        return f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
+    return _ceo_role_result_command(ceo_run_id=ceo_run_id, task=task)
+
+
+def _ceo_role_summary_closure_command(
+    *,
+    ceo_run_id: str,
+    task_id: str,
+    result_resolution_mode: str,
+) -> str:
+    if not task_id:
+        return ""
+    if result_resolution_mode == "manual_gate_blocked_record":
+        approval_id = task_id.removeprefix("approval_")
+        return _ceo_approval_record_command(ceo_run_id=ceo_run_id, approval_id=approval_id)
+    return _ceo_role_result_command(
+        ceo_run_id=ceo_run_id,
+        task={"task_id": task_id, "result_resolution_mode": result_resolution_mode},
+    )
+
+
+def _ceo_role_queue_top_blocked_closure_command(*, ceo_run_id: str, role_queue: dict[str, Any]) -> str:
+    existing = str(role_queue.get("top_blocked_closure_command", ""))
+    if existing:
+        return existing
+    return _ceo_role_summary_closure_command(
+        ceo_run_id=ceo_run_id,
+        task_id=str(role_queue.get("top_blocked_task_id", "")),
+        result_resolution_mode=str(role_queue.get("top_blocked_result_resolution_mode", "")),
+    )
+
+
+def _ceo_role_blocked_review_status(task: dict[str, Any]) -> str:
+    if str(task.get("status", "")) != "blocked":
+        return ""
+    if str(task.get("result_resolution_mode", "")) == "manual_gate_blocked_record":
+        return "manual_gate_blocked_record"
+    if str(task.get("validation_status", "")) == "accepted":
+        return "accepted_blocked_result"
+    if str(task.get("validation_status", "")) == "provenance_drift":
+        return "result_provenance_drift"
+    if str(task.get("validation_status", "")) == "rejected":
+        return "rejected_result"
+    return "needs_specialist_result"
+
+
+def _ceo_role_blocked_next_action(task: dict[str, Any]) -> str:
+    review_status = _ceo_role_blocked_review_status(task)
+    if review_status == "accepted_blocked_result":
+        return (
+            str(task.get("result_recommended_next_action", "")).strip()
+            or str(task.get("owner_command", "")).strip()
+            or "review_blocked_specialist_result_and_collect_required_evidence"
+        )
+    if review_status == "manual_gate_blocked_record":
+        return str(task.get("closure_command", "")).strip() or "wait_for_user_approval"
+    if review_status in {"result_provenance_drift", "rejected_result", "needs_specialist_result"}:
+        return str(task.get("closure_command", "")).strip()
+    return ""
+
+
 def build_ceo_role_task_queue(
     *,
     ceo_run_id: str,
@@ -8187,6 +8980,7 @@ def build_ceo_role_task_queue(
     capability_backlog: dict[str, Any],
     role_results: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+
     tasks: list[dict[str, Any]] = []
     for debt in evidence_debt_register.get("debts", []) or []:
         debt_id = str(debt.get("debt_id") or _debt_slug(str(debt.get("candidate_id", "")), str(debt.get("debt_kind", ""))))
@@ -8204,9 +8998,15 @@ def build_ceo_role_task_queue(
             }
         )
     for item in approval_queue.get("pending_items", []) or []:
+        approval_id = str(item.get("approval_id", ""))
         tasks.append(
             {
-                "task_id": f"approval_{item.get('approval_id')}",
+                "task_id": f"approval_{approval_id}",
+                "approval_id": approval_id,
+                "approval_record_command": item.get("approval_record_command")
+                or _ceo_approval_record_command(ceo_run_id=ceo_run_id, approval_id=approval_id),
+                "approval_apply_command": item.get("approval_apply_command")
+                or _ceo_approval_apply_command(ceo_run_id=ceo_run_id, approval_id=approval_id),
                 "role_id": "risk_officer",
                 "source_artifact": item.get("source_artifact", ""),
                 "source_type": "approval",
@@ -8233,15 +9033,77 @@ def build_ceo_role_task_queue(
         )
     role_results = role_results or {}
     for task in tasks:
+        task["result_resolution_mode"] = _ceo_role_result_resolution_mode(task)
+        task["next_role_result_command"] = _ceo_role_result_command(ceo_run_id=ceo_run_id, task=task)
+        task["requires_manual_gate"] = task["result_resolution_mode"] == "manual_gate_blocked_record"
+        task["approval_authority"] = "user_only" if task["requires_manual_gate"] else "none"
+        task["can_complete_with_specialist_artifact"] = not task["requires_manual_gate"]
+        task["manual_gate_reason"] = str(task.get("summary", "")) if task["requires_manual_gate"] else ""
+        task["closure_command"] = _ceo_role_closure_command(ceo_run_id=ceo_run_id, task=task)
+        if task["requires_manual_gate"] and task.get("approval_record_command"):
+            task["closure_command"] = task.get("approval_record_command", "")
         task_result = role_results.get(str(task.get("task_id", "")))
         if task_result:
             task["status"] = str(task_result.get("status", "recorded"))
             task["result_path"] = task_result.get("result_path", "")
+            task["resolved_result_path"] = task_result.get("resolved_result_path", "")
+            task["result_sha256"] = task_result.get("result_sha256", "")
+            task["current_result_sha256"] = task_result.get("current_result_sha256", "")
+            task["result_provenance_status"] = task_result.get("result_provenance_status", "")
+            task["recorded_status"] = task_result.get("recorded_status", "")
+            task["recorded_validation_status"] = task_result.get("recorded_validation_status", "")
             task["result_recorded_at"] = task_result.get("generated_at", "")
+            task["validation_status"] = task_result.get("validation_status", "")
+            task["validation_issues"] = task_result.get("validation_issues", [])
+            task["result_finding"] = task_result.get("result_finding", "")
+            task["result_recommended_next_action"] = task_result.get("result_recommended_next_action", "")
     tasks = sorted(tasks, key=lambda item: (int(item.get("priority", 99)), str(item.get("role_id", "")), str(item.get("task_id", ""))))
     pending_tasks = [task for task in tasks if str(task.get("status")) == "pending"]
     completed_tasks = [task for task in tasks if str(task.get("status")) == "complete"]
     blocked_tasks = [task for task in tasks if str(task.get("status")) == "blocked"]
+    manual_pending_tasks = [
+        task
+        for task in pending_tasks
+        if str(task.get("owner_command", "")) == "wait_for_user_approval"
+        or str(task.get("source_type", "")) == "approval"
+    ]
+    autonomous_pending_tasks = [task for task in pending_tasks if task not in manual_pending_tasks]
+    top_pending_task = pending_tasks[0] if pending_tasks else {}
+    top_pending_task_id = str(top_pending_task.get("task_id", ""))
+    top_pending_packet_path = (
+        f"reports/ceo_runs/{ceo_run_id}/role_dispatch_packets/{_debt_slug(top_pending_task_id)}.md"
+        if top_pending_task_id
+        else ""
+    )
+    top_autonomous_task = autonomous_pending_tasks[0] if autonomous_pending_tasks else {}
+    top_autonomous_task_id = str(top_autonomous_task.get("task_id", ""))
+    top_autonomous_packet_path = (
+        f"reports/ceo_runs/{ceo_run_id}/role_dispatch_packets/{_debt_slug(top_autonomous_task_id)}.md"
+        if top_autonomous_task_id
+        else ""
+    )
+    specialist_blocked_tasks = [
+        task
+        for task in blocked_tasks
+        if str(task.get("result_resolution_mode", "")) != "manual_gate_blocked_record"
+    ]
+    top_blocked_task = (specialist_blocked_tasks or blocked_tasks or [{}])[0]
+    top_blocked_task_id = str(top_blocked_task.get("task_id", ""))
+    top_blocked_packet_path = (
+        f"reports/ceo_runs/{ceo_run_id}/role_dispatch_packets/{_debt_slug(top_blocked_task_id)}.md"
+        if top_blocked_task_id
+        else ""
+    )
+    top_blocked_review_status = _ceo_role_blocked_review_status(top_blocked_task)
+    top_blocked_next_action = _ceo_role_blocked_next_action(top_blocked_task)
+    if pending_tasks and not autonomous_pending_tasks and manual_pending_tasks:
+        next_action = "wait_for_user_approval_or_record_manual_gate_blocked"
+    elif pending_tasks:
+        next_action = "assign_top_role_task"
+    elif blocked_tasks:
+        next_action = "review_blocked_role_tasks"
+    else:
+        next_action = CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
     return {
         "model": CEO_ROLE_TASK_QUEUE_MODEL,
         "generated_at": utc_now_iso(),
@@ -8250,10 +9112,43 @@ def build_ceo_role_task_queue(
         "status": "pending_role_tasks" if pending_tasks else "blocked_role_tasks" if blocked_tasks else "empty",
         "task_count": len(tasks),
         "pending_task_count": len(pending_tasks),
+        "pending_manual_task_count": len(manual_pending_tasks),
+        "pending_autonomous_task_count": len(autonomous_pending_tasks),
         "completed_task_count": len(completed_tasks),
         "blocked_task_count": len(blocked_tasks),
+        "top_pending_task": top_pending_task,
+        "top_pending_task_id": top_pending_task_id,
+        "top_pending_role_id": top_pending_task.get("role_id", ""),
+        "top_pending_owner_command": top_pending_task.get("owner_command", ""),
+        "top_pending_packet_path": top_pending_packet_path,
+        "top_pending_result_resolution_mode": top_pending_task.get("result_resolution_mode", ""),
+        "top_pending_requires_manual_gate": top_pending_task.get("requires_manual_gate", ""),
+        "top_pending_closure_command": top_pending_task.get("closure_command", ""),
+        "top_autonomous_pending_task": top_autonomous_task,
+        "top_autonomous_pending_task_id": top_autonomous_task_id,
+        "top_autonomous_pending_role_id": top_autonomous_task.get("role_id", ""),
+        "top_autonomous_pending_packet_path": top_autonomous_packet_path,
+        "top_autonomous_pending_result_resolution_mode": top_autonomous_task.get("result_resolution_mode", ""),
+        "top_autonomous_next_role_result_command": _ceo_role_result_command(ceo_run_id=ceo_run_id, task=top_autonomous_task),
+        "top_blocked_task": top_blocked_task,
+        "top_blocked_task_id": top_blocked_task_id,
+        "top_blocked_role_id": top_blocked_task.get("role_id", ""),
+        "top_blocked_packet_path": top_blocked_packet_path,
+        "top_blocked_result_resolution_mode": top_blocked_task.get("result_resolution_mode", ""),
+        "top_blocked_validation_status": top_blocked_task.get("validation_status", ""),
+        "top_blocked_closure_command": top_blocked_task.get("closure_command", ""),
+        "top_blocked_review_status": top_blocked_review_status,
+        "top_blocked_result_path": top_blocked_task.get("resolved_result_path") or top_blocked_task.get("result_path", ""),
+        "top_blocked_finding": top_blocked_task.get("result_finding", ""),
+        "top_blocked_next_action": top_blocked_next_action,
+        "next_role_dispatch_command": (
+            f"PYTHONPATH=src python3 -m riskflow ceo role-dispatch --run-id {ceo_run_id}"
+            if pending_tasks
+            else ""
+        ),
+        "next_role_result_command": _ceo_role_result_command(ceo_run_id=ceo_run_id, task=top_pending_task),
         "tasks": tasks,
-        "next_action": "assign_top_role_task" if pending_tasks else "review_blocked_role_tasks" if blocked_tasks else "continue_with_bound_action_dispatch",
+        "next_action": next_action,
         "guardrail": "Role tasks coordinate specialist review. They do not validate statistics or apply production changes.",
         "production_effect": "none",
     }
@@ -8269,8 +9164,34 @@ def render_ceo_role_task_queue(queue: dict[str, Any]) -> str:
         f"Status: {queue.get('status')}",
         f"Tasks: {queue.get('task_count')}",
         f"Pending: {queue.get('pending_task_count', 0)}",
+        f"Pending manual: {queue.get('pending_manual_task_count', 0)}",
+        f"Pending autonomous: {queue.get('pending_autonomous_task_count', 0)}",
         f"Completed: {queue.get('completed_task_count', 0)}",
         f"Blocked: {queue.get('blocked_task_count', 0)}",
+        f"Top pending: {queue.get('top_pending_task_id') or 'none'}",
+        f"Top pending role: {queue.get('top_pending_role_id') or 'none'}",
+        f"Top pending owner command: {queue.get('top_pending_owner_command') or 'none'}",
+        f"Top pending packet: {queue.get('top_pending_packet_path') or 'none'}",
+        f"Top pending result mode: {queue.get('top_pending_result_resolution_mode') or 'none'}",
+        f"Top pending requires manual gate: {queue.get('top_pending_requires_manual_gate')}",
+        f"Top pending closure command: `{queue.get('top_pending_closure_command') or ''}`",
+        f"Top autonomous pending: {queue.get('top_autonomous_pending_task_id') or 'none'}",
+        f"Top autonomous role: {queue.get('top_autonomous_pending_role_id') or 'none'}",
+        f"Top autonomous packet: {queue.get('top_autonomous_pending_packet_path') or 'none'}",
+        f"Top autonomous result mode: {queue.get('top_autonomous_pending_result_resolution_mode') or 'none'}",
+        f"Top autonomous role result command: `{queue.get('top_autonomous_next_role_result_command') or ''}`",
+        f"Top blocked: {queue.get('top_blocked_task_id') or 'none'}",
+        f"Top blocked role: {queue.get('top_blocked_role_id') or 'none'}",
+        f"Top blocked packet: {queue.get('top_blocked_packet_path') or 'none'}",
+        f"Top blocked result mode: {queue.get('top_blocked_result_resolution_mode') or 'none'}",
+        f"Top blocked validation: {queue.get('top_blocked_validation_status') or 'none'}",
+        f"Top blocked closure command: `{queue.get('top_blocked_closure_command') or ''}`",
+        f"Top blocked review status: {queue.get('top_blocked_review_status') or 'none'}",
+        f"Top blocked result path: {queue.get('top_blocked_result_path') or 'none'}",
+        f"Top blocked next action: {queue.get('top_blocked_next_action') or 'none'}",
+        f"Top blocked finding: {queue.get('top_blocked_finding') or 'none'}",
+        f"Next role dispatch command: `{queue.get('next_role_dispatch_command') or ''}`",
+        f"Next role result command: `{queue.get('next_role_result_command') or ''}`",
         f"Next action: {queue.get('next_action')}",
         "",
         "## Tasks",
@@ -8289,11 +9210,41 @@ def render_ceo_role_task_queue(queue: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _load_role_task_results(root: Path) -> dict[str, dict[str, Any]]:
+def _load_role_task_results(root: Path, *, source_root: Path | None = None) -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     for item in _read_jsonl_entries(root / "role_task_ledger.jsonl"):
         task_id = str(item.get("task_id", ""))
         if task_id:
+            result_path = str(item.get("result_path", ""))
+            resolved_path = _resolve_specialist_review_path(result_path, source_root=source_root, run_root=root)
+            if resolved_path is not None and resolved_path.exists():
+                result_payload = _load_yaml_if_exists(resolved_path)
+                if result_payload:
+                    item["result_finding"] = str(result_payload.get("finding", ""))
+                    item["result_recommended_next_action"] = str(result_payload.get("recommended_next_action", ""))
+            if (
+                str(item.get("status", "")) == "complete"
+                and str(item.get("validation_status", "")) == "accepted"
+            ):
+                issues = [str(issue) for issue in item.get("validation_issues", []) or []]
+                expected_sha = str(item.get("result_sha256", ""))
+                current_sha = _file_sha256(resolved_path) if resolved_path is not None and resolved_path.exists() else ""
+                item["resolved_result_path"] = str(resolved_path or "")
+                item["current_result_sha256"] = current_sha
+                item["result_provenance_status"] = "pass"
+                if resolved_path is None or not resolved_path.exists():
+                    issues.append("result_artifact_missing_after_acceptance")
+                elif not expected_sha:
+                    issues.append("missing_result_sha256")
+                elif current_sha != expected_sha:
+                    issues.append("result_artifact_sha_mismatch")
+                if issues != [str(issue) for issue in item.get("validation_issues", []) or []]:
+                    item["recorded_status"] = item.get("status", "")
+                    item["recorded_validation_status"] = item.get("validation_status", "")
+                    item["status"] = "blocked"
+                    item["validation_status"] = "provenance_drift"
+                    item["validation_issues"] = issues
+                    item["result_provenance_status"] = "drift"
             results[task_id] = item
     return results
 
@@ -8317,7 +9268,7 @@ def run_ceo_role_queue(options: CeoOpsOptions) -> dict[str, Any]:
         evidence_debt_register=_load_yaml_if_exists(root / "evidence_debt_register.yaml"),
         approval_queue=_load_yaml_if_exists(root / "approval_queue.yaml"),
         capability_backlog=_load_yaml_if_exists(root / "capability_backlog.yaml"),
-        role_results=_load_role_task_results(root),
+        role_results=_load_role_task_results(root, source_root=options.source_root),
     )
     registry_path = root / "role_registry.yaml"
     queue_path = root / "role_task_queue.yaml"
@@ -8356,6 +9307,197 @@ def run_ceo_role_queue(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _load_role_merge_receipts(root: Path) -> list[dict[str, Any]]:
+    receipts: list[dict[str, Any]] = []
+    for path in sorted((root / "role_merge_receipts").glob("*.yaml")):
+        payload = _load_yaml_if_exists(path)
+        if payload:
+            payload["_receipt_path"] = str(path)
+            receipts.append(payload)
+    single = _load_yaml_if_exists(root / "role_merge_receipt.yaml")
+    if single:
+        single["_receipt_path"] = str(root / "role_merge_receipt.yaml")
+        receipts.append(single)
+    return receipts
+
+
+def build_ceo_org_progress_score(
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+    role_queue: dict[str, Any],
+    role_task_ledger_entries: list[dict[str, Any]],
+    role_merge_receipts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    role_merge_receipts = role_merge_receipts or []
+    completed_entries = [entry for entry in role_task_ledger_entries if str(entry.get("status", "")) == "complete"]
+    blocked_entries = [entry for entry in role_task_ledger_entries if str(entry.get("status", "")) == "blocked"]
+    accepted_completed_entries = [
+        entry
+        for entry in completed_entries
+        if str(entry.get("validation_status", "")) == "accepted"
+    ]
+    accepted_blocked_entries = [
+        entry
+        for entry in blocked_entries
+        if str(entry.get("validation_status", "")) in {"accepted", "blocked_without_artifact"}
+    ]
+    merge_receipt_count = len(role_merge_receipts)
+    pending_count = int(role_queue.get("pending_task_count", 0) or 0)
+    blocked_count = int(role_queue.get("blocked_task_count", 0) or 0)
+    completed_count = int(role_queue.get("completed_task_count", 0) or 0)
+    completed_without_merge_count = max(0, len(accepted_completed_entries) - merge_receipt_count)
+    decision_delta_refs = [
+        str(entry.get("decision_delta", "") or entry.get("result_recommended_next_action", "") or entry.get("recommended_next_action", ""))
+        for entry in accepted_completed_entries + accepted_blocked_entries
+    ]
+    decision_delta_count = len([item for item in decision_delta_refs if item.strip()])
+    flags: list[str] = []
+    if pending_count:
+        flags.append("pending_role_work")
+    if blocked_count:
+        flags.append("blocked_role_work")
+    if completed_without_merge_count:
+        flags.append("accepted_completion_without_merge_receipt")
+    if completed_count and decision_delta_count == 0:
+        flags.append("completed_work_without_decision_delta")
+    if int(role_queue.get("pending_manual_task_count", 0) or 0):
+        flags.append("manual_gate_pending")
+    score = 100
+    score -= min(35, pending_count * 4)
+    score -= min(35, blocked_count * 3)
+    score -= min(20, completed_without_merge_count * 5)
+    score -= 10 if completed_count and decision_delta_count == 0 else 0
+    score = max(0, score)
+    if pending_count or blocked_count:
+        status = "org_work_open"
+    elif completed_without_merge_count:
+        status = "progress_unmerged"
+    elif completed_count:
+        status = "decision_progress_recorded"
+    else:
+        status = "no_role_work_visible"
+    if pending_count:
+        next_action = role_queue.get("next_role_dispatch_command") or "run_ceo_role_dispatch"
+    elif blocked_count:
+        next_action = role_queue.get("top_blocked_next_action") or "review_blocked_role_tasks"
+    elif completed_without_merge_count:
+        next_action = "design_role_merge_receipt_gate"
+    else:
+        next_action = CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
+    return {
+        "model": CEO_ORG_PROGRESS_SCORE_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": status,
+        "org_progress_score": score,
+        "task_count": role_queue.get("task_count", 0),
+        "pending_task_count": pending_count,
+        "blocked_task_count": blocked_count,
+        "completed_task_count": completed_count,
+        "ledger_entry_count": len(role_task_ledger_entries),
+        "accepted_completed_count": len(accepted_completed_entries),
+        "accepted_blocked_count": len(accepted_blocked_entries),
+        "merge_receipt_count": merge_receipt_count,
+        "completed_without_merge_count": completed_without_merge_count,
+        "decision_delta_count": decision_delta_count,
+        "fake_progress_flags": flags,
+        "top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+        "top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+        "top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+        "top_blocked_finding": role_queue.get("top_blocked_finding", ""),
+        "next_action": next_action,
+        "action_scope": "org_progress_diagnostic_only",
+        "dispatch_authority": "not_granted_by_org_progress_score",
+        "guardrail": (
+            "Org progress score measures whether specialist work changes decisions. "
+            "It does not merge work, approve gates, validate candidates, or change production behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+
+
+def render_ceo_org_progress_score(scorecard: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow CEO Org Progress Score",
+        "",
+        f"Generated: {scorecard.get('generated_at')}",
+        f"Run: {scorecard.get('run_id')}",
+        f"Lab run: {scorecard.get('lab_run_id')}",
+        f"Status: {scorecard.get('status')}",
+        f"Org progress score: {scorecard.get('org_progress_score')}",
+        f"Action scope: {scorecard.get('action_scope')}",
+        f"Dispatch authority: {scorecard.get('dispatch_authority')}",
+        f"Next action: {scorecard.get('next_action')}",
+        "",
+        "## Counters",
+        "",
+        f"- Tasks: {scorecard.get('task_count')}",
+        f"- Pending: {scorecard.get('pending_task_count')}",
+        f"- Blocked: {scorecard.get('blocked_task_count')}",
+        f"- Completed: {scorecard.get('completed_task_count')}",
+        f"- Ledger entries: {scorecard.get('ledger_entry_count')}",
+        f"- Accepted completed: {scorecard.get('accepted_completed_count')}",
+        f"- Accepted blocked: {scorecard.get('accepted_blocked_count')}",
+        f"- Merge receipts: {scorecard.get('merge_receipt_count')}",
+        f"- Completed without merge: {scorecard.get('completed_without_merge_count')}",
+        f"- Decision deltas: {scorecard.get('decision_delta_count')}",
+        "",
+        "## Fake Progress Flags",
+        "",
+    ]
+    flags = scorecard.get("fake_progress_flags", []) or []
+    lines.extend(f"- {item}" for item in flags) if flags else lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Top Blocked Work",
+            "",
+            f"- Task: {scorecard.get('top_blocked_task_id') or 'none'}",
+            f"- Role: {scorecard.get('top_blocked_role_id') or 'none'}",
+            f"- Next: {scorecard.get('top_blocked_next_action') or 'none'}",
+            f"- Finding: {scorecard.get('top_blocked_finding') or 'none'}",
+            "",
+            str(scorecard.get("guardrail")),
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_ceo_org_progress_score(options: CeoOpsOptions) -> dict[str, Any]:
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    role_result = run_ceo_role_queue(_with_ceo_context(options, context="diagnostic_refresh"))
+    scorecard = build_ceo_org_progress_score(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        role_queue=role_result["queue"],
+        role_task_ledger_entries=_read_jsonl_entries(root / "role_task_ledger.jsonl"),
+        role_merge_receipts=_load_role_merge_receipts(root),
+    )
+    path = root / "org_progress_score.yaml"
+    report_path = root / "org_progress_score.md"
+    atomic_write_yaml(path, scorecard)
+    atomic_write_text(report_path, render_ceo_org_progress_score(scorecard))
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "org_progress_score": scorecard,
+        "paths": {
+            "org_progress_score": path,
+            "org_progress_score_report": report_path,
+            "role_task_queue": role_result["paths"]["role_task_queue"],
+        },
+    }
+
+
 def _role_dispatch_question(role_id: str, task: dict[str, Any]) -> str:
     summary = str(task.get("summary", "")).strip() or "Review the assigned CEO operating task."
     if role_id == "validation_referee":
@@ -8373,6 +9515,8 @@ def _role_dispatch_question(role_id: str, task: dict[str, Any]) -> str:
 
 def render_ceo_role_dispatch_packet(packet: dict[str, Any]) -> str:
     task = packet.get("task", {}) or {}
+    result_resolution_mode = str(packet.get("result_resolution_mode", ""))
+    next_role_result_command = str(packet.get("next_role_result_command", ""))
     lines = [
         "# Riskflow CEO Role Dispatch Packet",
         "",
@@ -8400,7 +9544,19 @@ def render_ceo_role_dispatch_packet(packet: dict[str, Any]) -> str:
             "- This packet is review-only.",
             "- Do not change production formulas, Pine defaults, scores, rankings, states, alerts, or product language.",
             "- Do not approve manual gates.",
-            "- Return a structured result artifact path that `ceo role-result` can record.",
+            f"- Approval authority: {packet.get('approval_authority', 'none')}.",
+            (
+                "- If this is still awaiting user approval, record it as blocked; do not fabricate a specialist approval artifact."
+                if result_resolution_mode == "manual_gate_blocked_record"
+                else "- Return a structured result artifact path that `ceo role-result` can record."
+            ),
+            "",
+            "## Result Recording",
+            "",
+            f"Resolution mode: {result_resolution_mode or 'unknown'}",
+            f"Requires manual gate: {packet.get('requires_manual_gate')}",
+            f"Closure command: `{packet.get('closure_command') or ''}`",
+            f"Next role result command: `{next_role_result_command}`",
             "",
             "## Expected Result Schema",
             "",
@@ -8413,7 +9569,9 @@ def render_ceo_role_dispatch_packet(packet: dict[str, Any]) -> str:
             "evidence_refs:",
             "  - <exact YAML/CSV/MD path>",
             "recommended_next_action: <bounded command or manual gate>",
+            "product_language_allowed: false",
             "production_effect: none",
+            "promotion_authority: none",
             "```",
             "",
             "Production effect: none.",
@@ -8432,6 +9590,10 @@ def build_ceo_role_dispatch(
 ) -> dict[str, Any]:
     packet_dir.mkdir(parents=True, exist_ok=True)
     packets: list[dict[str, Any]] = []
+    top_pending_task_id = str(role_queue.get("top_pending_task_id", ""))
+    top_autonomous_task_id = str(role_queue.get("top_autonomous_pending_task_id", ""))
+    top_packet: dict[str, Any] = {}
+    top_autonomous_packet: dict[str, Any] = {}
     for task in role_queue.get("tasks", []) or []:
         if str(task.get("status", "")) != "pending":
             continue
@@ -8447,6 +9609,14 @@ def build_ceo_role_dispatch(
             "role_id": role_id,
             "question": _role_dispatch_question(role_id, task),
             "task": task,
+            "result_resolution_mode": _ceo_role_result_resolution_mode(task),
+            "next_role_result_command": _ceo_role_result_command(ceo_run_id=ceo_run_id, task=task),
+            "requires_manual_gate": bool(task.get("requires_manual_gate")),
+            "approval_id": task.get("approval_id", ""),
+            "approval_authority": task.get("approval_authority", "none"),
+            "manual_gate_reason": task.get("manual_gate_reason", ""),
+            "can_complete_with_specialist_artifact": task.get("can_complete_with_specialist_artifact", True),
+            "closure_command": task.get("closure_command", ""),
             "source_artifacts": [
                 "role_task_queue.yaml",
                 str(task.get("source_artifact", "")),
@@ -8460,6 +9630,10 @@ def build_ceo_role_dispatch(
         }
         atomic_write_text(packet_path, render_ceo_role_dispatch_packet(packet))
         packets.append(packet)
+        if task_id == top_pending_task_id:
+            top_packet = packet
+        if task_id == top_autonomous_task_id:
+            top_autonomous_packet = packet
     return {
         "model": CEO_ROLE_DISPATCH_MODEL,
         "generated_at": utc_now_iso(),
@@ -8468,6 +9642,18 @@ def build_ceo_role_dispatch(
         "status": "packets_written" if packets else "no_pending_role_tasks",
         "packet_count": len(packets),
         "packet_dir": str(packet_dir),
+        "top_task_id": top_packet.get("task_id", ""),
+        "top_role_id": top_packet.get("role_id", ""),
+        "top_packet_path": top_packet.get("packet_path", ""),
+        "top_result_resolution_mode": top_packet.get("result_resolution_mode", ""),
+        "top_requires_manual_gate": top_packet.get("requires_manual_gate", ""),
+        "top_closure_command": top_packet.get("closure_command", ""),
+        "top_autonomous_task_id": top_autonomous_packet.get("task_id", ""),
+        "top_autonomous_role_id": top_autonomous_packet.get("role_id", ""),
+        "top_autonomous_packet_path": top_autonomous_packet.get("packet_path", ""),
+        "top_autonomous_result_resolution_mode": top_autonomous_packet.get("result_resolution_mode", ""),
+        "top_autonomous_next_role_result_command": str(top_autonomous_packet.get("next_role_result_command", "")),
+        "next_role_result_command": str(top_packet.get("next_role_result_command", "")),
         "packets": packets,
         "guardrail": "Role dispatch packets are review-only prompts for specialist work. They do not approve gates or mutate product behavior.",
         "product_language_allowed": False,
@@ -8486,6 +9672,18 @@ def render_ceo_role_dispatch(dispatch: dict[str, Any]) -> str:
         f"Status: {dispatch.get('status')}",
         f"Packets: {dispatch.get('packet_count')}",
         f"Packet dir: {dispatch.get('packet_dir')}",
+        f"Top task: {dispatch.get('top_task_id') or 'none'}",
+        f"Top role: {dispatch.get('top_role_id') or 'none'}",
+        f"Top packet: {dispatch.get('top_packet_path') or 'none'}",
+        f"Top result mode: {dispatch.get('top_result_resolution_mode') or 'none'}",
+        f"Top requires manual gate: {dispatch.get('top_requires_manual_gate')}",
+        f"Top closure command: `{dispatch.get('top_closure_command') or ''}`",
+        f"Top autonomous task: {dispatch.get('top_autonomous_task_id') or 'none'}",
+        f"Top autonomous role: {dispatch.get('top_autonomous_role_id') or 'none'}",
+        f"Top autonomous packet: {dispatch.get('top_autonomous_packet_path') or 'none'}",
+        f"Top autonomous result mode: {dispatch.get('top_autonomous_result_resolution_mode') or 'none'}",
+        f"Top autonomous role result command: `{dispatch.get('top_autonomous_next_role_result_command') or ''}`",
+        f"Next role result command: `{dispatch.get('next_role_result_command') or ''}`",
         "",
         "## Packets",
         "",
@@ -8532,6 +9730,107 @@ def run_ceo_role_dispatch(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _find_role_task(queue: dict[str, Any], task_id: str) -> dict[str, Any] | None:
+    for task in queue.get("tasks", []) or []:
+        if str(task.get("task_id", "")) == task_id:
+            return task
+    return None
+
+
+def validate_ceo_specialist_result(
+    *,
+    task: dict[str, Any],
+    status: str,
+    result_path: str,
+    source_root: Path | None,
+    run_root: Path | None,
+) -> dict[str, Any]:
+    task_id = str(task.get("task_id", ""))
+    role_id = str(task.get("role_id", ""))
+    normalized_status = status.strip().lower()
+    issues: list[str] = []
+    result_resolution_mode = _ceo_role_result_resolution_mode(task)
+    requires_manual_gate = result_resolution_mode == "manual_gate_blocked_record"
+    if requires_manual_gate and normalized_status == "complete":
+        issues.append("manual_gate_cannot_complete_as_specialist_result")
+    resolved_path = _resolve_specialist_review_path(result_path, source_root=source_root, run_root=run_root)
+    result_payload: dict[str, Any] = {}
+    result_sha256 = ""
+    result_artifact_exists = False
+
+    if not result_path:
+        if normalized_status == "blocked":
+            return {
+                "status": "blocked_without_artifact",
+                "valid": True,
+                "issues": [],
+                "task_id": task_id,
+                "role_id": role_id,
+                "result_path": "",
+                "result_resolution_mode": result_resolution_mode,
+                "requires_manual_gate": requires_manual_gate,
+                "can_complete_with_specialist_artifact": not requires_manual_gate,
+                "resolved_result_path": "",
+                "result_sha256": "",
+                "result_artifact_exists": False,
+                "production_effect": "none",
+            }
+        issues.append("missing_result_path")
+    elif resolved_path is None or not resolved_path.exists():
+        issues.append("missing_result_artifact")
+    else:
+        result_payload = _load_yaml_if_exists(resolved_path)
+        result_sha256 = _file_sha256(resolved_path)
+        result_artifact_exists = True
+        if not result_payload:
+            issues.append("unreadable_result_artifact")
+
+    if result_payload:
+        if str(result_payload.get("model", "")) != "riskflow_ceo_specialist_result_v0":
+            issues.append("wrong_model")
+        if str(result_payload.get("task_id", "")) != task_id:
+            issues.append("task_id_mismatch")
+        if str(result_payload.get("role_id", "")) != role_id:
+            issues.append("role_id_mismatch")
+        if str(result_payload.get("status", "")).strip().lower() != normalized_status:
+            issues.append("status_mismatch")
+        if str(result_payload.get("production_effect", "none")) not in {"", "none"}:
+            issues.append("non_none_production_effect")
+        if result_payload.get("product_language_allowed") is not False:
+            issues.append("product_language_not_explicitly_false")
+        if str(result_payload.get("promotion_authority", "none")) not in {"", "none"}:
+            issues.append("promotion_authority_not_none")
+        if normalized_status == "complete":
+            evidence_refs = result_payload.get("evidence_refs", [])
+            if not isinstance(evidence_refs, list) or not any(str(ref).strip() for ref in evidence_refs):
+                issues.append("missing_evidence_refs")
+            if not str(result_payload.get("finding", "")).strip():
+                issues.append("missing_finding")
+            if not str(result_payload.get("recommended_next_action", "")).strip():
+                issues.append("missing_recommended_next_action")
+
+    valid = not issues
+    return {
+        "status": "accepted" if valid else "rejected",
+        "valid": valid,
+        "issues": issues,
+        "task_id": task_id,
+        "role_id": role_id,
+        "result_path": str(resolved_path or result_path),
+        "result_resolution_mode": result_resolution_mode,
+        "requires_manual_gate": requires_manual_gate,
+        "can_complete_with_specialist_artifact": not requires_manual_gate,
+        "result_status": str(result_payload.get("status", "")) if result_payload else "",
+        "result_model": str(result_payload.get("model", "")) if result_payload else "",
+        "result_finding": str(result_payload.get("finding", "")) if result_payload else "",
+        "result_recommended_next_action": str(result_payload.get("recommended_next_action", "")) if result_payload else "",
+        "resolved_result_path": str(resolved_path or ""),
+        "result_sha256": result_sha256,
+        "result_artifact_exists": result_artifact_exists,
+        "production_effect": "none",
+    }
+
+
 def run_ceo_role_result(
     options: CeoOpsOptions,
     *,
@@ -8546,6 +9845,58 @@ def run_ceo_role_result(
     normalized_status = status.strip().lower()
     if normalized_status not in {"complete", "blocked"}:
         raise ValueError("role-result status must be complete or blocked")
+    queue_before = run_ceo_role_queue(_with_ceo_context(options, context="diagnostic_refresh"))["queue"]
+    task = _find_role_task(queue_before, task_id)
+    if task is None:
+        validation = {
+            "model": CEO_ROLE_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "task_id": task_id,
+            "status": "rejected",
+            "valid": False,
+            "issues": ["unknown_task_id"],
+            "production_effect": "none",
+        }
+        validation_path = root / "role_result_validation.yaml"
+        atomic_write_yaml(validation_path, validation)
+        raise ValueError(f"role-result task_id is not pending or known: {task_id}")
+    if str(task.get("status", "")) != "pending":
+        validation = {
+            "model": CEO_ROLE_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "task_id": task_id,
+            "status": "rejected",
+            "valid": False,
+            "issues": ["task_not_pending"],
+            "current_task_status": task.get("status", ""),
+            "production_effect": "none",
+        }
+        validation_path = root / "role_result_validation.yaml"
+        atomic_write_yaml(validation_path, validation)
+        raise ValueError(f"role-result task is not pending: {task_id}")
+    validation = validate_ceo_specialist_result(
+        task=task,
+        status=normalized_status,
+        result_path=result_path,
+        source_root=options.source_root,
+        run_root=root,
+    )
+    validation = {
+        "model": CEO_ROLE_RESULT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        **validation,
+    }
+    validation_path = root / "role_result_validation.yaml"
+    atomic_write_yaml(validation_path, validation)
+    if not validation.get("valid"):
+        issues = ", ".join(validation.get("issues", []) or ["invalid_result"])
+        raise ValueError(f"role-result validation failed for {task_id}: {issues}")
     entry = {
         "model": CEO_ROLE_RESULT_MODEL,
         "generated_at": utc_now_iso(),
@@ -8554,6 +9905,17 @@ def run_ceo_role_result(
         "task_id": task_id,
         "status": normalized_status,
         "result_path": result_path,
+        "resolved_result_path": validation.get("resolved_result_path", ""),
+        "result_sha256": validation.get("result_sha256", ""),
+        "result_artifact_exists": validation.get("result_artifact_exists", False),
+        "result_provenance_status": "pass" if normalized_status == "complete" else "not_required",
+        "validation_status": validation.get("status"),
+        "validation_issues": validation.get("issues", []),
+        "result_finding": validation.get("result_finding", ""),
+        "result_recommended_next_action": validation.get("result_recommended_next_action", ""),
+        "result_resolution_mode": validation.get("result_resolution_mode", _ceo_role_result_resolution_mode(task)),
+        "requires_manual_gate": validation.get("requires_manual_gate", False),
+        "can_complete_with_specialist_artifact": validation.get("can_complete_with_specialist_artifact", True),
         "production_effect": "none",
     }
     ledger_path = root / "role_task_ledger.jsonl"
@@ -8569,6 +9931,7 @@ def run_ceo_role_result(
             "role_task_ledger": ledger_path,
             "role_task_queue": queue_result["paths"]["role_task_queue"],
             "role_orchestration_status": queue_result["paths"]["role_orchestration_status"],
+            "role_result_validation": validation_path,
         },
     }
 
@@ -8587,7 +9950,7 @@ def build_ceo_capability_backlog_artifact(
         "status": "open_items" if backlog else "empty",
         "backlog_count": len(backlog),
         "items": backlog,
-        "next_action": "work_top_capability_item" if backlog else "continue_with_bound_action_dispatch",
+        "next_action": "work_top_capability_item" if backlog else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
         "guardrail": "Capability backlog items are research-infrastructure work only. They do not change production formulas.",
         "production_effect": "none",
     }
@@ -8699,13 +10062,68 @@ def _legal_decisions_from_next_actions(next_actions: list[Any]) -> set[str]:
     return legal
 
 
+CEO_LEGACY_TRANSITION_ALIASES: dict[str, set[str]] = {
+    "run_fresh_or_control_validation_for_promising_shadow_challengers": {
+        "run_fresh_withheld_validation_contract",
+    },
+}
+
+
+def _has_current_transition_evidence(action: dict[str, Any]) -> bool:
+    return bool(action.get("dispatch_receipt", {}) or action.get("transition_policy_version"))
+
+
+def _is_legacy_transition_gap(
+    *,
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    legal: set[str],
+    observed: str,
+) -> bool:
+    if not legal or observed in legal:
+        return False
+    if _has_current_transition_evidence(previous) or _has_current_transition_evidence(current):
+        return False
+    if str(previous.get("production_effect", "")) not in {"", "none"}:
+        return False
+    if str(current.get("production_effect", "")) not in {"", "none"}:
+        return False
+    if (
+        observed == str(previous.get("decision", ""))
+        and str(current.get("action_taken", "")) == str(previous.get("action_taken", ""))
+    ):
+        return True
+    for previous_next_action in previous.get("next_allowed_actions", []) or []:
+        allowed_aliases = CEO_LEGACY_TRANSITION_ALIASES.get(str(previous_next_action), set())
+        if observed in allowed_aliases:
+            return True
+    return False
+
+
 def _build_ceo_state_transition_checks(action_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     for index, previous in enumerate(action_entries[:-1]):
         current = action_entries[index + 1]
         legal = _legal_decisions_from_next_actions(previous.get("next_allowed_actions", []) or [])
         observed = str(current.get("decision", ""))
-        status = "not_evaluable" if not legal else "pass" if observed in legal else "fail"
+        legacy_policy_gap = _is_legacy_transition_gap(
+            previous=previous,
+            current=current,
+            legal=legal,
+            observed=observed,
+        )
+        if not legal:
+            status = "not_evaluable"
+            reason = "previous action did not declare next_allowed_actions"
+        elif observed in legal:
+            status = "pass"
+            reason = "observed decision is allowed by previous action"
+        elif legacy_policy_gap:
+            status = "legacy_policy_gap"
+            reason = "legacy action lacks immutable dispatch or policy evidence and matches known old transition policy; preserve as drift, not current unsafe transition"
+        else:
+            status = "fail"
+            reason = "observed decision is not allowed by previous action"
         checks.append(
             {
                 "index": index,
@@ -8715,6 +10133,8 @@ def _build_ceo_state_transition_checks(action_entries: list[dict[str, Any]]) -> 
                 "legal_next_decisions": sorted(legal),
                 "observed_next_decision": observed,
                 "status": status,
+                "reason": reason,
+                "legacy_policy_gap": legacy_policy_gap,
                 "production_effect": "none",
             }
         )
@@ -8734,6 +10154,19 @@ def _build_dispatch_receipt_checks(
         ref = action.get("dispatch_receipt", {}) or {}
         receipt_path = _resolve_report_ref_path(root, ref.get("path", ""))
         if not ref:
+            if _has_current_transition_evidence(action):
+                checks.append(
+                    {
+                        "action_index": index,
+                        "decision": action.get("decision", ""),
+                        "action_taken": action.get("action_taken", ""),
+                        "status": "fail",
+                        "receipt_path": "",
+                        "failures": ["missing_action_dispatch_receipt_ref"],
+                        "production_effect": "none",
+                    }
+                )
+                continue
             checks.append(
                 {
                     "action_index": index,
@@ -8776,6 +10209,102 @@ def _build_dispatch_receipt_checks(
     return checks
 
 
+def _build_repair_apply_checks(*, repair_apply_entries: list[dict[str, Any]], root: Path) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for index, entry in enumerate(repair_apply_entries, start=1):
+        failures: list[str] = []
+        paths = entry.get("paths", {}) or {}
+        for label in ["before_repair_plan_snapshot", "after_repair_plan_snapshot"]:
+            snapshot_ref = str(paths.get(label, ""))
+            snapshot_path = _resolve_report_ref_path(root, snapshot_ref)
+            expected_sha = str(entry.get(f"{label}_sha256", ""))
+            if not snapshot_ref:
+                failures.append(f"missing_{label}_ref")
+            elif not snapshot_path.exists():
+                failures.append(f"missing_{label}")
+            elif snapshot_path.parent.name != "repair_apply_plans":
+                failures.append(f"{label}_not_immutable_snapshot")
+            elif expected_sha != _file_sha256(snapshot_path):
+                failures.append(f"{label}_hash_mismatch")
+        if str(entry.get("production_effect", "")) not in {"", "none"}:
+            failures.append("repair_apply_non_none_production_effect")
+        if entry.get("product_language_allowed") not in {False, None, ""}:
+            failures.append("repair_apply_product_language_allowed")
+        if str(entry.get("promotion_authority", "")) not in {"", "none"}:
+            failures.append("repair_apply_promotion_authority_not_none")
+        missing_snapshot_refs = {
+            "missing_before_repair_plan_snapshot_ref",
+            "missing_after_repair_plan_snapshot_ref",
+        }
+        legacy_no_action_snapshot_gap = (
+            set(failures) == missing_snapshot_refs
+            and entry.get("action_attempted") is False
+            and entry.get("action_executed") is False
+            and str(entry.get("status", "")).startswith("blocked_")
+            and str(entry.get("production_effect", "")) in {"", "none"}
+        )
+        status = "legacy_snapshot_gap" if legacy_no_action_snapshot_gap else ("pass" if not failures else "fail")
+        checks.append(
+            {
+                "repair_apply_index": index,
+                "status": status,
+                "repair_apply_status": entry.get("status", ""),
+                "repair_key": entry.get("repair_key", ""),
+                "before_repair_plan_snapshot": str(paths.get("before_repair_plan_snapshot", "")),
+                "after_repair_plan_snapshot": str(paths.get("after_repair_plan_snapshot", "")),
+                "legacy_snapshot_gap": legacy_no_action_snapshot_gap,
+                "failures": failures,
+                "production_effect": "none",
+            }
+        )
+    return checks
+
+
+def _build_operator_step_checks(*, operator_step_entries: list[dict[str, Any]], root: Path) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for index, entry in enumerate(operator_step_entries, start=1):
+        failures: list[str] = []
+        paths = entry.get("paths", {}) or {}
+        for label in ["before_action_board_snapshot", "after_action_board_snapshot"]:
+            snapshot_path = _resolve_report_ref_path(root, paths.get(label, ""))
+            expected_sha = str(entry.get(f"{label}_sha256", ""))
+            if not str(paths.get(label, "")):
+                failures.append(f"missing_{label}_ref")
+            elif not snapshot_path.exists():
+                failures.append(f"missing_{label}")
+            elif expected_sha != _file_sha256(snapshot_path):
+                failures.append(f"{label}_hash_mismatch")
+        binding_action_ref = str(paths.get("binding_action_result", ""))
+        binding_action_path = _resolve_report_ref_path(root, binding_action_ref)
+        expected_binding_sha = str(entry.get("binding_action_result_sha256", ""))
+        if entry.get("action_executed") is True:
+            if not binding_action_ref:
+                failures.append("missing_operator_step_binding_action_result_ref")
+            elif not binding_action_path.exists():
+                failures.append("missing_operator_step_binding_action_result")
+            elif expected_binding_sha != _file_sha256(binding_action_path):
+                failures.append("operator_step_binding_action_result_hash_mismatch")
+        if str(entry.get("production_effect", "")) not in {"", "none"}:
+            failures.append("operator_step_non_none_production_effect")
+        if entry.get("product_language_allowed") not in {False, None, ""}:
+            failures.append("operator_step_product_language_allowed")
+        if str(entry.get("promotion_authority", "")) not in {"", "none"}:
+            failures.append("operator_step_promotion_authority_not_none")
+        checks.append(
+            {
+                "operator_step_index": index,
+                "status": "pass" if not failures else "fail",
+                "operator_step_status": entry.get("status", ""),
+                "before_action_board_snapshot": str(paths.get("before_action_board_snapshot", "")),
+                "after_action_board_snapshot": str(paths.get("after_action_board_snapshot", "")),
+                "binding_action_result": binding_action_ref,
+                "failures": failures,
+                "production_effect": "none",
+            }
+        )
+    return checks
+
+
 def build_ceo_replay(
     *,
     ceo_run_id: str,
@@ -8786,6 +10315,8 @@ def build_ceo_replay(
     heartbeat_entries = _read_jsonl_entries(root / "heartbeat_journal.jsonl")
     approval_entries = _read_jsonl_entries(root / "approval_decision_ledger.jsonl")
     role_entries = _read_jsonl_entries(root / "role_task_ledger.jsonl")
+    repair_apply_entries = _read_jsonl_entries(root / "repair_apply_ledger.jsonl")
+    operator_step_entries = _read_jsonl_entries(root / "operator_step_ledger.jsonl")
     latest_binding_action = _load_yaml_if_exists(root / "binding_action_result.yaml")
     used_binding_fallback = False
     if not action_entries and latest_binding_action:
@@ -8796,6 +10327,8 @@ def build_ceo_replay(
         "heartbeat_journal": root / "heartbeat_journal.jsonl",
         "approval_decision_ledger": root / "approval_decision_ledger.jsonl",
         "role_task_ledger": root / "role_task_ledger.jsonl",
+        "repair_apply_ledger": root / "repair_apply_ledger.jsonl",
+        "operator_step_ledger": root / "operator_step_ledger.jsonl",
         "heartbeat_status": root / "heartbeat_status.yaml",
         "trace_grade": root / "trace_grade.yaml",
         "guardrail_audit": root / "guardrail_audit.yaml",
@@ -8803,6 +10336,7 @@ def build_ceo_replay(
         "dispatch_receipt": root / "dispatch_receipt.yaml",
         "action_contract": root / "action_contract.yaml",
         "binding_action_result": root / "binding_action_result.yaml",
+        "repair_apply": root / "repair_apply.yaml",
         "approval_queue": root / "approval_queue.yaml",
         "role_task_queue": root / "role_task_queue.yaml",
         "executive_kpis": root / "executive_kpis.yaml",
@@ -8849,6 +10383,30 @@ def build_ceo_replay(
                 "production_effect": item.get("production_effect", ""),
             }
         )
+    for item in repair_apply_entries:
+        timeline.append(
+            {
+                "kind": "repair_apply",
+                "generated_at": item.get("generated_at", ""),
+                "repair_key": item.get("repair_key", ""),
+                "status": item.get("status", ""),
+                "action_executed": item.get("action_executed", ""),
+                "repair_closed": item.get("repair_closed", ""),
+                "production_effect": item.get("production_effect", ""),
+            }
+        )
+    for item in operator_step_entries:
+        timeline.append(
+            {
+                "kind": "operator_step",
+                "generated_at": item.get("generated_at", ""),
+                "status": item.get("status", ""),
+                "primary_action": item.get("before_primary_action_id", ""),
+                "execution_status": item.get("execution_status", ""),
+                "action_executed": item.get("action_executed", ""),
+                "production_effect": item.get("production_effect", ""),
+            }
+        )
     for item in role_entries:
         timeline.append(
             {
@@ -8863,6 +10421,7 @@ def build_ceo_replay(
     timeline = sorted(timeline, key=lambda item: str(item.get("generated_at", "")))
     transition_checks = _build_ceo_state_transition_checks(action_entries)
     failed_transitions = [item for item in transition_checks if item.get("status") == "fail"]
+    legacy_transition_gaps = [item for item in transition_checks if item.get("status") == "legacy_policy_gap"]
     dispatch_receipt_checks = _build_dispatch_receipt_checks(
         action_entries=action_entries,
         root=root,
@@ -8871,6 +10430,14 @@ def build_ceo_replay(
     )
     failed_dispatch_receipt_checks = [
         item for item in dispatch_receipt_checks if item.get("status") == "fail"
+    ]
+    repair_apply_checks = _build_repair_apply_checks(repair_apply_entries=repair_apply_entries, root=root)
+    failed_repair_apply_checks = [
+        item for item in repair_apply_checks if item.get("status") == "fail"
+    ]
+    operator_step_checks = _build_operator_step_checks(operator_step_entries=operator_step_entries, root=root)
+    failed_operator_step_checks = [
+        item for item in operator_step_checks if item.get("status") == "fail"
     ]
     replay_issues: list[str] = []
     if not action_entries:
@@ -8884,9 +10451,31 @@ def build_ceo_replay(
     ]
     if incomplete_actions:
         replay_issues.append("action_ledger_has_incomplete_or_unsafe_entries")
+    unsafe_repair_apply_entries = [
+        item
+        for item in repair_apply_entries
+        if not item.get("repair_key") or not item.get("status") or str(item.get("production_effect", "")) not in {"", "none"}
+    ]
+    if unsafe_repair_apply_entries:
+        replay_issues.append("repair_apply_ledger_has_incomplete_or_unsafe_entries")
+    unsafe_operator_step_entries = [
+        item
+        for item in operator_step_entries
+        if not item.get("status") or str(item.get("production_effect", "")) not in {"", "none"}
+    ]
+    if unsafe_operator_step_entries:
+        replay_issues.append("operator_step_ledger_has_incomplete_or_unsafe_entries")
     if failed_transitions:
         replay_issues.append("illegal_action_transition")
     for check in failed_dispatch_receipt_checks:
+        for failure in check.get("failures", []) or []:
+            if failure not in replay_issues:
+                replay_issues.append(str(failure))
+    for check in failed_repair_apply_checks:
+        for failure in check.get("failures", []) or []:
+            if failure not in replay_issues:
+                replay_issues.append(str(failure))
+    for check in failed_operator_step_checks:
         for failure in check.get("failures", []) or []:
             if failure not in replay_issues:
                 replay_issues.append(str(failure))
@@ -8900,11 +10489,18 @@ def build_ceo_replay(
         "heartbeat_count": len(heartbeat_entries),
         "approval_decision_count": len(approval_entries),
         "role_result_count": len(role_entries),
+        "repair_apply_count": len(repair_apply_entries),
+        "operator_step_count": len(operator_step_entries),
         "used_binding_result_fallback": used_binding_fallback,
         "state_transition_status": "pass" if not failed_transitions else "fail",
         "state_transition_checks": transition_checks,
+        "state_transition_legacy_gap_count": len(legacy_transition_gaps),
         "dispatch_receipt_status": "pass" if not failed_dispatch_receipt_checks else "fail",
         "dispatch_receipt_checks": dispatch_receipt_checks,
+        "repair_apply_status": "pass" if not failed_repair_apply_checks else "fail",
+        "repair_apply_checks": repair_apply_checks,
+        "operator_step_status": "pass" if not failed_operator_step_checks else "fail",
+        "operator_step_checks": operator_step_checks,
         "artifact_checks": artifact_checks,
         "timeline": timeline,
         "issues": replay_issues,
@@ -8923,6 +10519,8 @@ def render_ceo_replay(replay: dict[str, Any]) -> str:
         f"Actions: {replay.get('action_count')}",
         f"Heartbeats: {replay.get('heartbeat_count')}",
         f"Approvals: {replay.get('approval_decision_count')}",
+        f"Repair applies: {replay.get('repair_apply_count')}",
+        f"Operator steps: {replay.get('operator_step_count')}",
         f"Role results: {replay.get('role_result_count')}",
         "",
         "## Issues",
@@ -8932,7 +10530,14 @@ def render_ceo_replay(replay: dict[str, Any]) -> str:
     lines.extend(f"- {item}" for item in issues) if issues else lines.append("- none")
     lines.extend(["", "## Timeline", ""])
     for item in replay.get("timeline", []) or []:
-        label = item.get("decision") or item.get("action_decision") or item.get("task_id") or item.get("approval_id") or "none"
+        label = (
+            item.get("decision")
+            or item.get("action_decision")
+            or item.get("repair_key")
+            or item.get("task_id")
+            or item.get("approval_id")
+            or "none"
+        )
         lines.append(f"- {item.get('generated_at') or 'unknown'} {item.get('kind')} {label} status={item.get('status')}")
     if not replay.get("timeline"):
         lines.append("- none")
@@ -8942,7 +10547,8 @@ def render_ceo_replay(replay: dict[str, Any]) -> str:
             "- "
             f"{item.get('status')} previous={item.get('previous_decision')} "
             f"observed={item.get('observed_next_decision')} "
-            f"legal={item.get('legal_next_decisions')}"
+            f"legal={item.get('legal_next_decisions')} "
+            f"reason={item.get('reason', '')}"
         )
     if not replay.get("state_transition_checks"):
         lines.append("- not enough action entries")
@@ -8954,6 +10560,25 @@ def render_ceo_replay(replay: dict[str, Any]) -> str:
             f"decision={item.get('decision')} failures={item.get('failures') or []}"
         )
     if not replay.get("dispatch_receipt_checks"):
+        lines.append("- none")
+    lines.extend(["", "## Repair Apply Checks", ""])
+    for item in replay.get("repair_apply_checks", []) or []:
+        lines.append(
+            "- "
+            f"{item.get('status')} repair_apply={item.get('repair_apply_index')} "
+            f"repair_key={item.get('repair_key')} failures={item.get('failures') or []}"
+        )
+    if not replay.get("repair_apply_checks"):
+        lines.append("- none")
+    lines.extend(["", "## Operator Step Checks", ""])
+    for item in replay.get("operator_step_checks", []) or []:
+        lines.append(
+            "- "
+            f"{item.get('status')} step={item.get('operator_step_index')} "
+            f"operator_status={item.get('operator_step_status')} "
+            f"failures={item.get('failures') or []}"
+        )
+    if not replay.get("operator_step_checks"):
         lines.append("- none")
     lines.extend(["", "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
@@ -8984,6 +10609,9 @@ def _eval_case(case_id: str, passed: bool, *, severity: str, evidence: str, next
         "severity": severity,
         "evidence": evidence,
         "next_action": next_action,
+        "action_scope": "eval_diagnostic_only",
+        "dispatch_authority": "not_granted_by_eval_suite",
+        "promotion_authority": "none",
         "production_effect": "none",
     }
 
@@ -9002,12 +10630,57 @@ def build_ceo_eval_suite(
     mission_score: dict[str, Any],
     strategy_capital_dashboard: dict[str, Any],
     eval_fixtures: dict[str, Any] | None = None,
+    runtime_authority: dict[str, Any] | None = None,
+    guardrail_audit: dict[str, Any] | None = None,
+    artifact_coherence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     latest_action = _load_yaml_if_exists(root / "binding_action_result.yaml")
+    latest_repair_apply = _load_yaml_if_exists(root / "repair_apply.yaml")
+    repair_apply_entries = _read_jsonl_entries(root / "repair_apply_ledger.jsonl")
     action_contract = _load_yaml_if_exists(root / "action_contract.yaml")
+    action_contract_path = root / "action_contract.yaml"
+    latest_action_path = root / "binding_action_result.yaml"
     dispatch_receipt_path = root / "dispatch_receipt.yaml"
     dispatch_receipt = _load_yaml_if_exists(dispatch_receipt_path)
     pending_approval_count = int(approval_queue.get("pending_count", 0) or 0)
+    runtime_authority = runtime_authority or {}
+    guardrail_audit = guardrail_audit or {"status": "missing_guardrail_audit", "violations": [], "production_effect": "none"}
+    artifact_coherence = artifact_coherence or {
+        "status": "missing_artifact_coherence",
+        "hard_issue_count": 0,
+        "issues": [],
+        "production_effect": "none",
+    }
+    preflight_gate = runtime_authority.get("preflight_gate", {}) or {}
+    action_board = runtime_authority.get("action_board", {}) or {}
+    operator_brief = runtime_authority.get("operator_brief", {}) or {}
+    decision_quality = runtime_authority.get("decision_quality", {}) or {}
+    stop_requested = bool(runtime_authority.get("stop_requested"))
+    preflight_blocked = preflight_gate.get("safe_to_execute") is False
+    action_board_manual_gate = str(action_board.get("status", "")) == "manual_gate_required"
+    operator_brief_manual_gate = str(operator_brief.get("status", "")) == "waiting_on_manual_gate"
+    decision_quality_manual_gate = str(decision_quality.get("runtime_authority_status", "")) == "manual_gate_required"
+    decision_quality_runtime_blocked = decision_quality.get("runtime_blocked") is True
+    runtime_authority_clear = not any(
+        [
+            stop_requested,
+            pending_approval_count > 0,
+            preflight_blocked,
+            action_board_manual_gate,
+            operator_brief_manual_gate,
+            decision_quality_manual_gate,
+            decision_quality_runtime_blocked,
+        ]
+    )
+    runtime_authority_evidence = (
+        f"stop_requested={stop_requested} "
+        f"pending_approvals={pending_approval_count} "
+        f"preflight_safe={preflight_gate.get('safe_to_execute', 'missing')} "
+        f"action_board_status={action_board.get('status', 'missing')} "
+        f"operator_brief_status={operator_brief.get('status', 'missing')} "
+        f"decision_quality_authority={decision_quality.get('runtime_authority_status', 'missing')} "
+        f"decision_quality_blocked={decision_quality.get('runtime_blocked', 'missing')}"
+    )
     pending_approval_blocked = (
         pending_approval_count == 0
         or latest_action.get("action_taken") == "blocked_pending_user_approval"
@@ -9017,6 +10690,7 @@ def build_ceo_eval_suite(
         latest_action,
         action_contract,
         dispatch_receipt,
+        latest_repair_apply,
         trace_grade,
         approval_queue,
         role_queue,
@@ -9024,6 +10698,8 @@ def build_ceo_eval_suite(
         evidence_debt_register,
         mission_score,
         strategy_capital_dashboard,
+        guardrail_audit,
+        artifact_coherence,
     ]
     production_safe = all(str(item.get("production_effect", "")) in {"", "none"} for item in production_payloads if item)
     validation_safe = True
@@ -9046,21 +10722,81 @@ def build_ceo_eval_suite(
             f"thresholds={thresholds.get('status')} "
             f"manifest_valid={fresh_withheld_execution.get('snapshot_manifest_valid')}"
         )
-    role_results_closed = (
-        int(role_queue.get("completed_task_count", 0) or 0) + int(role_queue.get("blocked_task_count", 0) or 0) > 0
-        if (root / "role_task_ledger.jsonl").exists()
-        else True
+    completed_role_tasks = [
+        task for task in role_queue.get("tasks", []) or [] if str(task.get("status", "")) == "complete"
+    ]
+    pending_role_count = int(role_queue.get("pending_task_count", 0) or 0)
+    pending_manual_role_count = int(role_queue.get("pending_manual_task_count", 0) or 0)
+    pending_autonomous_role_count = int(role_queue.get("pending_autonomous_task_count", 0) or 0)
+    blocked_role_count = int(role_queue.get("blocked_task_count", 0) or 0)
+    completed_role_validation_accepted = all(
+        str(task.get("validation_status", "")) == "accepted" for task in completed_role_tasks
     )
+    role_results_closed = (
+        pending_role_count == 0
+        and blocked_role_count == 0
+        and completed_role_validation_accepted
+    )
+    if pending_manual_role_count:
+        role_results_next_action = "wait_for_user_approval_or_record_manual_gate_blocked"
+    elif pending_autonomous_role_count:
+        role_results_next_action = "record_next_autonomous_specialist_result"
+    elif blocked_role_count:
+        role_results_next_action = "review_blocked_role_tasks_or_complete_missing_evidence"
+    elif not completed_role_validation_accepted:
+        role_results_next_action = "rebuild_role_queue_after_role_result"
+    else:
+        role_results_next_action = CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION
+    top_blocked_role_finding = str(role_queue.get("top_blocked_finding", "") or "").replace("\n", " ").strip()
+    if len(top_blocked_role_finding) > 220:
+        top_blocked_role_finding = f"{top_blocked_role_finding[:217]}..."
+    role_results_evidence = (
+        f"completed={role_queue.get('completed_task_count', 0)} "
+        f"blocked={role_queue.get('blocked_task_count', 0)} "
+        f"pending={role_queue.get('pending_task_count', 0)} "
+        f"pending_manual={role_queue.get('pending_manual_task_count', 0)} "
+        f"pending_autonomous={role_queue.get('pending_autonomous_task_count', 0)} "
+        f"top_pending={role_queue.get('top_pending_task_id', '') or 'none'} "
+        f"top_blocked={role_queue.get('top_blocked_task_id', '') or 'none'} "
+        f"top_blocked_role={role_queue.get('top_blocked_role_id', '') or 'none'} "
+        f"top_blocked_review={role_queue.get('top_blocked_review_status', '') or 'none'} "
+        f"top_blocked_next={role_queue.get('top_blocked_next_action', '') or 'none'} "
+        f"top_blocked_finding={top_blocked_role_finding or 'none'} "
+        f"completed_validation_accepted={completed_role_validation_accepted}"
+    )
+    latest_has_current_transition_evidence = _has_current_transition_evidence(latest_action) if latest_action else False
     contract_matches = (
         not action_contract
         or not latest_action
+        or not latest_has_current_transition_evidence
         or str(action_contract.get("decision", "")) == str(latest_action.get("decision", ""))
+    )
+    trust_artifact_next_action = (
+        "wait_for_user_approval_before_refreshing_trust_artifacts"
+        if pending_approval_count
+        else "run_execute_next_or_repair_trust_artifacts"
+    )
+    contract_match_evidence = (
+        f"contract_decision={action_contract.get('decision', '')} "
+        f"action_decision={latest_action.get('decision', '')} "
+        f"contract_generated_at={action_contract.get('generated_at', '')} "
+        f"action_generated_at={latest_action.get('generated_at', '')} "
+        f"contract_path={action_contract_path} "
+        f"action_path={latest_action_path} "
+        f"latest_has_current_transition_evidence={latest_has_current_transition_evidence}"
     )
     dispatch_ref = latest_action.get("dispatch_receipt", {}) or {}
     dispatch_ref_path = _resolve_report_ref_path(root, dispatch_ref.get("path", ""))
     dispatch_receipt_for_latest_action = _load_yaml_if_exists(dispatch_ref_path) if dispatch_ref else {}
+    dispatch_ref_path_display = str(dispatch_ref_path) if dispatch_ref else ""
+    dispatch_ref_exists = bool(dispatch_ref and dispatch_ref_path.exists())
+    dispatch_ref_sha_matches = bool(
+        dispatch_ref_exists
+        and str(dispatch_ref.get("sha256", "")) == _file_sha256(dispatch_ref_path)
+    )
     dispatch_receipt_required = bool(latest_action) and (
-        dispatch_receipt_path.exists() or (root / "action_contract.yaml").exists() or bool(dispatch_ref)
+        bool(dispatch_ref)
+        or latest_has_current_transition_evidence
     )
     dispatch_receipt_backs_action = (
         not latest_action
@@ -9077,6 +10813,17 @@ def build_ceo_eval_suite(
             and dispatch_receipt_for_latest_action.get("promotion_authority") == "none"
         )
     )
+    dispatch_receipt_evidence = (
+        f"active_receipt_status={dispatch_receipt.get('status', 'missing')} "
+        f"active_receipt_decision={dispatch_receipt.get('decision', '')} "
+        f"active_receipt_path={dispatch_receipt_path} "
+        f"action_decision={latest_action.get('decision', '')} "
+        f"action_receipt_path={dispatch_ref_path_display} "
+        f"action_receipt_exists={dispatch_ref_exists} "
+        f"action_receipt_sha_match={dispatch_ref_sha_matches} "
+        f"receipt_required={dispatch_receipt_required} "
+        f"latest_has_current_transition_evidence={latest_has_current_transition_evidence}"
+    )
     dispatch_receipt_coverage = (
         replay.get("action_count", 0) == 0
         or (
@@ -9087,8 +10834,9 @@ def build_ceo_eval_suite(
             )
         )
     )
-    receipt_fingerprints = dispatch_receipt.get("trust_artifact_fingerprints", {}) or {}
-    required_receipt_fingerprints = {
+    receipt_fingerprint_source = dispatch_receipt_for_latest_action if latest_action and dispatch_ref else dispatch_receipt
+    receipt_fingerprints = receipt_fingerprint_source.get("trust_artifact_fingerprints", {}) or {}
+    required_receipt_fingerprint_keys = {
         "decision_packet",
         "action_contract",
         "preflight_gate",
@@ -9096,20 +10844,79 @@ def build_ceo_eval_suite(
         "ceo_replay",
         "ceo_eval_suite",
         "guardrail_audit",
-        "memory_delta",
         "approval_queue",
         "approval_status",
         "mission_score",
         "strategy_capital_dashboard",
+        "artifact_coherence",
+        "resumption_brief",
     }
+    required_usable_receipt_fingerprints = {
+        "decision_packet",
+        "action_contract",
+        "preflight_gate",
+        "trace_grade",
+        "ceo_replay",
+        "ceo_eval_suite",
+        "guardrail_audit",
+        "approval_queue",
+        "approval_status",
+        "mission_score",
+    }
+    missing_receipt_fingerprints = sorted(required_receipt_fingerprint_keys.difference(set(receipt_fingerprints)))
+    unusable_receipt_fingerprints = sorted(
+        name
+        for name in required_usable_receipt_fingerprints.intersection(set(receipt_fingerprints))
+        if (receipt_fingerprints.get(name, {}) or {}).get("exists") is not True
+        or not str((receipt_fingerprints.get(name, {}) or {}).get("sha256", ""))
+    )
     dispatch_receipt_fingerprints_trust = (
         not latest_action
         or not dispatch_receipt_required
         or (
-            dispatch_receipt.get("model") == CEO_DISPATCH_RECEIPT_MODEL
-            and required_receipt_fingerprints.issubset(set(receipt_fingerprints))
+            receipt_fingerprint_source.get("model") == CEO_DISPATCH_RECEIPT_MODEL
+            and required_receipt_fingerprint_keys.issubset(set(receipt_fingerprints))
+            and not unusable_receipt_fingerprints
         )
     )
+    repair_apply_ledger_backed = (
+        not latest_repair_apply
+        or any(
+            str(entry.get("generated_at", "")) == str(latest_repair_apply.get("generated_at", ""))
+            and str(entry.get("repair_key", "")) == str(latest_repair_apply.get("repair_key", ""))
+            and str(entry.get("status", "")) == str(latest_repair_apply.get("status", ""))
+            and str(entry.get("production_effect", "")) in {"", "none"}
+            for entry in repair_apply_entries
+        )
+    )
+    approval_apply_ref = (latest_action.get("outputs", {}) or {}).get("approval_apply", "")
+    approval_apply_path = _resolve_report_ref_path(root, approval_apply_ref) if approval_apply_ref else root / "approval_apply_clear_stop_request.yaml"
+    approval_apply_artifact = _load_yaml_if_exists(approval_apply_path)
+    latest_action_is_approval_apply = str(latest_action.get("decision", "")) == "approval_apply"
+    if latest_action_is_approval_apply:
+        approval_apply_provenance_ok = (
+            approval_apply_artifact.get("approval_item_current") is True
+            and bool(approval_apply_artifact.get("recorded_approval_item_fingerprint"))
+            and str(approval_apply_artifact.get("recorded_approval_item_fingerprint", ""))
+            == str(approval_apply_artifact.get("current_approval_item_fingerprint", ""))
+            and str(approval_apply_artifact.get("source_artifact", ""))
+        )
+    else:
+        approval_apply_provenance_ok = True
+    if latest_action_is_approval_apply:
+        approval_apply_provenance_evidence = (
+            f"latest_action={latest_action.get('decision', '')} "
+            f"artifact_path={approval_apply_path if approval_apply_ref or approval_apply_artifact else ''} "
+            f"artifact_exists={bool(approval_apply_artifact)} "
+            f"approval_item_current={approval_apply_artifact.get('approval_item_current', '')} "
+            f"fingerprints_match={str(approval_apply_artifact.get('recorded_approval_item_fingerprint', '')) == str(approval_apply_artifact.get('current_approval_item_fingerprint', '')) if approval_apply_artifact else False} "
+            f"source_artifact={approval_apply_artifact.get('source_artifact', '')}"
+        )
+    else:
+        approval_apply_provenance_evidence = (
+            f"latest_action={latest_action.get('decision', '')} "
+            "approval_apply_provenance=not_applicable"
+        )
     mission_dimensions = {str(item.get("dimension_id", "")) for item in mission_score.get("mission_dimensions", []) or []}
     mission_score_safe = (
         mission_score.get("model") == CEO_MISSION_SCORE_MODEL
@@ -9127,6 +10934,18 @@ def build_ceo_eval_suite(
         and strategy_capital_dashboard.get("product_language_allowed") is False
         and strategy_capital_dashboard.get("production_effect") == "none"
         and strategy_capital_dashboard.get("promotion_authority") == "none"
+    )
+    guardrail_audit_passes = (
+        guardrail_audit.get("model") == CEO_GUARDRAIL_AUDIT_MODEL
+        and guardrail_audit.get("status") == "pass"
+    )
+    artifact_coherence_hard_issue_count = int(
+        artifact_coherence.get("hard_issue_count", len(_hard_artifact_coherence_issues(artifact_coherence))) or 0
+    )
+    artifact_coherence_clear = (
+        artifact_coherence.get("model") == CEO_ARTIFACT_COHERENCE_MODEL
+        and artifact_coherence.get("status") in {"pass", "pass_with_advisory_issues"}
+        and artifact_coherence_hard_issue_count == 0
     )
     cases = [
         _eval_case(
@@ -9147,19 +10966,15 @@ def build_ceo_eval_suite(
             "action_contract_matches_latest_action",
             contract_matches,
             severity="critical",
-            evidence=f"contract_decision={action_contract.get('decision', '')} action_decision={latest_action.get('decision', '')}",
-            next_action="repair_action_contract_dispatch",
+            evidence=contract_match_evidence,
+            next_action=trust_artifact_next_action,
         ),
         _eval_case(
             "dispatch_receipt_backs_latest_action",
             dispatch_receipt_backs_action,
             severity="critical",
-            evidence=(
-                f"receipt_status={dispatch_receipt.get('status', 'missing')} "
-                f"receipt_decision={dispatch_receipt.get('decision', '')} "
-                f"action_decision={latest_action.get('decision', '')}"
-            ),
-            next_action="run_execute_next_or_repair_dispatch_receipt",
+            evidence=dispatch_receipt_evidence,
+            next_action=trust_artifact_next_action,
         ),
         _eval_case(
             "dispatch_receipts_cover_action_ledger",
@@ -9177,9 +10992,22 @@ def build_ceo_eval_suite(
             severity="high",
             evidence=(
                 f"fingerprints={len(receipt_fingerprints)} "
-                f"required={len(required_receipt_fingerprints)}"
+                f"required={len(required_receipt_fingerprint_keys)} "
+                f"missing={missing_receipt_fingerprints} "
+                f"unusable={unusable_receipt_fingerprints} "
+                f"source={dispatch_ref_path_display or dispatch_receipt_path}"
             ),
             next_action="run_ceo_dispatch_receipt",
+        ),
+        _eval_case(
+            "repair_apply_receipt_is_replayable",
+            repair_apply_ledger_backed,
+            severity="medium",
+            evidence=(
+                f"latest_repair_apply={bool(latest_repair_apply)} "
+                f"ledger_entries={len(repair_apply_entries)}"
+            ),
+            next_action="rerun_ceo_repair_apply_or_restore_repair_apply_ledger",
         ),
         _eval_case(
             "approval_gate_blocks_red_authority_work",
@@ -9189,11 +11017,46 @@ def build_ceo_eval_suite(
             next_action="wait_for_user_approval_or_block_execute_next",
         ),
         _eval_case(
+            "runtime_authority_manual_gates_clear",
+            runtime_authority_clear,
+            severity="critical",
+            evidence=runtime_authority_evidence,
+            next_action="resolve_manual_gate_or_refresh_runtime_authority_surfaces",
+        ),
+        _eval_case(
+            "approval_apply_has_current_provenance",
+            approval_apply_provenance_ok,
+            severity="high",
+            evidence=approval_apply_provenance_evidence,
+            next_action="rerun_approval_record_against_current_queue_item_before_approval_apply",
+        ),
+        _eval_case(
             "production_guardrails_preserved",
             production_safe,
             severity="critical",
             evidence="all checked CEO artifacts declare production_effect none",
             next_action="block_and_repair_non_none_production_effect",
+        ),
+        _eval_case(
+            "guardrail_audit_passes",
+            guardrail_audit_passes,
+            severity="critical",
+            evidence=(
+                f"status={guardrail_audit.get('status', 'missing')} "
+                f"violations={len(guardrail_audit.get('violations', []) or [])}"
+            ),
+            next_action="run_ceo_guardrail_audit_and_repair_violations",
+        ),
+        _eval_case(
+            "artifact_coherence_has_no_hard_issues",
+            artifact_coherence_clear,
+            severity="critical",
+            evidence=(
+                f"status={artifact_coherence.get('status', 'missing')} "
+                f"hard_issues={artifact_coherence_hard_issue_count} "
+                f"issues={len(artifact_coherence.get('issues', []) or [])}"
+            ),
+            next_action="run_ceo_artifact_coherence_or_repair_trust_artifacts",
         ),
         _eval_case(
             "fresh_withheld_validation_authority_guarded",
@@ -9205,13 +11068,9 @@ def build_ceo_eval_suite(
         _eval_case(
             "role_results_close_the_role_queue",
             role_results_closed,
-            severity="medium",
-            evidence=(
-                f"completed={role_queue.get('completed_task_count', 0)} "
-                f"blocked={role_queue.get('blocked_task_count', 0)} "
-                f"pending={role_queue.get('pending_task_count', 0)}"
-            ),
-            next_action="rebuild_role_queue_after_role_result",
+            severity="advisory",
+            evidence=role_results_evidence,
+            next_action=role_results_next_action,
         ),
         _eval_case(
             "trace_grade_can_drive_next_decision",
@@ -9222,7 +11081,7 @@ def build_ceo_eval_suite(
         ),
         _eval_case(
             "policy_eval_fixtures_pass",
-            (eval_fixtures or {}).get("status") == "pass",
+            (eval_fixtures or {}).get("status") == "pass" and int((eval_fixtures or {}).get("case_count", 0) or 0) > 0,
             severity="high",
             evidence=f"fixture_status={(eval_fixtures or {}).get('status', 'missing')} cases={(eval_fixtures or {}).get('case_count', 0)}",
             next_action="run_ceo_eval_fixtures",
@@ -9270,7 +11129,7 @@ def build_ceo_eval_suite(
         "status": "pass" if not hard_failed else "fail" if critical_failed else "warn",
         "score": score,
         "nine_nine_readiness": {
-            "status": "ready_for_extended_autonomy" if score >= 95 and not critical_failed and not advisory_failed else "not_9_9_ready",
+            "status": "ready_for_extended_autonomy" if score >= 95 and not hard_failed and not advisory_failed else "not_9_9_ready",
             "blocking_case_ids": [item.get("case_id") for item in hard_failed],
             "advisory_case_ids": [item.get("case_id") for item in advisory_failed],
             "definition": "A fresh session can replay the run, trust approval gates, inspect validation authority, route role work, and choose the next bounded action from artifacts.",
@@ -9301,11 +11160,25 @@ def render_ceo_eval_suite(eval_suite: dict[str, Any]) -> str:
         lines.append(
             "- "
             f"{item.get('status')} {item.get('case_id')} "
-            f"severity={item.get('severity')} evidence={item.get('evidence')}"
+            f"severity={item.get('severity')} evidence={item.get('evidence')} "
+            f"next={item.get('next_action')}"
         )
     lines.extend(["", "## Blocking Cases", ""])
     blockers = readiness.get("blocking_case_ids", []) or []
     lines.extend(f"- {item}" for item in blockers) if blockers else lines.append("- none")
+    lines.extend(["", "## Advisory Cases", ""])
+    advisory = readiness.get("advisory_case_ids", []) or []
+    lines.extend(f"- {item}" for item in advisory) if advisory else lines.append("- none")
+    failed = [item for item in eval_suite.get("cases", []) or [] if item.get("status") != "pass"]
+    lines.extend(["", "## Failed Case Detail", ""])
+    if not failed:
+        lines.append("- none")
+    for item in failed:
+        lines.append(
+            "- "
+            f"{item.get('case_id')} severity={item.get('severity')} "
+            f"next={item.get('next_action')} evidence={item.get('evidence')}"
+        )
     lines.extend(["", "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
 
@@ -9317,17 +11190,40 @@ def run_ceo_eval_suite(options: CeoOpsOptions) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=True)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
     replay_result = run_ceo_replay(options)
-    fixture_result = run_ceo_eval_fixtures(options)
+    if options.skip_eval_fixtures:
+        fixture_path = root / "ceo_eval_fixtures.yaml"
+        fixture_report_path = root / "ceo_eval_fixtures.md"
+        fixtures = {
+            "model": CEO_EVAL_FIXTURES_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "status": "pass",
+            "case_count": 0,
+            "failed_case_count": 0,
+            "cases": [],
+            "skipped_reason": "nested_eval_fixture_run",
+            "guardrail": "Explicit internal fixture subruns do not recursively execute the fixture suite.",
+            "production_effect": "none",
+        }
+        atomic_write_yaml(fixture_path, fixtures)
+        atomic_write_text(fixture_report_path, render_ceo_eval_fixtures(fixtures))
+        fixture_result = {
+            "fixtures": fixtures,
+            "paths": {"eval_fixtures": fixture_path, "eval_fixtures_report": fixture_report_path},
+        }
+    else:
+        fixture_result = run_ceo_eval_fixtures(options)
     if not (root / "trace_grade.yaml").exists():
         run_ceo_trace_grade(options)
     if not (root / "approval_queue.yaml").exists():
         run_ceo_approval_queue(diagnostic_options)
-    if not (root / "role_task_queue.yaml").exists():
-        run_ceo_role_queue(options)
+    role_queue_result = run_ceo_role_queue(options)
     if not (root / "evidence_debt_register.yaml").exists():
         run_ceo_evidence_debt_register(diagnostic_options)
-    if not (root / "mission_score.yaml").exists():
-        run_ceo_mission_score(diagnostic_options)
+    mission_result = run_ceo_mission_score(diagnostic_options)
+    guardrail_result = run_ceo_guardrail_audit(diagnostic_options)
+    coherence_result = run_ceo_artifact_coherence(diagnostic_options)
     eval_suite = build_ceo_eval_suite(
         ceo_run_id=ceo_run_id,
         lab_run_id=lab_run_id,
@@ -9335,15 +11231,50 @@ def run_ceo_eval_suite(options: CeoOpsOptions) -> dict[str, Any]:
         replay=replay_result["replay"],
         trace_grade=_load_yaml_if_exists(root / "trace_grade.yaml"),
         approval_queue=_load_yaml_if_exists(root / "approval_queue.yaml"),
-        role_queue=_load_yaml_if_exists(root / "role_task_queue.yaml"),
+        role_queue=role_queue_result["queue"],
         fresh_withheld_execution=_load_yaml_if_exists(root / "fresh_withheld_validation_execution_result.yaml"),
         evidence_debt_register=_load_yaml_if_exists(root / "evidence_debt_register.yaml"),
-        mission_score=_load_yaml_if_exists(root / "mission_score.yaml"),
+        mission_score=mission_result["mission_score"],
         strategy_capital_dashboard=_load_yaml_if_exists(root / "strategy_capital_dashboard.yaml"),
         eval_fixtures=fixture_result["fixtures"],
+        guardrail_audit=guardrail_result["guardrail_audit"],
+        artifact_coherence=coherence_result["coherence"],
+        runtime_authority={
+            "stop_requested": is_stop_requested(options, ceo_run_id, lab_run_id),
+            "preflight_gate": _load_yaml_if_exists(root / "preflight_gate.yaml"),
+            "action_board": _load_yaml_if_exists(root / "action_board.yaml"),
+            "operator_brief": _load_yaml_if_exists(root / "operator_brief.yaml"),
+            "decision_quality": _load_yaml_if_exists(root / "decision_quality.yaml"),
+        },
     )
     path = root / "ceo_eval_suite.yaml"
     report_path = root / "ceo_eval_suite.md"
+    atomic_write_yaml(path, eval_suite)
+    atomic_write_text(report_path, render_ceo_eval_suite(eval_suite))
+    coherence_result = run_ceo_artifact_coherence(diagnostic_options)
+    eval_suite = build_ceo_eval_suite(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        root=root,
+        replay=replay_result["replay"],
+        trace_grade=_load_yaml_if_exists(root / "trace_grade.yaml"),
+        approval_queue=_load_yaml_if_exists(root / "approval_queue.yaml"),
+        role_queue=role_queue_result["queue"],
+        fresh_withheld_execution=_load_yaml_if_exists(root / "fresh_withheld_validation_execution_result.yaml"),
+        evidence_debt_register=_load_yaml_if_exists(root / "evidence_debt_register.yaml"),
+        mission_score=mission_result["mission_score"],
+        strategy_capital_dashboard=_load_yaml_if_exists(root / "strategy_capital_dashboard.yaml"),
+        eval_fixtures=fixture_result["fixtures"],
+        guardrail_audit=guardrail_result["guardrail_audit"],
+        artifact_coherence=coherence_result["coherence"],
+        runtime_authority={
+            "stop_requested": is_stop_requested(options, ceo_run_id, lab_run_id),
+            "preflight_gate": _load_yaml_if_exists(root / "preflight_gate.yaml"),
+            "action_board": _load_yaml_if_exists(root / "action_board.yaml"),
+            "operator_brief": _load_yaml_if_exists(root / "operator_brief.yaml"),
+            "decision_quality": _load_yaml_if_exists(root / "decision_quality.yaml"),
+        },
+    )
     atomic_write_yaml(path, eval_suite)
     atomic_write_text(report_path, render_ceo_eval_suite(eval_suite))
     return {
@@ -9367,6 +11298,8 @@ def _portfolio_lane(lane_id: str, score: int, rationale: str, next_action: str, 
         "score": int(score),
         "rationale": rationale,
         "next_action": next_action,
+        "action_scope": "portfolio_attention_only",
+        "dispatch_authority": "not_granted_by_portfolio_allocator_lane",
         "evidence": evidence or {},
         "production_effect": "none",
     }
@@ -9400,7 +11333,7 @@ def build_ceo_portfolio_allocator(
             "approval_governance",
             100 if pending_approvals else 10,
             "Red-authority approvals block safe continuation." if pending_approvals else "No pending red-authority approvals.",
-            "wait_for_user_approval" if pending_approvals else "continue_with_bound_action_dispatch",
+            "wait_for_user_approval" if pending_approvals else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
             evidence={"pending_approvals": pending_approvals},
         ),
         _portfolio_lane(
@@ -9436,14 +11369,14 @@ def build_ceo_portfolio_allocator(
             "research_infrastructure",
             min(80, 45 + capability_count * 7) if capability_count else 20,
             "Capability backlog items are repeated operating bottlenecks." if capability_count else "No capability backlog items are visible.",
-            "patch_research_infra" if capability_count else "continue_with_bound_action_dispatch",
+            "patch_research_infra" if capability_count else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
             evidence={"capability_backlog_count": capability_count},
         ),
         _portfolio_lane(
             "specialist_review",
             min(75, 35 + pending_roles * 4) if pending_roles else 20,
             "Specialist role tasks should be assigned before high-stakes promotion or archive decisions." if pending_roles else "No pending specialist role tasks.",
-            role_queue.get("next_action") or "continue_with_bound_action_dispatch",
+            role_queue.get("next_action") or CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
             evidence={"pending_role_tasks": pending_roles},
         ),
         _portfolio_lane(
@@ -9457,7 +11390,7 @@ def build_ceo_portfolio_allocator(
             "memory_handoff",
             min(65, 30 + memory_items * 5) if memory_items else 15,
             "Durable memory deltas should be curated when they change future action." if memory_items else "No memory delta is currently recommended.",
-            "curate_memory_delta" if memory_items else "continue_with_bound_action_dispatch",
+            "curate_memory_delta" if memory_items else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
             evidence={"recommended_memory_items": memory_items},
         ),
     ]
@@ -9473,8 +11406,12 @@ def build_ceo_portfolio_allocator(
         "lanes": lanes,
         "kpi_snapshot": kpis,
         "decision_rule": "Choose the highest-value bottleneck lane, with approval and safety lanes outranking research activity.",
+        "action_scope": "portfolio_attention_only",
+        "dispatch_authority": "not_granted_by_portfolio_allocator",
+        "runtime_authority_note": CEO_RUNTIME_AUTHORITY_NOTE,
         "product_language_allowed": False,
         "production_effect": "none",
+        "promotion_authority": "none",
     }
 
 
@@ -9489,7 +11426,10 @@ def render_ceo_portfolio_allocator(allocator: dict[str, Any]) -> str:
         f"Status: {allocator.get('status')}",
         f"Selected lane: {selected.get('lane_id')}",
         f"Selected score: {selected.get('score')}",
-        f"Next action: {selected.get('next_action')}",
+        f"Attention next action: {selected.get('next_action')}",
+        f"Action scope: {allocator.get('action_scope') or 'portfolio_attention_only'}",
+        f"Dispatch authority: {allocator.get('dispatch_authority') or 'not_granted_by_portfolio_allocator'}",
+        f"Runtime authority note: {allocator.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         f"Rationale: {selected.get('rationale')}",
         "",
         "## Lanes",
@@ -9499,7 +11439,8 @@ def render_ceo_portfolio_allocator(allocator: dict[str, Any]) -> str:
         lines.append(
             "- "
             f"{item.get('lane_id')} score={item.get('score')} "
-            f"next={item.get('next_action')} rationale={item.get('rationale')}"
+            f"attention_next={item.get('next_action')} scope={item.get('action_scope')} "
+            f"rationale={item.get('rationale')}"
         )
     lines.extend(
         [
@@ -9685,6 +11626,8 @@ def build_ceo_mission_score(
                 "dimension_score": dimension_score,
                 "next_required_evidence": next_action,
                 "owner_command": next_action,
+                "action_scope": "mission_strategy_only",
+                "dispatch_authority": "not_granted_by_mission_score_dimension",
                 "production_effect": "none",
             }
         )
@@ -9704,6 +11647,9 @@ def build_ceo_mission_score(
         "overall_mission_score": overall_score,
         "lowest_dimension": lowest.get("dimension_id", ""),
         "next_best_mission_action": "resolve_preflight_or_approval_gate" if safety_blocked else lowest.get("owner_command", "run_ceo_status"),
+        "action_scope": "mission_strategy_only",
+        "dispatch_authority": "not_granted_by_mission_score",
+        "runtime_authority_note": CEO_RUNTIME_AUTHORITY_NOTE,
         "mission_dimensions": dimensions,
         "candidate_mission_map": [
             {
@@ -9721,6 +11667,8 @@ def build_ceo_mission_score(
                 "dimension_id": item.get("dimension_id"),
                 "dimension_score": item.get("dimension_score"),
                 "owner_command": item.get("owner_command"),
+                "action_scope": "mission_strategy_only",
+                "dispatch_authority": "not_granted_by_mission_score",
                 "reason": "lowest mission coverage/evidence/readiness after evidence-debt penalty",
                 "production_effect": "none",
             }
@@ -9752,7 +11700,10 @@ def render_ceo_mission_score(score: dict[str, Any]) -> str:
         f"Status: {score.get('status')}",
         f"Overall mission score: {score.get('overall_mission_score')}",
         f"Lowest dimension: {score.get('lowest_dimension')}",
-        f"Next best mission action: {score.get('next_best_mission_action')}",
+        f"Mission attention action: {score.get('next_best_mission_action')}",
+        f"Action scope: {score.get('action_scope') or 'mission_strategy_only'}",
+        f"Dispatch authority: {score.get('dispatch_authority') or 'not_granted_by_mission_score'}",
+        f"Runtime authority note: {score.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         "",
         "## Dimensions",
         "",
@@ -9762,7 +11713,7 @@ def render_ceo_mission_score(score: dict[str, Any]) -> str:
             "- "
             f"{item.get('dimension_id')} score={item.get('dimension_score')} "
             f"candidates={item.get('candidate_count')} gate={item.get('evidence_gate')} "
-            f"next={item.get('owner_command')}"
+            f"attention_next={item.get('owner_command')} scope={item.get('action_scope')}"
         )
     lines.extend(["", "## Mission Gaps", ""])
     gaps = score.get("mission_gaps", []) or []
@@ -9929,7 +11880,7 @@ def build_ceo_strategy_capital_dashboard(
             value_of_information_score=90 if safety_first else 25,
             risk_score=10,
             blocked_by=preflight_blockers + (["pending_user_approval"] if pending_approvals else []),
-            owner_command="wait_for_user_approval_or_repair_preflight" if safety_first else "continue_with_bound_action_dispatch",
+            owner_command="wait_for_user_approval_or_repair_preflight" if safety_first else CEO_DEFER_TO_RUNTIME_AUTHORITY_ACTION,
             expected_artifacts=["approval_queue.yaml", "preflight_gate.yaml", "heartbeat_status.yaml"],
             stop_condition="all approval/runtime blockers are cleared",
         ),
@@ -10015,6 +11966,9 @@ def build_ceo_strategy_capital_dashboard(
         "lab_run_id": lab_run_id,
         "status": "blocked_by_safety_or_approval" if safety_first else "strategy_capital_allocated",
         "safe_to_continue": safe_to_continue,
+        "safe_to_continue_scope": CEO_STRATEGY_SAFETY_SCOPE,
+        "dispatch_authority": "not_granted_by_strategy_capital_dashboard",
+        "runtime_authority_note": CEO_RUNTIME_AUTHORITY_NOTE,
         "selected_strategy": selected.get("owner_command", "run_ceo_status"),
         "selected_capital_bucket": selected.get("bucket_id", ""),
         "capital_unit": "ceo_attention_points",
@@ -10038,6 +11992,7 @@ def build_ceo_strategy_capital_dashboard(
         },
         "guardrails": [
             "This dashboard allocates CEO attention only, not trading or production capital.",
+            "The safe-to-continue flag is an attention-allocation diagnostic, not dispatch authority.",
             "Approval, stop, failed preflight, failed trace, and promotion gates outrank research allocation.",
             "No production formula, Pine default, score, ranking, state, or alert is changed.",
         ],
@@ -10055,6 +12010,9 @@ def render_ceo_strategy_capital_dashboard(dashboard: dict[str, Any]) -> str:
         f"Run: {dashboard.get('run_id')}",
         f"Lab run: {dashboard.get('lab_run_id')}",
         f"Safe to continue: {dashboard.get('safe_to_continue')}",
+        f"Safety scope: {dashboard.get('safe_to_continue_scope') or CEO_STRATEGY_SAFETY_SCOPE}",
+        f"Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_strategy_capital_dashboard'}",
+        f"Runtime authority note: {dashboard.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
         f"Selected bucket: {dashboard.get('selected_capital_bucket')}",
         f"Selected strategy: {dashboard.get('selected_strategy')}",
         f"Capital unit: {dashboard.get('capital_unit')}",
@@ -10342,12 +12300,14 @@ def render_ceo_eval_fixtures(fixtures: dict[str, Any]) -> str:
             item.get("expected_transition_status")
             or item.get("expected_blocker")
             or item.get("expected_blocks")
+            or item.get("expected_status")
             or item.get("expected_error")
         )
         observed = (
             item.get("observed_transition_status")
             or item.get("observed_blockers")
             or item.get("observed_blocks")
+            or item.get("observed_status")
             or item.get("observed_error")
         )
         lines.append(
@@ -10410,6 +12370,64 @@ def run_ceo_eval_fixtures(options: CeoOpsOptions) -> dict[str, Any]:
                 "production_effect": "none",
             }
         )
+    stale_fixture_run_id = f"{ceo_run_id}_eval_fixture_stale_approval"
+    stale_fixture_lab_run_id = f"{lab_run_id}_eval_fixture_stale_approval"
+    stale_fixture_options = replace(
+        options,
+        run_id=stale_fixture_run_id,
+        lab_run_id=stale_fixture_lab_run_id,
+        apply=True,
+        ceo_context="external",
+        ceo_authorized_action=None,
+        skip_eval_fixtures=True,
+    )
+    stale_fixture_root = ceo_dir(stale_fixture_options, stale_fixture_run_id)
+    stale_fixture_root.mkdir(parents=True, exist_ok=True)
+    stale_ledger_entry = {
+        "model": CEO_APPROVAL_DECISION_MODEL,
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "run_id": stale_fixture_run_id,
+        "lab_run_id": stale_fixture_lab_run_id,
+        "approval_id": "clear_stop_request",
+        "decision": "approved",
+        "user_confirmed": True,
+        "approval_kind": "resume_stopped_run",
+        "source_artifact": "stop_request.yaml",
+        "approval_item_fingerprint": "stale-fixture-fingerprint",
+        "production_effect": "none",
+    }
+    atomic_write_text(
+        _approval_decision_ledger_path(stale_fixture_root),
+        json.dumps(stale_ledger_entry, sort_keys=True) + "\n",
+    )
+    run_ceo_stop(stale_fixture_options, reason="eval_fixture_new_stop_after_stale_approval")
+    stale_observed_status = ""
+    stale_observed_error = ""
+    try:
+        stale_apply_result = run_ceo_approval_apply(
+            _with_ceo_context(stale_fixture_options, context="bound_dispatch", action="approval_apply"),
+            approval_id="clear_stop_request",
+            user_confirmed=True,
+        )
+        stale_observed_status = str(stale_apply_result.get("approval_apply", {}).get("status", ""))
+    except Exception as exc:  # pragma: no cover - retained in fixture output for diagnosability.
+        stale_observed_error = str(exc)
+    stale_stop_files_preserved = ceo_stop_path(stale_fixture_options, stale_fixture_run_id).exists() and lab_stop_path(
+        stale_fixture_options, stale_fixture_lab_run_id
+    ).exists()
+    stale_passed = stale_observed_status == "blocked_stale_approval_record" and stale_stop_files_preserved
+    fixtures["cases"].append(
+        {
+            "case_id": "approval_apply_rejects_stale_approval_record",
+            "status": "pass" if stale_passed else "fail",
+            "expected_status": "blocked_stale_approval_record",
+            "observed_status": stale_observed_status,
+            "observed_error": stale_observed_error,
+            "stop_files_preserved": stale_stop_files_preserved,
+            "fixture_run_id": stale_fixture_run_id,
+            "production_effect": "none",
+        }
+    )
     failed = [item for item in fixtures["cases"] if item.get("status") != "pass"]
     fixtures["case_count"] = len(fixtures["cases"])
     fixtures["failed_case_count"] = len(failed)
@@ -10604,41 +12622,121 @@ def run_ceo_memory_delta(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _guardrail_audit_payload_refs(payload: Any, *, path: str = "$") -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_path = f"{path}.{key}"
+            if key in {"production_effect", "product_language_allowed", "promotion_authority"}:
+                refs.append({"path": key_path, "field": str(key), "value": value})
+            refs.extend(_guardrail_audit_payload_refs(value, path=key_path))
+    elif isinstance(payload, list):
+        for index, value in enumerate(payload):
+            refs.extend(_guardrail_audit_payload_refs(value, path=f"{path}[{index}]"))
+    return refs
+
+
+def _load_jsonl_guardrail_payloads(path: Path) -> list[tuple[str, Any]]:
+    payloads: list[tuple[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return payloads
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payloads.append((f"{path.name}:{index}", json.loads(stripped)))
+        except json.JSONDecodeError:
+            payloads.append((f"{path.name}:{index}", {"json_parse_error": True}))
+    return payloads
+
+
+def _guardrail_audit_violation(
+    *, artifact: str, violation: str, observed: Any, key_path: str, field: str
+) -> dict[str, Any]:
+    return {
+        "artifact": artifact,
+        "violation": violation,
+        "observed": observed,
+        "path": key_path,
+        "field": field,
+        "production_effect": "none",
+    }
+
+
 def build_ceo_guardrail_audit(*, ceo_run_id: str, lab_run_id: str, root: Path) -> dict[str, Any]:
     scanned: list[dict[str, Any]] = []
     violations: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.yaml")):
+    candidate_paths = sorted([*root.rglob("*.yaml"), *root.rglob("*.jsonl")])
+    for path in candidate_paths:
         if path.name == "guardrail_audit.yaml":
             continue
-        payload = _load_yaml_if_exists(path)
-        if not payload:
+        artifact = str(path.relative_to(root))
+        payload_refs: list[dict[str, Any]] = []
+        if path.suffix == ".jsonl":
+            loaded_payloads = _load_jsonl_guardrail_payloads(path)
+            for source, payload in loaded_payloads:
+                payload_refs.extend(_guardrail_audit_payload_refs(payload, path=f"${source}"))
+        else:
+            payload = _load_yaml_if_exists(path)
+            if payload:
+                payload_refs = _guardrail_audit_payload_refs(payload)
+        if not payload_refs:
             continue
-        production_effect = str(payload.get("production_effect", "none"))
-        product_language_allowed = payload.get("product_language_allowed")
+        production_effect_refs = [item for item in payload_refs if item["field"] == "production_effect"]
+        product_language_refs = [item for item in payload_refs if item["field"] == "product_language_allowed"]
+        promotion_authority_refs = [item for item in payload_refs if item["field"] == "promotion_authority"]
         item = {
-            "artifact": path.name,
-            "production_effect": production_effect,
-            "product_language_allowed": product_language_allowed,
+            "artifact": artifact,
+            "production_effect": (
+                str(production_effect_refs[0]["value"]) if production_effect_refs else "missing"
+            ),
+            "product_language_allowed": (
+                product_language_refs[0]["value"] if product_language_refs else None
+            ),
+            "promotion_authority": (
+                str(promotion_authority_refs[0]["value"]) if promotion_authority_refs else None
+            ),
+            "guardrail_ref_count": len(payload_refs),
         }
         scanned.append(item)
-        if production_effect not in {"", "none"}:
-            violations.append(
-                {
-                    "artifact": path.name,
-                    "violation": "non_none_production_effect",
-                    "observed": production_effect,
-                    "production_effect": "none",
-                }
-            )
-        if product_language_allowed is True:
-            violations.append(
-                {
-                    "artifact": path.name,
-                    "violation": "product_language_allowed_true",
-                    "observed": product_language_allowed,
-                    "production_effect": "none",
-                }
-            )
+        for ref in production_effect_refs:
+            production_effect = str(ref["value"])
+            if production_effect not in {"", "none"}:
+                violations.append(
+                    _guardrail_audit_violation(
+                        artifact=artifact,
+                        violation="non_none_production_effect",
+                        observed=production_effect,
+                        key_path=str(ref["path"]),
+                        field="production_effect",
+                    )
+                )
+        for ref in product_language_refs:
+            if ref["value"] is True:
+                violations.append(
+                    _guardrail_audit_violation(
+                        artifact=artifact,
+                        violation="product_language_allowed_true",
+                        observed=ref["value"],
+                        key_path=str(ref["path"]),
+                        field="product_language_allowed",
+                    )
+                )
+        for ref in promotion_authority_refs:
+            promotion_authority = str(ref["value"])
+            if promotion_authority not in {"", "none", "user_only"}:
+                violations.append(
+                    _guardrail_audit_violation(
+                        artifact=artifact,
+                        violation="non_user_promotion_authority",
+                        observed=promotion_authority,
+                        key_path=str(ref["path"]),
+                        field="promotion_authority",
+                    )
+                )
     return {
         "model": CEO_GUARDRAIL_AUDIT_MODEL,
         "generated_at": utc_now_iso(),
@@ -10669,7 +12767,10 @@ def render_ceo_guardrail_audit(audit: dict[str, Any]) -> str:
         "",
     ]
     for item in audit.get("violations", []) or []:
-        lines.append(f"- {item.get('artifact')}: {item.get('violation')} observed={item.get('observed')}")
+        lines.append(
+            f"- {item.get('artifact')}: {item.get('violation')} "
+            f"path={item.get('path') or '$'} observed={item.get('observed')}"
+        )
     if not audit.get("violations"):
         lines.append("- none")
     lines.extend(["", str(audit.get("guardrail")), "Production effect: none.", ""])
@@ -10711,8 +12812,10 @@ def build_ceo_preflight_gate(
     guardrail_audit: dict[str, Any],
     memory_delta: dict[str, Any],
     heartbeat_budget: dict[str, Any],
+    artifact_coherence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blockers: list[dict[str, Any]] = []
+    artifact_coherence = artifact_coherence or {}
     replay_issues = {str(item) for item in replay.get("issues", []) or []}
     bootstrap_no_prior_action = (
         int(replay.get("action_count", 0) or 0) == 0
@@ -10723,7 +12826,20 @@ def build_ceo_preflight_gate(
         str(item)
         for item in (eval_suite.get("nine_nine_readiness", {}) or {}).get("blocking_case_ids", []) or []
     }
-    bootstrap_eval_only = bootstrap_no_prior_action and eval_blocking_cases <= {"replayable_action_timeline"}
+    bootstrap_eval_only = bootstrap_no_prior_action and eval_blocking_cases <= {
+        "replayable_action_timeline",
+        "policy_eval_fixtures_pass",
+    }
+    bootstrap_artifact_coherence_only = (
+        bootstrap_no_prior_action
+        and artifact_coherence.get("status") == "fail"
+        and {
+            str(item.get("artifact", ""))
+            for item in artifact_coherence.get("issues", []) or []
+            if set(str(issue) for issue in item.get("issues", []) or []) - {"missing_artifact"}
+        }
+        == set()
+    )
     if stop_requested:
         blockers.append(_preflight_blocker("stop_requested", source="stop.request", category="runtime_authority"))
     if true_blocker:
@@ -10738,6 +12854,9 @@ def build_ceo_preflight_gate(
         blockers.append(_preflight_blocker("eval_suite_failed", source="ceo_eval_suite.yaml", category="eval_readiness"))
     if guardrail_audit.get("status") == "fail":
         blockers.append(_preflight_blocker("guardrail_audit_failed", source="guardrail_audit.yaml", category="product_guardrail"))
+    artifact_coherence_hard_issues = _hard_artifact_coherence_issues(artifact_coherence)
+    if artifact_coherence.get("status") == "fail" and artifact_coherence_hard_issues and not bootstrap_artifact_coherence_only:
+        blockers.append(_preflight_blocker("artifact_coherence_failed", source="artifact_coherence.yaml", category="artifact_coherence"))
     if _memory_delta_blocks_dispatch(memory_delta=memory_delta, replay=replay, eval_suite=eval_suite):
         blockers.append(_preflight_blocker("memory_delta_unresolved", source="memory_delta.yaml", category="memory_handoff"))
     if heartbeat_budget.get("budget_elapsed"):
@@ -10760,19 +12879,91 @@ def build_ceo_preflight_gate(
         "blocker_categories": blocker_categories,
         "source_status": {
             "trace_verdict": trace_grade.get("verdict", ""),
+            "trace_score": trace_grade.get("score", ""),
+            "trace_recommended_next_action": trace_grade.get("recommended_next_action", ""),
+            "trace_issues": trace_grade.get("issues", []),
+            "trace_manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
             "pending_approvals": approval_queue.get("pending_count", 0),
             "replay_status": replay.get("status", ""),
             "eval_suite_status": eval_suite.get("status", ""),
             "guardrail_audit_status": guardrail_audit.get("status", ""),
+            "artifact_coherence_status": artifact_coherence.get("status", ""),
+            "artifact_coherence_hard_issue_count": len(artifact_coherence_hard_issues),
             "memory_delta_status": memory_delta.get("status", ""),
             "heartbeat_budget_status": heartbeat_budget.get("status", ""),
             "stop_requested": stop_requested,
             "true_blocker": true_blocker,
             "bootstrap_no_prior_action": bootstrap_no_prior_action,
+            "bootstrap_artifact_coherence_only": bootstrap_artifact_coherence_only,
         },
         "guardrail": "Preflight gate blocks CEO dispatch when generated safety artifacts indicate unresolved risk.",
         "production_effect": "none",
     }
+
+
+def _hard_artifact_coherence_issues(artifact_coherence: dict[str, Any]) -> list[dict[str, Any]]:
+    latest_has_current_evidence = artifact_coherence.get("latest_action_has_current_transition_evidence") is True
+    if not latest_has_current_evidence and not str(artifact_coherence.get("latest_action_generated_at", "")):
+        return []
+    hard: list[dict[str, Any]] = []
+    for item in artifact_coherence.get("issues", []) or []:
+        artifact = str(item.get("artifact", ""))
+        issue_names = {str(issue) for issue in item.get("issues", []) or []}
+        if not issue_names:
+            continue
+        if artifact in {"latest_decision_packet", "strategy_capital_dashboard"} and issue_names <= {"missing_artifact"}:
+            continue
+        if artifact == "preflight_gate" and issue_names <= {"missing_artifact", "stale_before_latest_action"}:
+            continue
+        if artifact in {
+            "approval_queue",
+            "approval_status",
+            "role_task_queue",
+            "role_dispatch",
+            "role_result_validation",
+            "repair_apply",
+            "action_board",
+            "decision_quality",
+            "operator_brief",
+        } and issue_names <= {
+            "missing_artifact",
+            "missing_generated_at",
+            "stale_before_latest_action",
+        }:
+            continue
+        if artifact == "handoff_semantics" and issue_names.isdisjoint(CEO_HARD_HANDOFF_SEMANTIC_ISSUES):
+            continue
+        if not latest_has_current_evidence and artifact in {"action_contract", "dispatch_receipt"} and issue_names <= {
+            "missing_artifact",
+            "missing_action_contract",
+            "action_contract_decision_mismatch",
+            "missing_action_dispatch_receipt_ref",
+        }:
+            continue
+        if issue_names == {"dispatch_receipt_trust_fingerprint_drift"}:
+            mismatches = (item.get("evidence", {}) or {}).get("trust_fingerprint_mismatches", []) or []
+            mismatch_artifacts = {str(mismatch.get("artifact", "")) for mismatch in mismatches}
+            mutable_diagnostics = {
+                "trace_grade",
+                "ceo_replay",
+                "ceo_eval_suite",
+                "guardrail_audit",
+                "mission_score",
+                "artifact_coherence",
+                "approval_queue",
+                "approval_status",
+                "role_task_queue",
+                "role_dispatch",
+                "role_result_validation",
+                "repair_apply",
+                "action_board",
+                "decision_quality",
+                "operator_brief",
+            }
+            if mismatch_artifacts and mismatch_artifacts <= mutable_diagnostics:
+                continue
+        hard.append(item)
+    return hard
 
 
 def _memory_delta_blocks_dispatch(
@@ -10803,7 +12994,7 @@ def _memory_delta_blocks_dispatch(
             str(item)
             for item in (eval_suite.get("nine_nine_readiness", {}) or {}).get("blocking_case_ids", []) or []
         }
-        if eval_blocking_cases <= {"replayable_action_timeline"}:
+        if eval_blocking_cases <= {"replayable_action_timeline", "policy_eval_fixtures_pass"}:
             hard_reasons.discard("eval_suite_attention_required")
     return bool(hard_reasons)
 
@@ -10829,6 +13020,19 @@ def render_ceo_preflight_gate(gate: dict[str, Any]) -> str:
         )
     if not gate.get("blockers"):
         lines.append("- none")
+    source_status = gate.get("source_status", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Source Status",
+            "",
+            f"- Trace verdict: {source_status.get('trace_verdict') or 'none'}",
+            f"- Trace score: {source_status.get('trace_score') if source_status.get('trace_score') != '' else 'n/a'}",
+            f"- Trace recommended next action: {source_status.get('trace_recommended_next_action') or 'none'}",
+            f"- Trace manual data import required: {source_status.get('trace_manual_data_import_required') if source_status.get('trace_manual_data_import_required') != '' else 'n/a'}",
+            f"- Trace issues: {source_status.get('trace_issues') or []}",
+        ]
+    )
     lines.extend(["", str(gate.get("guardrail")), "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
 
@@ -10845,6 +13049,7 @@ def run_ceo_preflight_gate(options: CeoOpsOptions, *, enforce_memory_delta: bool
     replay_result = run_ceo_replay(preflight_options)
     eval_result = run_ceo_eval_suite(preflight_options)
     guardrail_result = run_ceo_guardrail_audit(preflight_options)
+    coherence_result = run_ceo_artifact_coherence(preflight_options)
     memory_delta = _load_yaml_if_exists(root / "memory_delta.yaml")
     if not memory_delta:
         if enforce_memory_delta:
@@ -10873,6 +13078,7 @@ def run_ceo_preflight_gate(options: CeoOpsOptions, *, enforce_memory_delta: bool
         guardrail_audit=guardrail_result["guardrail_audit"],
         memory_delta=memory_delta,
         heartbeat_budget=heartbeat_budget,
+        artifact_coherence=coherence_result["coherence"],
     )
     path = root / "preflight_gate.yaml"
     report_path = root / "preflight_gate.md"
@@ -10935,13 +13141,121 @@ def _artifact_coherence_item(
     }
 
 
+def _handoff_semantic_coherence_issues(
+    *,
+    action_board: dict[str, Any],
+    decision_quality: dict[str, Any],
+    operator_brief: dict[str, Any],
+    stop_requested: bool = False,
+) -> dict[str, Any] | None:
+    issues: list[str] = []
+    evidence: dict[str, Any] = {}
+    primary = action_board.get("primary_action", {}) or {}
+    situation = operator_brief.get("current_situation", {}) or {}
+    board_status = str(action_board.get("status", ""))
+    primary_action = str(primary.get("action_id", ""))
+    primary_kind = str(primary.get("command_kind", ""))
+    decision_effective_action = str(decision_quality.get("effective_runtime_action", ""))
+    decision_effective_kind = str(decision_quality.get("effective_runtime_command_kind", ""))
+    operator_status = str(operator_brief.get("status", ""))
+    if stop_requested:
+        stale_safe_signals: list[str] = []
+        if board_status == "bounded_action_available":
+            stale_safe_signals.append("action_board_bounded_action_available")
+        if primary.get("can_execute_now") is True:
+            stale_safe_signals.append("action_board_primary_executable")
+        if decision_quality.get("effective_runtime_can_execute_now") is True:
+            stale_safe_signals.append("decision_quality_effective_runtime_executable")
+        if decision_quality.get("selected_action_is_executable_now") is True:
+            stale_safe_signals.append("decision_quality_selected_action_executable")
+        if operator_status == "ready_for_one_operator_step":
+            stale_safe_signals.append("operator_brief_ready_for_one_operator_step")
+        if stale_safe_signals:
+            issues.append("live_stop_runtime_authority_mismatch")
+            evidence["live_stop_stale_safe_signals"] = stale_safe_signals
+    if action_board and decision_quality:
+        if primary_action and decision_effective_action and primary_action != decision_effective_action:
+            issues.append("decision_quality_effective_action_mismatch")
+        if primary_kind and decision_effective_kind and primary_kind != decision_effective_kind:
+            issues.append("decision_quality_effective_kind_mismatch")
+    if action_board and operator_brief:
+        if situation.get("action_board_status") and str(situation.get("action_board_status")) != board_status:
+            issues.append("operator_brief_action_board_status_mismatch")
+        if situation.get("primary_action") and str(situation.get("primary_action")) != primary_action:
+            issues.append("operator_brief_primary_action_mismatch")
+    if board_status == "manual_gate_required":
+        if primary.get("can_execute_now") is True:
+            issues.append("manual_gate_primary_marked_executable")
+        runnable_under_gate = [
+            str(item.get("action_id", ""))
+            for item in action_board.get("runnable_repairs", []) or []
+            if item.get("can_execute_now") is True
+        ]
+        if runnable_under_gate:
+            issues.append("manual_gate_has_runnable_actions")
+            evidence["runnable_under_manual_gate"] = runnable_under_gate
+        if primary.get("requires_manual_gate") is not True:
+            issues.append("manual_gate_primary_not_marked_manual")
+        if decision_quality:
+            if decision_quality.get("effective_runtime_can_execute_now") is True:
+                issues.append("manual_gate_decision_quality_effective_runtime_executable")
+            if decision_quality.get("selected_action_is_executable_now") is True:
+                issues.append("manual_gate_decision_quality_selected_action_executable")
+            if decision_quality.get("runtime_blocked") is not True:
+                issues.append("manual_gate_decision_quality_not_runtime_blocked")
+            block_reason = str(decision_quality.get("runtime_block_reason", ""))
+            if block_reason and not block_reason.startswith("manual_gate_required:"):
+                issues.append("manual_gate_decision_quality_block_reason_mismatch")
+        if operator_brief and operator_status != "waiting_on_manual_gate":
+            issues.append("manual_gate_operator_brief_status_mismatch")
+    elif board_status == "bounded_action_available":
+        if primary.get("can_execute_now") is not True:
+            issues.append("bounded_action_primary_not_executable")
+        if decision_quality:
+            if decision_quality.get("effective_runtime_can_execute_now") is not True:
+                issues.append("bounded_action_decision_quality_not_executable")
+            if decision_effective_action and primary_action and decision_effective_action != primary_action:
+                issues.append("bounded_action_effective_runtime_mismatch")
+        if operator_brief and operator_status != "ready_for_one_operator_step":
+            issues.append("bounded_action_operator_brief_status_mismatch")
+    if not issues:
+        return None
+    evidence.update(
+        {
+            "action_board_status": board_status,
+            "action_board_primary_action": primary_action,
+            "action_board_primary_kind": primary_kind,
+            "decision_effective_runtime_action": decision_effective_action,
+            "decision_effective_runtime_kind": decision_effective_kind,
+            "decision_runtime_blocked": decision_quality.get("runtime_blocked", ""),
+            "decision_selected_action_executable": decision_quality.get("selected_action_is_executable_now", ""),
+            "operator_brief_status": operator_status,
+            "operator_brief_action_board_status": situation.get("action_board_status", ""),
+            "operator_brief_primary_action": situation.get("primary_action", ""),
+            "stop_requested": stop_requested,
+        }
+    )
+    return {
+        "artifact": "handoff_semantics",
+        "issues": sorted(set(issues)),
+        "path": "",
+        "evidence": evidence,
+    }
+
+
 def build_ceo_artifact_coherence(*, ceo_run_id: str, lab_run_id: str, root: Path) -> dict[str, Any]:
     ledger_entries = _read_jsonl_entries(root / "ceo_action_ledger.jsonl")
     binding_action = _load_yaml_if_exists(root / "binding_action_result.yaml")
     latest_action = binding_action or (ledger_entries[-1] if ledger_entries else {})
     latest_action_at = _parse_utc_datetime(latest_action.get("generated_at")) if latest_action else None
+    action_contract_path = root / "action_contract.yaml"
+    action_contract = _load_yaml_if_exists(action_contract_path)
+    dispatch_receipt_path = root / "dispatch_receipt.yaml"
+    dispatch_receipt = _load_yaml_if_exists(dispatch_receipt_path)
     artifact_specs = [
         ("latest_decision_packet", root / "executive_decision_packet.md", {"status": "exists" if (root / "executive_decision_packet.md").exists() else "missing"}, False),
+        ("action_contract", action_contract_path, action_contract, False),
+        ("dispatch_receipt", dispatch_receipt_path, dispatch_receipt, False),
         ("preflight_gate", root / "preflight_gate.yaml", _load_yaml_if_exists(root / "preflight_gate.yaml"), True),
         ("ceo_replay", root / "ceo_replay.yaml", _load_yaml_if_exists(root / "ceo_replay.yaml"), True),
         ("ceo_eval_suite", root / "ceo_eval_suite.yaml", _load_yaml_if_exists(root / "ceo_eval_suite.yaml"), True),
@@ -10952,6 +13266,20 @@ def build_ceo_artifact_coherence(*, ceo_run_id: str, lab_run_id: str, root: Path
             _load_yaml_if_exists(root / "strategy_capital_dashboard.yaml"),
             True,
         ),
+        ("approval_queue", root / "approval_queue.yaml", _load_yaml_if_exists(root / "approval_queue.yaml"), True),
+        ("approval_status", root / "approval_status.yaml", _load_yaml_if_exists(root / "approval_status.yaml"), True),
+        ("role_task_queue", root / "role_task_queue.yaml", _load_yaml_if_exists(root / "role_task_queue.yaml"), True),
+        ("role_dispatch", root / "role_dispatch.yaml", _load_yaml_if_exists(root / "role_dispatch.yaml"), True),
+        (
+            "role_result_validation",
+            root / "role_result_validation.yaml",
+            _load_yaml_if_exists(root / "role_result_validation.yaml"),
+            True,
+        ),
+        ("repair_apply", root / "repair_apply.yaml", _load_yaml_if_exists(root / "repair_apply.yaml"), True),
+        ("action_board", root / "action_board.yaml", _load_yaml_if_exists(root / "action_board.yaml"), True),
+        ("decision_quality", root / "decision_quality.yaml", _load_yaml_if_exists(root / "decision_quality.yaml"), True),
+        ("operator_brief", root / "operator_brief.yaml", _load_yaml_if_exists(root / "operator_brief.yaml"), True),
     ]
     artifacts = [
         _artifact_coherence_item(
@@ -10974,23 +13302,138 @@ def build_ceo_artifact_coherence(*, ceo_run_id: str, lab_run_id: str, root: Path
         for item in artifacts
         if item.get("issues")
     ]
-    return {
+    if latest_action:
+        latest_decision = str(latest_action.get("decision", ""))
+        semantic_action_contract_issues: list[str] = []
+        if not action_contract:
+            semantic_action_contract_issues.append("missing_action_contract")
+        elif latest_decision and str(action_contract.get("decision", "")) != latest_decision:
+            semantic_action_contract_issues.append("action_contract_decision_mismatch")
+        if semantic_action_contract_issues:
+            issues.append(
+                {
+                    "artifact": "action_contract",
+                    "issues": semantic_action_contract_issues,
+                    "path": str(action_contract_path),
+                    "evidence": {
+                        "contract_decision": action_contract.get("decision", ""),
+                        "latest_action_decision": latest_decision,
+                    },
+                }
+            )
+
+        dispatch_ref = latest_action.get("dispatch_receipt", {}) or {}
+        dispatch_ref_path = _resolve_report_ref_path(root, dispatch_ref.get("path", ""))
+        dispatch_ref_exists = bool(dispatch_ref and dispatch_ref_path.exists())
+        dispatch_ref_payload = _load_yaml_if_exists(dispatch_ref_path) if dispatch_ref_exists else {}
+        semantic_dispatch_issues: list[str] = []
+        if not dispatch_ref:
+            semantic_dispatch_issues.append("missing_action_dispatch_receipt_ref")
+        elif not dispatch_ref_exists:
+            semantic_dispatch_issues.append("missing_action_dispatch_receipt_snapshot")
+        else:
+            trust_fingerprint_mismatches: list[dict[str, Any]] = []
+            if str(dispatch_ref.get("sha256", "")) != _file_sha256(dispatch_ref_path):
+                semantic_dispatch_issues.append("action_dispatch_receipt_sha_mismatch")
+            if str(dispatch_ref_payload.get("decision", "")) != latest_decision:
+                semantic_dispatch_issues.append("dispatch_receipt_decision_mismatch")
+            if dispatch_ref_path.name == "dispatch_receipt.yaml" or dispatch_ref_path.parent.name != "dispatch_receipts":
+                semantic_dispatch_issues.append("dispatch_receipt_not_immutable_snapshot")
+            if dispatch_ref_payload.get("product_language_allowed") is not False:
+                semantic_dispatch_issues.append("dispatch_receipt_product_language_not_false")
+            if dispatch_ref_payload.get("production_effect") != "none":
+                semantic_dispatch_issues.append("dispatch_receipt_non_none_production_effect")
+            for fingerprint_name, fingerprint in (dispatch_ref_payload.get("trust_artifact_fingerprints", {}) or {}).items():
+                if not isinstance(fingerprint, dict) or fingerprint.get("exists") is not True:
+                    continue
+                fingerprint_path = _resolve_report_ref_path(root, fingerprint.get("path", ""))
+                actual_exists = fingerprint_path.exists()
+                expected_sha = str(fingerprint.get("sha256", ""))
+                actual_sha = _file_sha256(fingerprint_path) if actual_exists else ""
+                if not actual_exists:
+                    trust_fingerprint_mismatches.append(
+                        {
+                            "artifact": str(fingerprint_name),
+                            "reason": "fingerprinted_artifact_missing",
+                            "path": str(fingerprint_path),
+                            "expected_sha256": expected_sha,
+                            "actual_sha256": "",
+                        }
+                    )
+                elif not expected_sha:
+                    trust_fingerprint_mismatches.append(
+                        {
+                            "artifact": str(fingerprint_name),
+                            "reason": "fingerprint_missing_expected_sha256",
+                            "path": str(fingerprint_path),
+                            "expected_sha256": expected_sha,
+                            "actual_sha256": actual_sha,
+                        }
+                    )
+                elif expected_sha != actual_sha:
+                    trust_fingerprint_mismatches.append(
+                        {
+                            "artifact": str(fingerprint_name),
+                            "reason": "fingerprinted_artifact_sha_mismatch",
+                            "path": str(fingerprint_path),
+                            "expected_sha256": expected_sha,
+                            "actual_sha256": actual_sha,
+                        }
+                    )
+            if trust_fingerprint_mismatches:
+                semantic_dispatch_issues.append("dispatch_receipt_trust_fingerprint_drift")
+        if semantic_dispatch_issues:
+            issues.append(
+                {
+                    "artifact": "dispatch_receipt",
+                    "issues": semantic_dispatch_issues,
+                    "path": str(dispatch_ref_path) if dispatch_ref else "",
+                    "evidence": {
+                        "active_receipt_path": str(dispatch_receipt_path),
+                        "latest_action_decision": latest_decision,
+                        "receipt_decision": dispatch_ref_payload.get("decision", ""),
+                        "trust_fingerprint_mismatches": trust_fingerprint_mismatches if dispatch_ref_exists else [],
+                    },
+                }
+            )
+    handoff_semantic_issue = _handoff_semantic_coherence_issues(
+        action_board=_load_yaml_if_exists(root / "action_board.yaml"),
+        decision_quality=_load_yaml_if_exists(root / "decision_quality.yaml"),
+        operator_brief=_load_yaml_if_exists(root / "operator_brief.yaml"),
+        stop_requested=(root / "stop.request").exists(),
+    )
+    if handoff_semantic_issue:
+        issues.append(handoff_semantic_issue)
+    coherence = {
         "model": CEO_ARTIFACT_COHERENCE_MODEL,
         "generated_at": utc_now_iso(),
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
-        "status": "pass" if not issues else "fail",
+        "status": "pass",
         "latest_action_generated_at": latest_action.get("generated_at", ""),
         "latest_action_sha256": _file_sha256(root / "binding_action_result.yaml") if (root / "binding_action_result.yaml").exists() else "",
+        "latest_action_has_current_transition_evidence": _has_current_transition_evidence(latest_action) if latest_action else False,
         "artifact_count": len(artifacts),
         "issue_count": len(issues),
         "artifacts": artifacts,
         "issues": issues,
-        "guardrail": "Artifact coherence checks freshness and lineage only; it does not evaluate market evidence or authorize action.",
+        "guardrail": (
+            "Artifact coherence checks freshness, lineage, and handoff semantic agreement; it does not "
+            "evaluate market evidence or authorize action."
+        ),
         "product_language_allowed": False,
         "production_effect": "none",
         "promotion_authority": "none",
     }
+    hard_issues = _hard_artifact_coherence_issues(coherence)
+    hard_issue_ids = {id(item) for item in hard_issues}
+    for item in issues:
+        item["severity"] = "hard" if id(item) in hard_issue_ids else "advisory"
+    coherence["hard_issue_count"] = len(hard_issues)
+    coherence["advisory_issue_count"] = max(0, len(issues) - len(hard_issues))
+    coherence["hard_issues"] = hard_issues
+    coherence["status"] = "fail" if hard_issues else ("pass_with_advisory_issues" if issues else "pass")
+    return coherence
 
 
 def render_ceo_artifact_coherence(coherence: dict[str, Any]) -> str:
@@ -11002,6 +13445,8 @@ def render_ceo_artifact_coherence(coherence: dict[str, Any]) -> str:
         f"Lab run: {coherence.get('lab_run_id')}",
         f"Status: {coherence.get('status')}",
         f"Latest action generated at: {coherence.get('latest_action_generated_at') or 'none'}",
+        f"Hard issues: {coherence.get('hard_issue_count', 0)}",
+        f"Advisory issues: {coherence.get('advisory_issue_count', 0)}",
         "",
         "## Artifacts",
         "",
@@ -11015,10 +13460,16 @@ def render_ceo_artifact_coherence(coherence: dict[str, Any]) -> str:
         )
     lines.extend(["", "## Issues", ""])
     issues = coherence.get("issues", []) or []
-    lines.extend(
-        f"- {item.get('artifact')}: {item.get('issues')} path={item.get('path')}"
-        for item in issues
-    ) if issues else lines.append("- none")
+    if issues:
+        for item in issues:
+            evidence = item.get("evidence", {}) or {}
+            evidence_text = f" evidence={evidence}" if evidence else ""
+            lines.append(
+                f"- {item.get('artifact')}: severity={item.get('severity', 'unknown')} "
+                f"issues={item.get('issues')} path={item.get('path')}{evidence_text}"
+            )
+    else:
+        lines.append("- none")
     lines.extend(["", str(coherence.get("guardrail")), "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
 
@@ -11041,6 +13492,17 @@ def run_ceo_artifact_coherence(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _resumption_authorized_route(root: Path, strategy_capital_dashboard: dict[str, Any]) -> tuple[str, str]:
+    action_contract = _load_yaml_if_exists(root / "action_contract.yaml")
+    contract_decision = str(action_contract.get("decision", ""))
+    if contract_decision:
+        return contract_decision, "action_contract"
+    strategy = str(strategy_capital_dashboard.get("selected_strategy", ""))
+    if strategy and strategy != "run_ceo_status":
+        return strategy, "strategy_capital_dashboard"
+    return "", "unavailable"
+
+
 def build_ceo_resumption_brief(
     *,
     ceo_run_id: str,
@@ -11056,8 +13518,10 @@ def build_ceo_resumption_brief(
     latest_packet: Path,
 ) -> dict[str, Any]:
     blockers = [str(item.get("blocker", "")) for item in preflight_gate.get("blockers", []) or [] if item.get("blocker")]
+    preflight_source_status = preflight_gate.get("source_status", {}) or {}
     readiness = eval_suite.get("nine_nine_readiness", {}) or {}
     advisory = [str(item) for item in readiness.get("advisory_case_ids", []) or []]
+    authorized_route, authorized_route_source = _resumption_authorized_route(root, strategy_capital_dashboard)
     if stop_requested:
         resume_status = "blocked_stop_requested"
         next_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
@@ -11074,7 +13538,7 @@ def build_ceo_resumption_brief(
         resume_status = "diagnostic_missing_decision_packet"
         next_command = f"PYTHONPATH=src python3 -m riskflow ceo review --run-id {ceo_run_id}"
         rationale = "No latest decision packet exists, so execute-next has no fresh decision basis."
-    elif artifact_coherence.get("status") == "fail":
+    elif artifact_coherence.get("status") == "fail" or int(artifact_coherence.get("hard_issue_count", 0) or 0) > 0:
         resume_status = "diagnostic_stale_artifacts"
         next_command = f"PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id {ceo_run_id}"
         rationale = "Trust artifacts are missing, stale, or mismatched; refresh diagnostics before executing."
@@ -11103,11 +13567,22 @@ def build_ceo_resumption_brief(
         "resume_status": resume_status,
         "next_command": next_command,
         "rationale": rationale,
+        "authorized_strategic_route": authorized_route if resume_status == "safe_for_one_bound_action" else "",
+        "authorized_route_source": authorized_route_source if resume_status == "safe_for_one_bound_action" else "",
         "stop_requested": stop_requested,
         "preflight_status": preflight_gate.get("status", ""),
         "preflight_blockers": blockers,
+        "trace_grade_status": preflight_source_status.get("trace_verdict", ""),
+        "trace_grade_score": preflight_source_status.get("trace_score", ""),
+        "trace_grade_recommended_next_action": preflight_source_status.get("trace_recommended_next_action", ""),
+        "trace_grade_issues": preflight_source_status.get("trace_issues", []),
+        "trace_grade_manual_data_import_required": preflight_source_status.get(
+            "trace_manual_data_import_required",
+            "",
+        ),
         "eval_suite_status": eval_suite.get("status", ""),
         "artifact_coherence_status": artifact_coherence.get("status", ""),
+        "artifact_coherence_hard_issue_count": artifact_coherence.get("hard_issue_count", ""),
         "artifact_coherence_issues": artifact_coherence.get("issues", []),
         "nine_nine_readiness": readiness.get("status", ""),
         "advisory_readiness_gaps": advisory,
@@ -11137,12 +13612,19 @@ def render_ceo_resumption_brief(brief: dict[str, Any]) -> str:
         f"Resume status: {brief.get('resume_status')}",
         f"Next command: `{brief.get('next_command')}`",
         f"Rationale: {brief.get('rationale')}",
+        f"Authorized strategic route: {brief.get('authorized_strategic_route') or 'none'}",
+        f"Authorized route source: {brief.get('authorized_route_source') or 'none'}",
         "",
         "## Trust Snapshot",
         "",
         f"- Stop requested: {brief.get('stop_requested')}",
         f"- Preflight status: {brief.get('preflight_status')}",
         f"- Preflight blockers: {brief.get('preflight_blockers') or []}",
+        f"- Trace grade: {brief.get('trace_grade_status') or 'none'}",
+        f"- Trace score: {brief.get('trace_grade_score') if brief.get('trace_grade_score') != '' else 'n/a'}",
+        f"- Trace recommended next action: {brief.get('trace_grade_recommended_next_action') or 'none'}",
+        f"- Trace manual data import required: {brief.get('trace_grade_manual_data_import_required') if brief.get('trace_grade_manual_data_import_required') != '' else 'n/a'}",
+        f"- Trace issues: {brief.get('trace_grade_issues') or []}",
         f"- Eval suite status: {brief.get('eval_suite_status')}",
         f"- Artifact coherence status: {brief.get('artifact_coherence_status')}",
         f"- Artifact coherence issues: {brief.get('artifact_coherence_issues') or []}",
@@ -11168,18 +13650,29 @@ def render_ceo_resumption_brief(brief: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_resumption_brief(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_resumption_brief(
+    options: CeoOpsOptions,
+    *,
+    preflight_result: dict[str, Any] | None = None,
+    coherence_result: dict[str, Any] | None = None,
+    mission_result: dict[str, Any] | None = None,
+    strategy_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     root = ceo_dir(options, ceo_run_id)
     root.mkdir(parents=True, exist_ok=True)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
-    if not (root / "mission_score.yaml").exists():
-        run_ceo_mission_score(diagnostic_options)
-    if not (root / "strategy_capital_dashboard.yaml").exists():
-        run_ceo_strategy_capital_dashboard(diagnostic_options)
-    preflight_result = run_ceo_preflight_gate(diagnostic_options, enforce_memory_delta=True)
-    coherence_result = run_ceo_artifact_coherence(diagnostic_options)
+    mission_result = mission_result or (
+        None if (root / "mission_score.yaml").exists() else run_ceo_mission_score(diagnostic_options)
+    )
+    strategy_result = strategy_result or (
+        None
+        if (root / "strategy_capital_dashboard.yaml").exists()
+        else run_ceo_strategy_capital_dashboard(diagnostic_options)
+    )
+    preflight_result = preflight_result or run_ceo_preflight_gate(diagnostic_options, enforce_memory_delta=True)
+    coherence_result = coherence_result or run_ceo_artifact_coherence(diagnostic_options)
     latest_packet = root / "executive_decision_packet.md"
     brief = build_ceo_resumption_brief(
         ceo_run_id=ceo_run_id,
@@ -11300,9 +13793,37 @@ def _mtime_iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _run_index_status(*, stop_requested: bool, resume_status: str, preflight_status: str) -> str:
+def _run_index_status(
+    *,
+    stop_requested: bool,
+    resume_status: str,
+    preflight_status: str,
+    pending_approval_count: int = 0,
+    dispatch_safe_to_dispatch: Any = "",
+    dispatch_status: str = "",
+    artifact_coherence_status: str = "",
+    replay_status: str = "",
+    eval_suite_status: str = "",
+    trace_grade_status: str = "",
+    trace_manual_data_import_required: bool | str = "",
+    effective_operator_status: str = "",
+    manual_gate_active: bool = False,
+    runtime_blocked: bool = False,
+) -> str:
     if stop_requested:
         return "stopped"
+    if pending_approval_count > 0:
+        return "blocked"
+    if manual_gate_active or runtime_blocked or effective_operator_status in {"manual_gate_required", "runtime_blocked"}:
+        return "blocked"
+    if dispatch_safe_to_dispatch is False or dispatch_status == "dispatch_blocked":
+        return "blocked"
+    if artifact_coherence_status == "fail":
+        return "blocked"
+    if replay_status == "replay_gaps" or eval_suite_status == "fail":
+        return "blocked"
+    if trace_grade_status == "fail" or trace_manual_data_import_required is True:
+        return "blocked"
     if resume_status.startswith("blocked_") or preflight_status == "blocked":
         return "blocked"
     if resume_status == "safe_for_one_bound_action":
@@ -11328,7 +13849,18 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
         blocker_stack = _load_yaml_if_exists(run_dir / "blocker_stack.yaml")
         incident_register = _load_yaml_if_exists(run_dir / "operating_incident_register.yaml")
         repair_plan = _load_yaml_if_exists(run_dir / "repair_plan.yaml")
+        repair_apply = _load_yaml_if_exists(run_dir / "repair_apply.yaml")
+        action_board = _load_yaml_if_exists(run_dir / "action_board.yaml")
         operator_brief = _load_yaml_if_exists(run_dir / "operator_brief.yaml")
+        decision_quality = _load_yaml_if_exists(run_dir / "decision_quality.yaml")
+        replay = _load_yaml_if_exists(run_dir / "ceo_replay.yaml")
+        artifact_coherence = _load_yaml_if_exists(run_dir / "artifact_coherence.yaml")
+        trace_grade = _load_yaml_if_exists(run_dir / "trace_grade.yaml")
+        eval_suite = _load_yaml_if_exists(run_dir / "ceo_eval_suite.yaml")
+        approval_queue = _load_yaml_if_exists(run_dir / "approval_queue.yaml")
+        approval_status = _load_yaml_if_exists(run_dir / "approval_status.yaml")
+        role_queue = _load_yaml_if_exists(run_dir / "role_task_queue.yaml")
+        role_result_validation = _load_yaml_if_exists(run_dir / "role_result_validation.yaml")
         mission = _load_yaml_if_exists(run_dir / "mission_score.yaml")
         strategy = _load_yaml_if_exists(run_dir / "strategy_capital_dashboard.yaml")
         lab_run_id = str(
@@ -11340,7 +13872,27 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
         stop_requested = (run_dir / "stop.request").exists() or (options.lab_ops_runtime_root / lab_run_id / "stop.request").exists()
         resume_status = str(resumption.get("resume_status") or "")
         preflight_status = str(preflight.get("status") or "")
+        pending_approval_count = int(approval_queue.get("pending_count", approval_status.get("pending_count", 0)) or 0)
+        approval_top_pending_item = (approval_queue.get("pending_items", []) or [{}])[0]
         latest_mtime = _latest_tree_mtime(run_dir)
+        artifact_coherence_top_issue = (artifact_coherence.get("issues", []) or [{}])[0] if artifact_coherence.get("issues") else {}
+        effective_operator = _effective_operator_status(
+            action_board=action_board,
+            operator_brief=operator_brief,
+            decision_quality=decision_quality,
+        )
+        live_stop_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {run_id}"
+        if stop_requested:
+            resume_status = "blocked_stop_requested"
+            effective_operator = {
+                **effective_operator,
+                "effective_operator_status": "manual_gate_required",
+                "manual_gate_active": True,
+                "runtime_blocked": True,
+                "runtime_block_reason": "manual_gate_required:blocker:stop_requested",
+                "effective_runtime_action": "blocker:stop_requested",
+                "runtime_authority": "manual_gate_required",
+            }
         rows.append(
             {
                 "run_id": run_id,
@@ -11349,6 +13901,17 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
                     stop_requested=stop_requested,
                     resume_status=resume_status,
                     preflight_status=preflight_status,
+                    pending_approval_count=pending_approval_count,
+                    dispatch_safe_to_dispatch=False if stop_requested else dispatch_receipt.get("safe_to_dispatch", ""),
+                    dispatch_status="dispatch_blocked" if stop_requested else str(dispatch_receipt.get("status", "")),
+                    artifact_coherence_status=str(artifact_coherence.get("status", "")),
+                    replay_status=str(replay.get("status", "")),
+                    eval_suite_status=str(eval_suite.get("status", "")),
+                    trace_grade_status=str(trace_grade.get("verdict", "")),
+                    trace_manual_data_import_required=_trace_grade_manual_data_import_required(trace_grade),
+                    effective_operator_status=str(effective_operator.get("effective_operator_status", "")),
+                    manual_gate_active=effective_operator.get("manual_gate_active") is True,
+                    runtime_blocked=effective_operator.get("runtime_blocked") is True,
                 ),
                 "resume_status": resume_status or "missing_resumption_brief",
                 "preflight_status": preflight_status or "missing_preflight",
@@ -11357,18 +13920,138 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
                     for item in preflight.get("blockers", []) or []
                     if item.get("blocker")
                 ],
-                "dispatch_receipt_status": dispatch_receipt.get("status", "missing_dispatch_receipt"),
-                "dispatch_safe_to_dispatch": dispatch_receipt.get("safe_to_dispatch", ""),
-                "dispatch_reason": dispatch_receipt.get("reason", ""),
+                "dispatch_receipt_status": "dispatch_blocked" if stop_requested else dispatch_receipt.get("status", "missing_dispatch_receipt"),
+                "dispatch_safe_to_dispatch": False if stop_requested else dispatch_receipt.get("safe_to_dispatch", ""),
+                "dispatch_reason": (
+                    "live stop request/manual gate overrides reused safe artifacts"
+                    if stop_requested
+                    else dispatch_receipt.get("reason", "")
+                ),
+                "trace_grade_status": trace_grade.get("verdict", "missing_trace_grade"),
+                "trace_grade_score": trace_grade.get("score", ""),
+                "trace_grade_recommended_next_action": trace_grade.get("recommended_next_action", ""),
+                "trace_grade_issues": trace_grade.get("issues", []),
+                "trace_grade_manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
                 "top_blocker": blocker_stack.get("top_blocker", ""),
                 "incident_count": incident_register.get("incident_count", ""),
                 "repair_plan_status": repair_plan.get("status", "missing_repair_plan"),
                 "top_repair": repair_plan.get("top_repair", ""),
                 "top_repair_kind": repair_plan.get("top_repair_kind", ""),
                 "repair_next_command": repair_plan.get("next_command", ""),
-                "operator_brief_status": operator_brief.get("status", "missing_operator_brief"),
-                "operator_brief_summary": operator_brief.get("plain_english_summary", ""),
-                "operator_brief_next_action": operator_brief.get("recommended_next_action", ""),
+                "repair_apply_status": repair_apply.get("status", "missing_repair_apply"),
+                "repair_apply_key": repair_apply.get("repair_key", ""),
+                "repair_apply_executed": repair_apply.get("action_executed", ""),
+                "repair_apply_closed": repair_apply.get("repair_closed", ""),
+                "effective_operator_status": effective_operator.get("effective_operator_status", ""),
+                "manual_gate_active": effective_operator.get("manual_gate_active", ""),
+                "effective_operator_runtime_block_reason": effective_operator.get("runtime_block_reason", ""),
+                "action_board_status": "manual_gate_required" if stop_requested else action_board.get("status", "missing_action_board"),
+                "operator_brief_status": "waiting_on_manual_gate" if stop_requested else operator_brief.get("status", "missing_operator_brief"),
+                "operator_brief_summary": (
+                    "CEO mode is stopped at a manual gate. It should not take another autonomous action."
+                    if stop_requested
+                    else operator_brief.get("plain_english_summary", "")
+                ),
+                "operator_brief_next_action": live_stop_handoff_command if stop_requested else operator_brief.get("recommended_next_action", ""),
+                "decision_quality_status": decision_quality.get("status", "missing_decision_quality"),
+                "decision_quality_effective_runtime_action": (
+                    "blocker:stop_requested" if stop_requested else decision_quality.get("effective_runtime_action", "")
+                ),
+                "decision_quality_effective_runtime_command_kind": (
+                    "manual_gate" if stop_requested else decision_quality.get("effective_runtime_command_kind", "")
+                ),
+                "decision_quality_effective_runtime_can_execute_now": (
+                    False if stop_requested else decision_quality.get("effective_runtime_can_execute_now", "")
+                ),
+                "decision_quality_runtime_blocked": True if stop_requested else decision_quality.get("runtime_blocked", ""),
+                "decision_quality_runtime_block_reason": (
+                    "manual_gate_required:blocker:stop_requested"
+                    if stop_requested
+                    else decision_quality.get("runtime_block_reason", "")
+                ),
+                "decision_quality_selected_action": decision_quality.get("selected_action", ""),
+                "decision_quality_selected_strategic_route_advisory": decision_quality.get("selected_strategic_route_advisory", ""),
+                "decision_quality_confidence": decision_quality.get("confidence", ""),
+                "decision_quality_runtime_authority": (
+                    "manual_gate_required" if stop_requested else decision_quality.get("runtime_authority_status", "")
+                ),
+                "decision_quality_executable_next_action": (
+                    "blocker:stop_requested" if stop_requested else decision_quality.get("executable_next_action", "")
+                ),
+                "decision_quality_executable_command_kind": (
+                    "manual_gate" if stop_requested else decision_quality.get("executable_next_command_kind", "")
+                ),
+                "decision_quality_runtime_authorized_strategic_route": decision_quality.get("runtime_authorized_strategic_route", ""),
+                "decision_quality_executable_can_execute_now": False if stop_requested else decision_quality.get("executable_can_execute_now", ""),
+                "decision_quality_selected_action_is_executable_now": (
+                    False if stop_requested else decision_quality.get("selected_action_is_executable_now", "")
+                ),
+                "decision_quality_selected_action_blocked_by": (
+                    "manual_gate_required:blocker:stop_requested"
+                    if stop_requested
+                    else decision_quality.get("selected_action_blocked_by", "")
+                ),
+                "replay_status": replay.get("status", "missing_replay"),
+                "replay_issue_count": len(replay.get("issues", []) or []),
+                "operator_step_status": replay.get("operator_step_status", "missing_operator_step"),
+                "operator_step_count": replay.get("operator_step_count", ""),
+                "eval_suite_status": eval_suite.get("status", "missing_eval_suite"),
+                "eval_suite_score": eval_suite.get("score", ""),
+                "nine_nine_readiness": (eval_suite.get("nine_nine_readiness", {}) or {}).get("status", ""),
+                "nine_nine_blocking_case_count": len(
+                    ((eval_suite.get("nine_nine_readiness", {}) or {}).get("blocking_case_ids", []) or [])
+                ),
+                "artifact_coherence_status": artifact_coherence.get("status", "missing_artifact_coherence"),
+                "artifact_coherence_issue_count": artifact_coherence.get("issue_count", ""),
+                "artifact_coherence_top_issue": artifact_coherence_top_issue.get("artifact", ""),
+                "artifact_coherence_top_issue_types": artifact_coherence_top_issue.get("issues", []),
+                "artifact_coherence_top_issue_severity": artifact_coherence_top_issue.get(
+                    "severity",
+                    "unknown" if artifact_coherence_top_issue else "",
+                ),
+                "approval_queue_status": approval_queue.get("status", approval_status.get("status", "missing_approval_queue")),
+                "approval_pending_count": approval_queue.get("pending_count", approval_status.get("pending_count", "")),
+                "approval_top_pending_id": approval_queue.get("top_pending_approval_id", ""),
+                "approval_top_pending_kind": approval_top_pending_item.get("kind", ""),
+                "approval_top_pending_reason": approval_top_pending_item.get("reason", ""),
+                "approval_top_pending_source": approval_top_pending_item.get("source_artifact", ""),
+                "approval_top_pending_required_user_decision": approval_top_pending_item.get("required_user_decision", ""),
+                "approval_top_pending_authority": approval_top_pending_item.get("approval_authority", approval_top_pending_item.get("authority", "")),
+                "approval_top_pending_fingerprint": approval_top_pending_item.get("approval_item_fingerprint", ""),
+                "approval_record_command": approval_queue.get("top_pending_approval_record_command", ""),
+                "approval_apply_command": approval_queue.get("top_pending_approval_apply_command", ""),
+                "role_queue_status": role_queue.get("status", "missing_role_task_queue"),
+                "role_pending_task_count": role_queue.get("pending_task_count", ""),
+                "role_pending_manual_task_count": role_queue.get("pending_manual_task_count", ""),
+                "role_pending_autonomous_task_count": role_queue.get("pending_autonomous_task_count", ""),
+                "role_blocked_task_count": role_queue.get("blocked_task_count", ""),
+                "role_completed_task_count": role_queue.get("completed_task_count", ""),
+                "role_top_pending_task_id": role_queue.get("top_pending_task_id", ""),
+                "role_top_pending_role_id": role_queue.get("top_pending_role_id", ""),
+                "role_top_pending_owner_command": role_queue.get("top_pending_owner_command", ""),
+                "role_top_pending_result_resolution_mode": role_queue.get("top_pending_result_resolution_mode", ""),
+                "role_top_pending_requires_manual_gate": role_queue.get("top_pending_requires_manual_gate", ""),
+                "role_top_pending_closure_command": role_queue.get("top_pending_closure_command", ""),
+                "role_top_autonomous_pending_task_id": role_queue.get("top_autonomous_pending_task_id", ""),
+                "role_top_autonomous_pending_role_id": role_queue.get("top_autonomous_pending_role_id", ""),
+                "role_top_autonomous_pending_packet_path": role_queue.get("top_autonomous_pending_packet_path", ""),
+                "role_top_autonomous_next_result_command": role_queue.get("top_autonomous_next_role_result_command", ""),
+                "role_top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+                "role_top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+                "role_top_blocked_packet_path": role_queue.get("top_blocked_packet_path", ""),
+                "role_top_blocked_result_resolution_mode": role_queue.get("top_blocked_result_resolution_mode", ""),
+                "role_top_blocked_validation_status": role_queue.get("top_blocked_validation_status", ""),
+                "role_top_blocked_closure_command": _ceo_role_queue_top_blocked_closure_command(
+                    ceo_run_id=run_id,
+                    role_queue=role_queue,
+                ),
+                "role_top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+                "role_top_blocked_result_path": role_queue.get("top_blocked_result_path", ""),
+                "role_top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+                "role_top_blocked_finding": role_queue.get("top_blocked_finding", ""),
+                "role_result_validation_status": role_result_validation.get("status", "missing_role_result_validation"),
+                "role_result_validation_task": role_result_validation.get("task_id", ""),
+                "role_result_validation_issues": role_result_validation.get("issues", []),
                 "stop_requested": stop_requested,
                 "latest_decision_packet_exists": (run_dir / "executive_decision_packet.md").exists(),
                 "heartbeat_continue_recommended": heartbeat.get("continue_recommended", ""),
@@ -11376,9 +14059,13 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
                 "mission_score": mission.get("overall_mission_score", ""),
                 "lowest_mission_dimension": mission.get("lowest_dimension", ""),
                 "strategy_capital_bucket": strategy.get("selected_capital_bucket", ""),
-                "next_command": resumption.get(
-                    "next_command",
-                    f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {run_id}",
+                "next_command": (
+                    live_stop_handoff_command
+                    if stop_requested
+                    else resumption.get(
+                        "next_command",
+                        f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {run_id}",
+                    )
                 ),
                 "last_modified": _mtime_iso(latest_mtime),
                 "production_effect": "none",
@@ -11427,15 +14114,104 @@ def render_ceo_run_index(index: dict[str, Any]) -> str:
             f"{row.get('run_id')} status={row.get('status')} "
             f"resume={row.get('resume_status')} preflight={row.get('preflight_status')} "
             f"dispatch={row.get('dispatch_receipt_status')} safe={dispatch_safe} "
+            f"trace={row.get('trace_grade_status') or 'missing_trace_grade'} "
+            f"trace_score={row.get('trace_grade_score') if row.get('trace_grade_score') != '' else 'n/a'} "
+            f"trace_next={row.get('trace_grade_recommended_next_action') or 'none'} "
+            f"manual_data_import_required={row.get('trace_grade_manual_data_import_required') if row.get('trace_grade_manual_data_import_required') != '' else 'n/a'} "
             f"top={row.get('top_blocker') or 'none'} incidents={incident_count} "
             f"repair={repair_status} top_repair={row.get('top_repair') or 'none'} "
             f"repair_kind={row.get('top_repair_kind') or 'none'} "
+            f"repair_apply={row.get('repair_apply_status') or 'missing_repair_apply'} "
+            f"repair_closed={row.get('repair_apply_closed') if row.get('repair_apply_closed') != '' else 'n/a'} "
+            f"effective_operator={row.get('effective_operator_status') or 'unknown_or_diagnostic'} "
+            f"manual_gate_active={row.get('manual_gate_active') if row.get('manual_gate_active') != '' else 'n/a'} "
             f"brief={row.get('operator_brief_status') or 'missing_operator_brief'} "
+            f"effective_runtime={row.get('decision_quality_effective_runtime_action') or 'none'} "
+            f"runtime_blocked={row.get('decision_quality_runtime_blocked') if row.get('decision_quality_runtime_blocked') != '' else 'n/a'} "
+            f"decision={row.get('decision_quality_selected_action') or 'none'} "
+            f"decision_advisory={row.get('decision_quality_selected_strategic_route_advisory') or 'none'} "
+            f"decision_authority={row.get('decision_quality_runtime_authority') or 'missing_decision_quality'} "
+            f"decision_exec={row.get('decision_quality_executable_next_action') or 'none'} "
+            f"decision_can_execute={row.get('decision_quality_executable_can_execute_now') if row.get('decision_quality_executable_can_execute_now') != '' else 'n/a'} "
+            f"decision_blocked_by={row.get('decision_quality_selected_action_blocked_by') or 'none'} "
+            f"replay={row.get('replay_status') or 'missing_replay'} "
+            f"replay_issues={row.get('replay_issue_count')} "
+            f"operator_step={row.get('operator_step_status') or 'missing_operator_step'} "
+            f"operator_steps={row.get('operator_step_count') if row.get('operator_step_count') != '' else 'n/a'} "
+            f"eval={row.get('eval_suite_status') or 'missing_eval_suite'} "
+            f"eval_score={row.get('eval_suite_score') if row.get('eval_suite_score') != '' else 'n/a'} "
+            f"readiness={row.get('nine_nine_readiness') or 'missing_readiness'} "
+            f"readiness_blockers={row.get('nine_nine_blocking_case_count')} "
+            f"coherence={row.get('artifact_coherence_status') or 'missing_artifact_coherence'} "
+            f"coherence_issues={row.get('artifact_coherence_issue_count') if row.get('artifact_coherence_issue_count') != '' else 'n/a'} "
+            f"approval={row.get('approval_queue_status') or 'missing_approval_queue'} "
+            f"approval_pending={row.get('approval_pending_count') if row.get('approval_pending_count') != '' else 'n/a'} "
+            f"role_queue={row.get('role_queue_status') or 'missing_role_task_queue'} "
+            f"role_pending={row.get('role_pending_task_count') if row.get('role_pending_task_count') != '' else 'n/a'} "
+            f"role_completed={row.get('role_completed_task_count') if row.get('role_completed_task_count') != '' else 'n/a'} "
+            f"role_blocked={row.get('role_blocked_task_count') if row.get('role_blocked_task_count') != '' else 'n/a'} "
+            f"role_validation={row.get('role_result_validation_status') or 'missing_role_result_validation'} "
             f"resumption_next=`{row.get('next_command')}` "
             f"repair_next=`{row.get('repair_next_command') or ''}`"
         )
         if row.get("operator_brief_summary"):
             lines.append(f"  - operator_summary={row.get('operator_brief_summary')}")
+        if row.get("decision_quality_runtime_authorized_strategic_route"):
+            lines.append(
+                "  - "
+                f"decision_runtime_route={row.get('decision_quality_runtime_authorized_strategic_route')}"
+            )
+        if row.get("trace_grade_issues"):
+            lines.append(f"  - trace_issues={row.get('trace_grade_issues')}")
+        if row.get("repair_apply_key"):
+            lines.append(f"  - repair_apply_key={row.get('repair_apply_key')}")
+        if row.get("artifact_coherence_top_issue"):
+            lines.append(
+                "  - "
+                f"artifact_coherence_top_issue={row.get('artifact_coherence_top_issue')} "
+                f"severity={row.get('artifact_coherence_top_issue_severity') or 'unknown'} "
+                f"types={row.get('artifact_coherence_top_issue_types') or []}"
+            )
+        if row.get("approval_top_pending_id"):
+            lines.append(
+                "  - "
+                f"top_approval={row.get('approval_top_pending_id')} "
+                f"kind={row.get('approval_top_pending_kind') or 'none'} "
+                f"authority={row.get('approval_top_pending_authority') or 'none'} "
+                f"reason={row.get('approval_top_pending_reason') or 'none'} "
+                f"source={row.get('approval_top_pending_source') or 'none'} "
+                f"fingerprint={row.get('approval_top_pending_fingerprint') or 'none'} "
+                f"record=`{row.get('approval_record_command') or ''}` "
+                f"apply=`{row.get('approval_apply_command') or ''}`"
+            )
+        if row.get("role_result_validation_issues"):
+            lines.append(f"  - role_validation_issues={row.get('role_result_validation_issues')}")
+        if row.get("role_top_pending_task_id"):
+            lines.append(
+                "  - "
+                f"top_role_task={row.get('role_top_pending_task_id')} "
+                f"role={row.get('role_top_pending_role_id')} "
+                f"manual={row.get('role_pending_manual_task_count') if row.get('role_pending_manual_task_count') != '' else 'n/a'} "
+                f"autonomous={row.get('role_pending_autonomous_task_count') if row.get('role_pending_autonomous_task_count') != '' else 'n/a'} "
+                f"owner={row.get('role_top_pending_owner_command')}"
+            )
+        if row.get("role_top_blocked_task_id"):
+            lines.append(
+                "  - "
+                f"top_blocked_role_task={row.get('role_top_blocked_task_id')} "
+                f"role={row.get('role_top_blocked_role_id')} "
+                f"mode={row.get('role_top_blocked_result_resolution_mode') or 'none'} "
+                f"validation={row.get('role_top_blocked_validation_status') or 'none'} "
+                f"closure={row.get('role_top_blocked_closure_command') or 'none'}"
+            )
+            lines.append(
+                "  - "
+                f"top_blocked_role_review={row.get('role_top_blocked_review_status') or 'none'} "
+                f"next={row.get('role_top_blocked_next_action') or 'none'} "
+                f"result={row.get('role_top_blocked_result_path') or 'none'}"
+            )
+            if row.get("role_top_blocked_finding"):
+                lines.append(f"  - top_blocked_role_finding={row.get('role_top_blocked_finding')}")
     if not index.get("runs"):
         lines.append("- none")
     lines.extend(["", str(index.get("guardrail")), "Production effect: none.", ""])
@@ -11552,7 +14328,10 @@ def build_ceo_blocker_stack(
             evidence=f"debt_count={debt_count}",
             next_action=str(evidence_debt_register.get("next_action", "work evidence debt register")),
         )
-    next_command = resumption_brief.get("next_command") or f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {ceo_run_id}"
+    if stop_requested:
+        next_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
+    else:
+        next_command = resumption_brief.get("next_command") or f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {ceo_run_id}"
     return {
         "model": CEO_BLOCKER_STACK_MODEL,
         "generated_at": utc_now_iso(),
@@ -11561,6 +14340,7 @@ def build_ceo_blocker_stack(
         "status": "blocked" if blockers else "clear_for_one_bound_action",
         "blocker_count": len(blockers),
         "top_blocker": blockers[0]["blocker"] if blockers else "",
+        "top_blocker_evidence": blockers[0]["evidence"] if blockers else "",
         "blockers": blockers,
         "next_command": next_command,
         "guardrail": "Blocker stack orders CEO operating blockers. It does not clear blockers, approve promotions, or change production behavior.",
@@ -11579,6 +14359,7 @@ def render_ceo_blocker_stack(stack: dict[str, Any]) -> str:
         f"Lab run: {stack.get('lab_run_id')}",
         f"Status: {stack.get('status')}",
         f"Top blocker: {stack.get('top_blocker') or 'none'}",
+        f"Top blocker evidence: {stack.get('top_blocker_evidence') or 'none'}",
         f"Next command: `{stack.get('next_command')}`",
         "",
         "## Ordered Blockers",
@@ -11589,6 +14370,7 @@ def render_ceo_blocker_stack(stack: dict[str, Any]) -> str:
             "- "
             f"{item.get('rank')}. {item.get('blocker')} "
             f"authority={item.get('authority')} "
+            f"evidence={item.get('evidence')} "
             f"next={item.get('next_action')}"
         )
     if not stack.get("blockers"):
@@ -11597,14 +14379,31 @@ def render_ceo_blocker_stack(stack: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_blocker_stack(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_blocker_stack(
+    options: CeoOpsOptions,
+    *,
+    resumption_result: dict[str, Any] | None = None,
+    dispatch_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
     root = ceo_dir(options, ceo_run_id)
     root.mkdir(parents=True, exist_ok=True)
-    resumption_result = run_ceo_resumption_brief(diagnostic_options)
-    dispatch_result = run_ceo_dispatch_receipt(diagnostic_options)
+    reused_resumption_brief = _ceo_reused_artifact_payload(
+        resumption_result,
+        "brief",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    reused_dispatch_receipt = _ceo_reused_artifact_payload(
+        dispatch_result,
+        "receipt",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    resumption_result = resumption_result if reused_resumption_brief is not None else run_ceo_resumption_brief(diagnostic_options)
+    dispatch_result = dispatch_result if reused_dispatch_receipt is not None else run_ceo_dispatch_receipt(diagnostic_options)
     replay = _load_yaml_if_exists(root / "ceo_replay.yaml")
     eval_suite = _load_yaml_if_exists(root / "ceo_eval_suite.yaml")
     approval_queue = _load_yaml_if_exists(root / "approval_queue.yaml")
@@ -11869,6 +14668,77 @@ def _classify_repair_command(command: str, repair_key: str) -> dict[str, Any]:
     }
 
 
+def _implementation_repair_playbook(
+    *,
+    repair_key: str,
+    category: str,
+    owner_command: str,
+    closure_condition: str,
+    evidence: str,
+) -> dict[str, Any]:
+    text = f"{repair_key} {category} {owner_command} {closure_condition}".lower()
+    target_files = ["src/riskflow/ceo_ops.py", "tests/test_ceo_ops.py"]
+    target_functions: list[str] = []
+    test_selectors: list[str] = []
+    summary = "Repair the symbolic CEO operating issue with a code or artifact-policy change."
+
+    if "repair_apply" in text or "repair-plan snapshot" in text or "repair_plan_snapshot" in text:
+        summary = "Repair repair-apply replayability so each repair attempt has immutable before/after repair-plan snapshots."
+        target_functions = ["run_ceo_repair_apply", "_build_repair_apply_checks", "build_ceo_replay", "build_ceo_eval_suite"]
+        test_selectors = ["repair_apply", "replay", "eval_suite"]
+    elif "action_contract_decision_mismatch" in text or "missing_action_dispatch_receipt_ref" in text:
+        summary = "Repair latest-action trust alignment so the action contract and immutable dispatch receipt snapshot back the binding action."
+        target_functions = [
+            "run_ceo_execute_next",
+            "_write_ceo_action_contract",
+            "_write_ceo_dispatch_receipt",
+            "build_ceo_artifact_coherence",
+            "build_ceo_eval_suite",
+        ]
+        test_selectors = ["artifact_coherence", "dispatch_receipt", "execute_next", "eval_suite"]
+    elif "role_results_close_the_role_queue" in text or "role" in text:
+        summary = "Repair specialist role queue closure so pending work and invalid completions cannot look closed."
+        target_functions = ["build_ceo_role_task_queue", "build_ceo_eval_suite", "run_ceo_role_result"]
+        test_selectors = ["role_queue", "role_result", "eval_suite"]
+    elif "action_contract_matches_latest_action" in text or "dispatch_receipt_backs_latest_action" in text or "dispatch" in text:
+        summary = "Repair action-contract and dispatch-receipt coherence for the latest binding action."
+        target_functions = ["run_ceo_execute_next", "_write_ceo_dispatch_receipt", "build_ceo_eval_suite"]
+        test_selectors = ["dispatch_receipt", "execute_next", "eval_suite"]
+    elif "state_machine_legal_transitions" in text or "illegal_action_transition" in text or "replay" in text:
+        summary = "Repair CEO replay state-transition policy without weakening current receipt-backed safety."
+        target_functions = ["_build_ceo_state_transition_checks", "build_ceo_replay", "build_ceo_eval_suite"]
+        test_selectors = ["replay", "eval_suite"]
+    elif "artifact_coherence" in text or "stale" in text:
+        summary = "Repair stale or mismatched CEO trust artifacts before a fresh session can rely on them."
+        target_functions = ["build_ceo_artifact_coherence", "run_ceo_artifact_coherence", "build_ceo_resumption_brief"]
+        test_selectors = ["artifact_coherence", "resumption_brief"]
+    elif "guardrail" in text or "production_effect" in text or "product_language" in text:
+        summary = "Repair CEO guardrail violations so generated artifacts cannot claim production authority."
+        target_functions = ["build_ceo_guardrail_audit", "build_ceo_preflight_gate"]
+        test_selectors = ["guardrail", "preflight"]
+    elif "preflight" in text:
+        summary = "Repair preflight blocker routing while preserving stop, approval, replay, eval, memory, and guardrail authority."
+        target_functions = ["build_ceo_preflight_gate", "run_ceo_preflight_gate", "run_ceo_execute_next"]
+        test_selectors = ["preflight", "execute_next"]
+
+    return {
+        "playbook_id": _debt_slug(f"{category}_{owner_command}_{repair_key}")[:96],
+        "summary": summary,
+        "target_files": target_files,
+        "target_functions": target_functions or ["build_ceo_repair_plan", "build_ceo_operating_incident_register"],
+        "test_selectors": test_selectors or ["repair_plan", "incident_register"],
+        "acceptance_criteria": [
+            closure_condition,
+            "add or update focused tests for the named repair",
+            "run the focused tests and the CEO ops suite before claiming closure",
+            "preserve production_effect: none and do not change production formulas",
+        ],
+        "evidence": evidence,
+        "non_executable_by_repair_apply": True,
+        "production_effect": "none",
+    }
+
+
 def _append_repair_item(
     items: list[dict[str, Any]],
     seen: set[str],
@@ -11887,6 +14757,17 @@ def _append_repair_item(
     seen.add(repair_key)
     command = exact_command or owner_command
     command_contract = _classify_repair_command(command, repair_key)
+    implementation_playbook = (
+        _implementation_repair_playbook(
+            repair_key=repair_key,
+            category=category,
+            owner_command=owner_command,
+            closure_condition=closure_condition,
+            evidence=evidence,
+        )
+        if command_contract.get("needs_implementation")
+        else {}
+    )
     items.append(
         {
             "rank": len(items) + 1,
@@ -11900,8 +14781,16 @@ def _append_repair_item(
             "closure_condition": closure_condition,
             "evidence": evidence,
             **command_contract,
+            "implementation_playbook": implementation_playbook,
             "production_effect": "none",
         }
+    )
+
+
+def _repair_apply_command(ceo_run_id: str, repair_key: str) -> str:
+    return (
+        "PYTHONPATH=src python3 -m riskflow ceo repair-apply "
+        f"--run-id {ceo_run_id} --repair-key {repair_key} --apply"
     )
 
 
@@ -11958,6 +14847,7 @@ def build_ceo_repair_plan(
     autonomous_repair_count = sum(1 for item in items if item.get("command_kind") == "runnable_cli")
     diagnostic_refresh_count = sum(1 for item in items if item.get("command_kind") == "diagnostic_refresh")
     implementation_required = any(bool(item.get("needs_implementation")) for item in items)
+    implementation_playbook_count = sum(1 for item in items if item.get("implementation_playbook"))
     if not items:
         status = "no_repairs_required"
         next_command = f"PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id {ceo_run_id} --apply"
@@ -11969,7 +14859,7 @@ def build_ceo_repair_plan(
         next_command = ""
     else:
         status = "repair_plan_ready"
-        next_command = str(top.get("recommended_command", ""))
+        next_command = _repair_apply_command(ceo_run_id, str(top.get("repair_key", "")))
     return {
         "model": CEO_REPAIR_PLAN_MODEL,
         "generated_at": utc_now_iso(),
@@ -11981,6 +14871,7 @@ def build_ceo_repair_plan(
         "runnable_repair_count": autonomous_repair_count,
         "diagnostic_refresh_count": diagnostic_refresh_count,
         "implementation_required": implementation_required,
+        "implementation_playbook_count": implementation_playbook_count,
         "manual_gate_required": manual_gate_required,
         "top_repair": top.get("repair_key", ""),
         "top_repair_kind": top.get("command_kind", ""),
@@ -12004,6 +14895,7 @@ def render_ceo_repair_plan(plan: dict[str, Any]) -> str:
         f"Repairs: {plan.get('repair_count')}",
         f"Runnable repairs: {plan.get('runnable_repair_count', plan.get('autonomous_repair_count'))}",
         f"Diagnostic refreshes: {plan.get('diagnostic_refresh_count', 0)}",
+        f"Implementation playbooks: {plan.get('implementation_playbook_count', 0)}",
         f"Manual gate required: {plan.get('manual_gate_required')}",
         f"Top repair: {plan.get('top_repair') or 'none'}",
         f"Top repair kind: {plan.get('top_repair_kind') or 'none'}",
@@ -12013,6 +14905,7 @@ def render_ceo_repair_plan(plan: dict[str, Any]) -> str:
         "",
     ]
     for item in plan.get("repair_items", []) or []:
+        playbook = item.get("implementation_playbook", {}) or {}
         lines.append(
             "- "
             f"{item.get('rank')}. {item.get('repair_key')} "
@@ -12020,20 +14913,32 @@ def render_ceo_repair_plan(plan: dict[str, Any]) -> str:
             f"auto={item.get('can_execute_autonomously')} "
             f"owner=`{item.get('owner_command')}` close=`{item.get('closure_condition')}`"
         )
+        if playbook:
+            lines.append(
+                "  - "
+                f"playbook={playbook.get('playbook_id')} "
+                f"targets={playbook.get('target_functions')} "
+                f"tests={playbook.get('test_selectors')}"
+            )
     if not plan.get("repair_items"):
         lines.append("- none")
     lines.extend(["", str(plan.get("guardrail")), "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_repair_plan(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_repair_plan(
+    options: CeoOpsOptions,
+    *,
+    blocker_result: dict[str, Any] | None = None,
+    incident_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
     root = ceo_dir(options, ceo_run_id)
     root.mkdir(parents=True, exist_ok=True)
-    blocker_result = run_ceo_blocker_stack(diagnostic_options)
-    incident_result = run_ceo_operating_incident_register(diagnostic_options)
+    blocker_result = blocker_result or run_ceo_blocker_stack(diagnostic_options)
+    incident_result = incident_result or run_ceo_operating_incident_register(diagnostic_options)
     plan = build_ceo_repair_plan(
         ceo_run_id=ceo_run_id,
         lab_run_id=lab_run_id,
@@ -12057,6 +14962,262 @@ def run_ceo_repair_plan(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _find_repair_item(plan: dict[str, Any], repair_key: str) -> dict[str, Any] | None:
+    for item in plan.get("repair_items", []) or []:
+        if str(item.get("repair_key", "")) == repair_key:
+            return item
+    return None
+
+
+def _extract_ceo_repair_command(command: str) -> str:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return ""
+    expected_prefix = ["PYTHONPATH=src", "python3", "-m", "riskflow", "ceo"]
+    if tokens[: len(expected_prefix)] != expected_prefix or len(tokens) <= len(expected_prefix):
+        return ""
+    return tokens[len(expected_prefix)]
+
+
+def _run_allowed_ceo_repair_command(
+    *,
+    command: str,
+    options: CeoOpsOptions,
+    command_kind: str,
+) -> dict[str, Any]:
+    command_name = _extract_ceo_repair_command(command)
+    diagnostic_options = _with_ceo_context(options, context="repair_apply_diagnostic_refresh")
+    apply_options = replace(options, apply=True)
+    diagnostic_runners = {
+        "status": run_ceo_status,
+        "run-index": run_ceo_run_index,
+        "dispatch-receipt": run_ceo_dispatch_receipt,
+        "blocker-stack": run_ceo_blocker_stack,
+        "incident-register": run_ceo_operating_incident_register,
+        "repair-plan": run_ceo_repair_plan,
+        "artifact-coherence": run_ceo_artifact_coherence,
+        "resumption-brief": run_ceo_resumption_brief,
+        "replay": run_ceo_replay,
+        "eval-suite": run_ceo_eval_suite,
+        "eval-fixtures": run_ceo_eval_fixtures,
+        "guardrail-audit": run_ceo_guardrail_audit,
+        "preflight-gate": run_ceo_preflight_gate,
+        "action-board": run_ceo_action_board,
+        "decision-quality": run_ceo_decision_quality,
+        "operator-brief": run_ceo_operator_brief,
+        "executive-kpis": run_ceo_executive_kpis,
+        "mission-score": run_ceo_mission_score,
+        "strategy-capital-dashboard": run_ceo_strategy_capital_dashboard,
+    }
+    runnable_runners = {
+        "patch-research-infra": run_ceo_patch_research_infra,
+        "broaden-hypothesis-source": run_ceo_broaden_hypothesis_source,
+    }
+    if command_kind == "diagnostic_refresh" and command_name in diagnostic_runners:
+        result = diagnostic_runners[command_name](diagnostic_options)
+        return {"command_name": command_name, "result": result}
+    if command_kind == "runnable_cli" and command_name in runnable_runners:
+        result = runnable_runners[command_name](
+            _with_ceo_context(apply_options, context="bound_dispatch", action=command_name)
+        )
+        return {"command_name": command_name, "result": result}
+    raise ValueError(f"repair-apply refuses unsupported CEO command: {command_name or command}")
+
+
+def _repair_paths_from_result(result: dict[str, Any]) -> dict[str, str]:
+    paths = result.get("paths", {}) if isinstance(result, dict) else {}
+    return {str(key): str(value) for key, value in (paths or {}).items()}
+
+
+def render_ceo_repair_apply(apply_result: dict[str, Any]) -> str:
+    item = apply_result.get("repair_item", {}) or {}
+    lines = [
+        "# Riskflow CEO Repair Apply",
+        "",
+        f"Generated: {apply_result.get('generated_at')}",
+        f"Run: {apply_result.get('run_id')}",
+        f"Lab run: {apply_result.get('lab_run_id')}",
+        f"Status: {apply_result.get('status')}",
+        f"Repair key: {apply_result.get('repair_key')}",
+        f"Command kind: {apply_result.get('command_kind') or 'n/a'}",
+        f"Action attempted: {apply_result.get('action_attempted')}",
+        f"Action executed: {apply_result.get('action_executed')}",
+        f"Repair closed: {apply_result.get('repair_closed')}",
+        f"Reason: {apply_result.get('reason')}",
+        "",
+        "## Repair Item",
+        "",
+        f"- Source: {item.get('source') or 'n/a'}",
+        f"- Severity: {item.get('severity') or 'n/a'}",
+        f"- Command: `{apply_result.get('recommended_command') or ''}`",
+        f"- Closure: {item.get('closure_condition') or 'n/a'}",
+        "",
+        "## Before / After",
+        "",
+        f"- Before plan status: {apply_result.get('before_plan_status')}",
+        f"- Before top repair: {apply_result.get('before_top_repair') or 'none'}",
+        f"- After plan status: {apply_result.get('after_plan_status')}",
+        f"- After top repair: {apply_result.get('after_top_repair') or 'none'}",
+        f"- After repair kind: {apply_result.get('after_repair_kind') or 'cleared'}",
+        "",
+        "## Guardrails",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in apply_result.get("guardrails", []) or [])
+    lines.extend(["", "Production effect: none.", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_ceo_repair_apply(options: CeoOpsOptions, *, repair_key: str) -> dict[str, Any]:
+    if not options.apply:
+        raise ValueError("ceo repair-apply requires --apply")
+    if not repair_key:
+        raise ValueError("ceo repair-apply requires --repair-key")
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    diagnostic_options = _with_ceo_context(options, context="repair_apply")
+    generated_at = utc_now_iso()
+    apply_id = "".join(ch if ch.isalnum() else "_" for ch in generated_at).strip("_")
+    snapshot_dir = root / "repair_apply_plans"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    before_result = run_ceo_repair_plan(diagnostic_options)
+    before_plan = before_result["repair_plan"]
+    before_plan_snapshot = snapshot_dir / f"{apply_id}_before_repair_plan.yaml"
+    atomic_write_yaml(before_plan_snapshot, before_plan)
+    repair_item = _find_repair_item(before_plan, repair_key)
+    before_plan_status = str(before_plan.get("status", ""))
+    before_top_repair = str(before_plan.get("top_repair", ""))
+    command_kind = str((repair_item or {}).get("command_kind", ""))
+    recommended_command = str((repair_item or {}).get("recommended_command", ""))
+    command_result: dict[str, Any] | None = None
+    action_attempted = False
+    action_executed = False
+
+    if repair_item is None:
+        status = "blocked_unknown_repair"
+        reason = f"Repair key {repair_key} is not present in the refreshed repair plan."
+    elif repair_item.get("requires_manual_gate"):
+        status = "blocked_manual_gate"
+        reason = "Repair requires explicit user approval or stop-clear authority."
+    elif before_plan_status != "repair_plan_ready":
+        status = "blocked_repair_plan_not_ready"
+        reason = (
+            f"Refreshed repair plan status is {before_plan_status or 'unknown'}; "
+            "repair-apply only executes when the current plan is repair_plan_ready."
+        )
+    elif before_top_repair and before_top_repair != repair_key:
+        status = "blocked_not_top_repair"
+        reason = (
+            f"Repair key {repair_key} is not the refreshed top repair {before_top_repair}; "
+            "repair-apply refuses lower-priority work while a higher-priority repair is open."
+        )
+    elif repair_item.get("needs_implementation"):
+        status = "blocked_implementation_required"
+        reason = "Repair is a symbolic implementation task and cannot be executed as a CEO CLI command."
+    elif command_kind not in {"diagnostic_refresh", "runnable_cli"}:
+        status = "blocked_unsupported_kind"
+        reason = f"Repair kind {command_kind or 'unknown'} is not executable by repair-apply."
+    else:
+        action_attempted = True
+        try:
+            command_result = _run_allowed_ceo_repair_command(
+                command=recommended_command,
+                options=options,
+                command_kind=command_kind,
+            )
+            action_executed = True
+            status = "repair_command_executed"
+            reason = f"Executed allowlisted CEO {command_kind} command {command_result.get('command_name')}."
+        except ValueError as exc:
+            status = "blocked_unsupported_command"
+            reason = str(exc)
+
+    after_result = run_ceo_repair_plan(diagnostic_options)
+    after_plan = after_result["repair_plan"]
+    after_plan_snapshot = snapshot_dir / f"{apply_id}_after_repair_plan.yaml"
+    atomic_write_yaml(after_plan_snapshot, after_plan)
+    after_item = _find_repair_item(after_plan, repair_key)
+    after_kind = str((after_item or {}).get("command_kind", ""))
+    repair_closed = action_executed and (
+        after_item is None
+        or after_plan.get("status") == "no_repairs_required"
+    )
+    if action_executed and repair_closed:
+        status = "repair_closed"
+        reason = f"Repair key {repair_key} cleared after the allowlisted command."
+    elif action_executed and after_item is not None and bool(after_kind) and after_kind != command_kind:
+        status = "repair_reclassified_not_closed"
+        reason = f"Repair key {repair_key} remains open but changed kind from {command_kind} to {after_kind}."
+    elif action_executed and command_kind == "diagnostic_refresh":
+        status = "diagnostic_refreshed"
+        reason = "Diagnostic refresh completed. The repair remains open until the refreshed repair plan clears or changes the key."
+
+    apply_artifact = {
+        "model": CEO_REPAIR_APPLY_MODEL,
+        "generated_at": generated_at,
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": status,
+        "repair_key": repair_key,
+        "command_kind": command_kind,
+        "recommended_command": recommended_command,
+        "reason": reason,
+        "action_attempted": action_attempted,
+        "action_executed": action_executed,
+        "repair_closed": repair_closed,
+        "repair_item": repair_item or {},
+        "before_plan_status": before_plan.get("status", ""),
+        "before_top_repair": before_plan.get("top_repair", ""),
+        "after_plan_status": after_plan.get("status", ""),
+        "after_top_repair": after_plan.get("top_repair", ""),
+        "after_repair_kind": after_kind,
+        "command_name": (command_result or {}).get("command_name", ""),
+        "command_paths": _repair_paths_from_result((command_result or {}).get("result", {})),
+        "paths": {
+            "before_repair_plan": str(before_result["paths"]["repair_plan"]),
+            "after_repair_plan": str(after_result["paths"]["repair_plan"]),
+            "before_repair_plan_snapshot": str(before_plan_snapshot),
+            "after_repair_plan_snapshot": str(after_plan_snapshot),
+        },
+        "before_repair_plan_snapshot_sha256": _file_sha256(before_plan_snapshot),
+        "after_repair_plan_snapshot_sha256": _file_sha256(after_plan_snapshot),
+        "guardrails": [
+            "Repair-apply requires --apply and an exact repair key from a freshly generated repair plan.",
+            "It executes only allowlisted internal CEO functions; it never shells out to YAML command text.",
+            "It refuses manual gates, production approvals, stop clears, promotion authority, and symbolic implementation repairs.",
+            "Diagnostic refreshes do not count as closed unless the after-plan clears or changes the repair key.",
+        ],
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+    path = root / "repair_apply.yaml"
+    report_path = root / "repair_apply.md"
+    ledger_path = root / "repair_apply_ledger.jsonl"
+    atomic_write_yaml(path, apply_artifact)
+    atomic_write_text(report_path, render_ceo_repair_apply(apply_artifact))
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_json_safe(apply_artifact), sort_keys=True) + "\n")
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "repair_apply": apply_artifact,
+        "command_result": command_result or {},
+        "paths": {
+            "repair_apply": path,
+            "repair_apply_report": report_path,
+            "repair_apply_ledger": ledger_path,
+            "before_repair_plan": before_result["paths"]["repair_plan"],
+            "after_repair_plan": after_result["paths"]["repair_plan"],
+            "before_repair_plan_snapshot": before_plan_snapshot,
+            "after_repair_plan_snapshot": after_plan_snapshot,
+        },
+    }
+
+
 def _action_board_item(
     *,
     action_id: str,
@@ -12069,6 +15230,8 @@ def _action_board_item(
     diagnostic_only: bool = False,
     needs_implementation: bool = False,
     closure_condition: str = "",
+    authorized_strategic_route: str = "",
+    authorized_route_source: str = "",
 ) -> dict[str, Any]:
     return {
         "action_id": action_id,
@@ -12081,8 +15244,21 @@ def _action_board_item(
         "diagnostic_only": diagnostic_only,
         "needs_implementation": needs_implementation,
         "closure_condition": closure_condition,
+        "authorized_strategic_route": authorized_strategic_route,
+        "authorized_route_source": authorized_route_source,
         "production_effect": "none",
     }
+
+
+def _action_board_blocked_by_runtime_authority(item: dict[str, Any], reason: str) -> dict[str, Any]:
+    blocked = dict(item)
+    blocked["can_execute_now"] = False
+    blocked["blocked_by_runtime_authority"] = reason
+    blocked["runtime_blocked"] = True
+    blocked["rationale"] = (
+        f"{blocked.get('rationale', '')} Runtime authority currently blocks this action: {reason}."
+    ).strip()
+    return blocked
 
 
 def build_ceo_action_board(
@@ -12104,7 +15280,12 @@ def build_ceo_action_board(
     for item in repair_plan.get("repair_items", []) or []:
         repair_key = str(item.get("repair_key", "unknown_repair"))
         command_kind = str(item.get("command_kind", ""))
-        command = str(item.get("recommended_command", ""))
+        if item.get("requires_manual_gate") or item.get("needs_implementation"):
+            command = str(item.get("recommended_command", ""))
+        elif command_kind in {"runnable_cli", "diagnostic_refresh"}:
+            command = _repair_apply_command(ceo_run_id, repair_key)
+        else:
+            command = str(item.get("recommended_command", ""))
         board_item = _action_board_item(
             action_id=repair_key,
             source=str(item.get("source", "repair_plan")),
@@ -12141,6 +15322,8 @@ def build_ceo_action_board(
             can_execute_now=resumption_status == "safe_for_one_bound_action" and dispatch_safe,
             diagnostic_only=resumption_status != "safe_for_one_bound_action",
             closure_condition="regenerate resumption brief after the command completes",
+            authorized_strategic_route=str(resumption_brief.get("authorized_strategic_route", "")),
+            authorized_route_source=str(resumption_brief.get("authorized_route_source", "")),
         )
         if resumption_item["can_execute_now"]:
             runnable_repairs.append(resumption_item)
@@ -12148,6 +15331,12 @@ def build_ceo_action_board(
             diagnostic_refreshes.append(resumption_item)
         else:
             blocked_actions.append(resumption_item)
+
+    if manual_gates and runnable_repairs:
+        blocked_actions.extend(
+            _action_board_blocked_by_runtime_authority(item, "manual_gate_required") for item in runnable_repairs
+        )
+        runnable_repairs = []
 
     if manual_gates:
         status = "manual_gate_required"
@@ -12245,6 +15434,8 @@ def render_ceo_action_board(board: dict[str, Any]) -> str:
         f"- Needs implementation: {primary.get('needs_implementation')}",
         f"- Command: `{primary.get('command')}`",
         f"- Closure: {primary.get('closure_condition') or 'n/a'}",
+        f"- Authorized strategic route: {primary.get('authorized_strategic_route') or 'none'}",
+        f"- Authorized route source: {primary.get('authorized_route_source') or 'none'}",
         f"- Rationale: {primary.get('rationale') or 'n/a'}",
         "",
         "## Queue Counts",
@@ -12269,7 +15460,8 @@ def render_ceo_action_board(board: dict[str, Any]) -> str:
             lines.append(
                 "- "
                 f"{item.get('action_id')} kind={item.get('command_kind')} "
-                f"can_execute={item.get('can_execute_now')} command=`{item.get('command')}`"
+                f"can_execute={item.get('can_execute_now')} command=`{item.get('command')}` "
+                f"route={item.get('authorized_strategic_route') or 'none'}"
             )
         lines.append("")
     lines.extend(["## Trust Snapshot", ""])
@@ -12282,21 +15474,60 @@ def render_ceo_action_board(board: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_action_board(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_action_board(
+    options: CeoOpsOptions,
+    *,
+    resumption_result: dict[str, Any] | None = None,
+    repair_result: dict[str, Any] | None = None,
+    dispatch_result: dict[str, Any] | None = None,
+    kpi_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     root = ceo_dir(options, ceo_run_id)
     root.mkdir(parents=True, exist_ok=True)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
-    resumption_result = run_ceo_resumption_brief(diagnostic_options)
-    repair_result = run_ceo_repair_plan(diagnostic_options)
-    dispatch_result = run_ceo_dispatch_receipt(diagnostic_options)
-    kpi_result = run_ceo_executive_kpis(diagnostic_options)
+    reused_resumption_brief = _ceo_reused_artifact_payload(
+        resumption_result,
+        "brief",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    reused_repair_plan = _ceo_reused_artifact_payload(
+        repair_result,
+        "repair_plan",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    reused_dispatch_receipt = _ceo_reused_artifact_payload(
+        dispatch_result,
+        "receipt",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    reused_kpis = _ceo_reused_artifact_payload(
+        kpi_result,
+        "kpis",
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+    )
+    resumption_result = resumption_result if reused_resumption_brief is not None else run_ceo_resumption_brief(diagnostic_options)
+    repair_result = repair_result if reused_repair_plan is not None else run_ceo_repair_plan(diagnostic_options)
+    dispatch_result = dispatch_result if reused_dispatch_receipt is not None else run_ceo_dispatch_receipt(diagnostic_options)
+    kpi_result = kpi_result if reused_kpis is not None else run_ceo_executive_kpis(diagnostic_options)
+    resumption_brief = dict(resumption_result["brief"])
+    dispatch_receipt = dict(dispatch_result["receipt"])
+    if is_stop_requested(options, ceo_run_id, lab_run_id):
+        resumption_brief["resume_status"] = "blocked_stop_requested"
+        resumption_brief["next_command"] = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
+        dispatch_receipt["safe_to_dispatch"] = False
+        dispatch_receipt["status"] = "dispatch_blocked"
+        dispatch_receipt["reason"] = "live stop request/manual gate overrides reused safe artifacts"
     board = build_ceo_action_board(
         ceo_run_id=ceo_run_id,
         lab_run_id=lab_run_id,
-        resumption_brief=resumption_result["brief"],
-        dispatch_receipt=dispatch_result["receipt"],
+        resumption_brief=resumption_brief,
+        dispatch_receipt=dispatch_receipt,
         blocker_stack=_load_yaml_if_exists(root / "blocker_stack.yaml"),
         repair_plan=repair_result["repair_plan"],
         executive_kpis=kpi_result["kpis"],
@@ -12345,12 +15576,15 @@ def render_ceo_operator_step(step: dict[str, Any]) -> str:
         f"- Execution status: {step.get('execution_status') or 'n/a'}",
         f"- Execution action taken: {step.get('execution_action_taken') or 'n/a'}",
         f"- Execution decision: {step.get('execution_decision') or 'n/a'}",
+        f"- Execution meaningful progress: {step.get('execution_meaningful_progress') if step.get('execution_meaningful_progress') != '' else 'n/a'}",
         "",
         "## Board Status",
         "",
         f"- Before: {step.get('before_board_status')}",
         f"- After: {step.get('after_board_status') or 'n/a'}",
         f"- After primary action: {step.get('after_primary_action') or 'n/a'}",
+        f"- Before board snapshot sha256: {step.get('before_action_board_snapshot_sha256') or 'n/a'}",
+        f"- After board snapshot sha256: {step.get('after_action_board_snapshot_sha256') or 'n/a'}",
         "",
         "## Guardrails",
         "",
@@ -12398,16 +15632,47 @@ def run_ceo_operator_step(options: CeoOpsOptions) -> dict[str, Any]:
         execution_result = run_ceo_execute_next(replace(options, apply=True))
         action_result = execution_result["action_result"]
         execution_status = str(action_result.get("status", ""))
-        action_executed = execution_status != "blocked"
-        status = "bounded_action_executed" if action_executed else "bounded_action_blocked"
+        raw_meaningful_progress = action_result.get("meaningful_progress")
+        meaningful_progress = (
+            bool(raw_meaningful_progress)
+            if raw_meaningful_progress is not None
+            else execution_status not in CEO_NO_PROGRESS_STATUSES and execution_status != "manual_gate"
+        )
+        if execution_status == "blocked":
+            action_executed = False
+            status = "bounded_action_blocked"
+        elif execution_status == "manual_gate":
+            action_executed = False
+            status = "bounded_action_reached_manual_gate"
+        elif execution_status == "capability_gap" and not meaningful_progress:
+            action_executed = False
+            status = "bounded_action_reached_capability_gap"
+        elif not meaningful_progress:
+            action_executed = False
+            status = "bounded_action_no_meaningful_progress"
+        elif execution_status == "capability_gap":
+            action_executed = True
+            status = "bounded_action_recorded_capability_gap"
+        else:
+            action_executed = True
+            status = "bounded_action_executed"
         reason = str(action_result.get("reason") or action_result.get("status") or "bounded dispatch completed")
 
     after_result = run_ceo_action_board(diagnostic_options)
     after_board = after_result["action_board"]
     action_result = (execution_result or {}).get("action_result", {}) if execution_result else {}
+    step_generated_at = utc_now_iso()
+    snapshot_dir = root / "operator_step_boards"
+    snapshot_slug = _receipt_slug(step_generated_at)
+    before_board_snapshot = snapshot_dir / f"{snapshot_slug}_before_action_board.yaml"
+    after_board_snapshot = snapshot_dir / f"{snapshot_slug}_after_action_board.yaml"
+    atomic_write_yaml(before_board_snapshot, before_board)
+    atomic_write_yaml(after_board_snapshot, after_board)
+    binding_action_result_ref = (execution_result or {}).get("paths", {}).get("binding_action_result", "")
+    binding_action_result_path = Path(str(binding_action_result_ref)) if binding_action_result_ref else Path()
     step = {
         "model": CEO_OPERATOR_STEP_MODEL,
-        "generated_at": utc_now_iso(),
+        "generated_at": step_generated_at,
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
         "status": status,
@@ -12421,11 +15686,19 @@ def run_ceo_operator_step(options: CeoOpsOptions) -> dict[str, Any]:
         "execution_status": action_result.get("status", ""),
         "execution_action_taken": action_result.get("action_taken", ""),
         "execution_decision": action_result.get("decision", ""),
+        "execution_meaningful_progress": action_result.get("meaningful_progress", ""),
+        "before_primary_action_id": primary.get("action_id", ""),
+        "before_primary_command": primary_command,
+        "before_action_board_snapshot_sha256": _file_sha256(before_board_snapshot),
+        "after_action_board_snapshot_sha256": _file_sha256(after_board_snapshot),
+        "binding_action_result_sha256": _file_sha256(binding_action_result_path),
         "paths": {
             "before_action_board": str(before_result["paths"]["action_board"]),
             "before_action_board_report": str(before_result["paths"]["action_board_report"]),
+            "before_action_board_snapshot": str(before_board_snapshot),
             "after_action_board": str(after_result["paths"]["action_board"]),
             "after_action_board_report": str(after_result["paths"]["action_board_report"]),
+            "after_action_board_snapshot": str(after_board_snapshot),
             "binding_action_result": str((execution_result or {}).get("paths", {}).get("binding_action_result", "")),
         },
         "guardrails": [
@@ -12440,8 +15713,11 @@ def run_ceo_operator_step(options: CeoOpsOptions) -> dict[str, Any]:
     }
     path = root / "operator_step.yaml"
     report_path = root / "operator_step.md"
+    ledger_path = root / "operator_step_ledger.jsonl"
     atomic_write_yaml(path, step)
     atomic_write_text(report_path, render_ceo_operator_step(step))
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_json_safe(step), sort_keys=True) + "\n")
     return {
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
@@ -12450,8 +15726,11 @@ def run_ceo_operator_step(options: CeoOpsOptions) -> dict[str, Any]:
         "paths": {
             "operator_step": path,
             "operator_step_report": report_path,
+            "operator_step_ledger": ledger_path,
             "before_action_board": before_result["paths"]["action_board"],
+            "before_action_board_snapshot": before_board_snapshot,
             "after_action_board": after_result["paths"]["action_board"],
+            "after_action_board_snapshot": after_board_snapshot,
             **((execution_result or {}).get("paths", {}) if execution_result else {}),
         },
     }
@@ -12465,8 +15744,14 @@ def build_ceo_operator_brief(
     action_board: dict[str, Any],
     decision_quality: dict[str, Any],
     operator_step: dict[str, Any],
+    role_queue: dict[str, Any] | None = None,
+    approval_queue: dict[str, Any] | None = None,
+    trace_grade: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     primary = action_board.get("primary_action", {}) or {}
+    role_queue = role_queue or {}
+    approval_queue = approval_queue or {}
+    trace_grade = trace_grade or {}
     lab_status = company_status.get("lab_status", {}) or {}
     action_board_status = str(action_board.get("status", ""))
     if action_board_status == "manual_gate_required":
@@ -12489,6 +15774,11 @@ def build_ceo_operator_brief(
         status = "no_safe_action"
         next_action = str(primary.get("command", ""))
         plain_summary = "CEO mode does not currently have a safe autonomous action."
+    effective_operator = _effective_operator_status(
+        action_board=action_board,
+        operator_brief={"status": status},
+        decision_quality=decision_quality,
+    )
     refused_actions = [
         "manual approvals or stop-clear actions without explicit user confirmation",
         "production formula, Pine default, score, ranking, state, or alert changes",
@@ -12506,12 +15796,123 @@ def build_ceo_operator_brief(
         "current_situation": {
             "lab_status": lab_status.get("status", ""),
             "stop_reason": lab_status.get("stop_reason", ""),
+            "effective_operator_status": effective_operator.get("effective_operator_status", ""),
+            "manual_gate_active": effective_operator.get("manual_gate_active", ""),
+            "effective_operator_runtime_blocked": effective_operator.get("runtime_blocked", ""),
+            "effective_operator_runtime_block_reason": effective_operator.get("runtime_block_reason", ""),
+            "trace_grade_status": trace_grade.get("verdict", "missing_trace_grade"),
+            "trace_grade_score": trace_grade.get("score", ""),
+            "trace_grade_recommended_next_action": trace_grade.get("recommended_next_action", ""),
+            "trace_grade_issues": trace_grade.get("issues", []),
+            "trace_grade_manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
             "action_board_status": action_board_status,
             "primary_action": primary.get("action_id", ""),
             "primary_kind": primary.get("command_kind", ""),
+            "decision_quality_effective_runtime_action": decision_quality.get("effective_runtime_action", ""),
+            "decision_quality_effective_runtime_command_kind": decision_quality.get("effective_runtime_command_kind", ""),
+            "decision_quality_effective_runtime_can_execute_now": decision_quality.get("effective_runtime_can_execute_now", ""),
+            "decision_quality_runtime_blocked": decision_quality.get("runtime_blocked", ""),
+            "decision_quality_runtime_block_reason": decision_quality.get("runtime_block_reason", ""),
             "decision_quality_selected_action": decision_quality.get("selected_action", ""),
+            "decision_quality_selected_strategic_route_advisory": decision_quality.get("selected_strategic_route_advisory", ""),
             "decision_quality_confidence": decision_quality.get("confidence", ""),
+            "decision_quality_runtime_authority": decision_quality.get("runtime_authority_status", ""),
+            "decision_quality_executable_next_action": decision_quality.get("executable_next_action", ""),
+            "decision_quality_executable_command_kind": decision_quality.get("executable_next_command_kind", ""),
+            "decision_quality_runtime_authorized_strategic_route": decision_quality.get("runtime_authorized_strategic_route", ""),
+            "decision_quality_executable_can_execute_now": decision_quality.get("executable_can_execute_now", ""),
+            "decision_quality_selected_action_is_executable_now": decision_quality.get("selected_action_is_executable_now", ""),
+            "decision_quality_selected_action_blocked_by": decision_quality.get("selected_action_blocked_by", ""),
             "last_operator_step_status": operator_step.get("status", ""),
+            "role_queue_status": role_queue.get("status", ""),
+            "role_pending_task_count": role_queue.get("pending_task_count", ""),
+            "role_pending_manual_task_count": role_queue.get("pending_manual_task_count", ""),
+            "role_pending_autonomous_task_count": role_queue.get("pending_autonomous_task_count", ""),
+            "role_completed_task_count": role_queue.get("completed_task_count", ""),
+            "role_blocked_task_count": role_queue.get("blocked_task_count", ""),
+            "role_top_pending_task_id": role_queue.get("top_pending_task_id", ""),
+            "role_top_pending_role_id": role_queue.get("top_pending_role_id", ""),
+            "role_top_pending_packet_path": role_queue.get("top_pending_packet_path", ""),
+            "role_top_pending_result_resolution_mode": role_queue.get("top_pending_result_resolution_mode", ""),
+            "role_top_pending_requires_manual_gate": role_queue.get("top_pending_requires_manual_gate", ""),
+            "role_top_pending_closure_command": role_queue.get("top_pending_closure_command", ""),
+            "role_top_autonomous_pending_task_id": role_queue.get("top_autonomous_pending_task_id", ""),
+            "role_top_autonomous_pending_role_id": role_queue.get("top_autonomous_pending_role_id", ""),
+            "role_top_autonomous_pending_packet_path": role_queue.get("top_autonomous_pending_packet_path", ""),
+            "role_top_autonomous_next_result_command": role_queue.get("top_autonomous_next_role_result_command", ""),
+            "role_top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+            "role_top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+            "role_top_blocked_packet_path": role_queue.get("top_blocked_packet_path", ""),
+            "role_top_blocked_result_resolution_mode": role_queue.get("top_blocked_result_resolution_mode", ""),
+            "role_top_blocked_validation_status": role_queue.get("top_blocked_validation_status", ""),
+            "role_top_blocked_closure_command": _ceo_role_queue_top_blocked_closure_command(
+                ceo_run_id=ceo_run_id,
+                role_queue=role_queue,
+            ),
+            "role_top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+            "role_top_blocked_result_path": role_queue.get("top_blocked_result_path", ""),
+            "role_top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+            "role_top_blocked_finding": role_queue.get("top_blocked_finding", ""),
+            "role_next_result_command": role_queue.get("next_role_result_command", ""),
+            "approval_queue_status": approval_queue.get("status", ""),
+            "approval_pending_count": approval_queue.get("pending_count", ""),
+            "approval_top_pending_id": approval_queue.get("top_pending_approval_id", ""),
+            "approval_record_command": approval_queue.get("top_pending_approval_record_command", ""),
+            "approval_apply_command": approval_queue.get("top_pending_approval_apply_command", ""),
+        },
+        "approval_work": {
+            "status": approval_queue.get("status", "missing_approval_queue"),
+            "pending_count": approval_queue.get("pending_count", ""),
+            "top_pending_approval_id": approval_queue.get("top_pending_approval_id", ""),
+            "approval_record_command": approval_queue.get("top_pending_approval_record_command", ""),
+            "approval_apply_command": approval_queue.get("top_pending_approval_apply_command", ""),
+            "authority": "user_only" if approval_queue.get("pending_count", 0) else "none",
+            "readiness_effect": "pending approvals block autonomous action and require explicit user-confirmed record/apply steps",
+            "production_effect": "none",
+        },
+        "trace_health": {
+            "status": trace_grade.get("verdict", "missing_trace_grade"),
+            "score": trace_grade.get("score", ""),
+            "recommended_next_action": trace_grade.get("recommended_next_action", ""),
+            "issues": trace_grade.get("issues", []),
+            "manual_data_import_required": _trace_grade_manual_data_import_required(trace_grade),
+            "readiness_effect": "failed trace grade blocks dispatch through preflight and must be resolved before autonomous action",
+            "production_effect": "none",
+        },
+        "specialist_work": {
+            "status": role_queue.get("status", "missing_role_task_queue"),
+            "pending_task_count": role_queue.get("pending_task_count", ""),
+            "pending_manual_task_count": role_queue.get("pending_manual_task_count", ""),
+            "pending_autonomous_task_count": role_queue.get("pending_autonomous_task_count", ""),
+            "completed_task_count": role_queue.get("completed_task_count", ""),
+            "blocked_task_count": role_queue.get("blocked_task_count", ""),
+            "top_pending_task_id": role_queue.get("top_pending_task_id", ""),
+            "top_pending_role_id": role_queue.get("top_pending_role_id", ""),
+            "top_pending_packet_path": role_queue.get("top_pending_packet_path", ""),
+            "top_pending_result_resolution_mode": role_queue.get("top_pending_result_resolution_mode", ""),
+            "top_pending_requires_manual_gate": role_queue.get("top_pending_requires_manual_gate", ""),
+            "top_pending_closure_command": role_queue.get("top_pending_closure_command", ""),
+            "top_autonomous_pending_task_id": role_queue.get("top_autonomous_pending_task_id", ""),
+            "top_autonomous_pending_role_id": role_queue.get("top_autonomous_pending_role_id", ""),
+            "top_autonomous_pending_packet_path": role_queue.get("top_autonomous_pending_packet_path", ""),
+            "top_autonomous_next_role_result_command": role_queue.get("top_autonomous_next_role_result_command", ""),
+            "top_blocked_task_id": role_queue.get("top_blocked_task_id", ""),
+            "top_blocked_role_id": role_queue.get("top_blocked_role_id", ""),
+            "top_blocked_packet_path": role_queue.get("top_blocked_packet_path", ""),
+            "top_blocked_result_resolution_mode": role_queue.get("top_blocked_result_resolution_mode", ""),
+            "top_blocked_validation_status": role_queue.get("top_blocked_validation_status", ""),
+            "top_blocked_closure_command": _ceo_role_queue_top_blocked_closure_command(
+                ceo_run_id=ceo_run_id,
+                role_queue=role_queue,
+            ),
+            "top_blocked_review_status": role_queue.get("top_blocked_review_status", ""),
+            "top_blocked_result_path": role_queue.get("top_blocked_result_path", ""),
+            "top_blocked_next_action": role_queue.get("top_blocked_next_action", ""),
+            "top_blocked_finding": role_queue.get("top_blocked_finding", ""),
+            "next_role_dispatch_command": role_queue.get("next_role_dispatch_command", ""),
+            "next_role_result_command": role_queue.get("next_role_result_command", ""),
+            "readiness_effect": "pending or blocked role tasks lower 9.9 readiness but do not approve or block production behavior",
+            "production_effect": "none",
         },
         "recommended_next_action": next_action,
         "why": [
@@ -12524,6 +15925,9 @@ def build_ceo_operator_brief(
             "action_board": "action_board.yaml",
             "decision_quality": "decision_quality.yaml",
             "operator_step": "operator_step.yaml",
+            "approval_queue": "approval_queue.yaml",
+            "approval_status": "approval_status.yaml",
+            "role_task_queue": "role_task_queue.yaml",
         },
         "guardrail": "Operator brief is a human-readable summary only. It does not approve execution or production behavior.",
         "product_language_allowed": False,
@@ -12552,14 +15956,132 @@ def render_ceo_operator_brief(brief: dict[str, Any]) -> str:
     for key in [
         "lab_status",
         "stop_reason",
+        "effective_operator_status",
+        "manual_gate_active",
+        "effective_operator_runtime_blocked",
+        "effective_operator_runtime_block_reason",
+        "trace_grade_status",
+        "trace_grade_score",
+        "trace_grade_recommended_next_action",
+        "trace_grade_issues",
+        "trace_grade_manual_data_import_required",
         "action_board_status",
         "primary_action",
         "primary_kind",
+        "decision_quality_effective_runtime_action",
+        "decision_quality_effective_runtime_command_kind",
+        "decision_quality_effective_runtime_can_execute_now",
+        "decision_quality_runtime_blocked",
+        "decision_quality_runtime_block_reason",
         "decision_quality_selected_action",
+        "decision_quality_selected_strategic_route_advisory",
         "decision_quality_confidence",
+        "decision_quality_runtime_authority",
+        "decision_quality_executable_next_action",
+        "decision_quality_executable_command_kind",
+        "decision_quality_runtime_authorized_strategic_route",
+        "decision_quality_executable_can_execute_now",
+        "decision_quality_selected_action_is_executable_now",
+        "decision_quality_selected_action_blocked_by",
         "last_operator_step_status",
+        "role_queue_status",
+        "role_pending_task_count",
+        "role_pending_manual_task_count",
+        "role_pending_autonomous_task_count",
+        "role_top_pending_task_id",
+        "role_top_pending_role_id",
+        "role_top_pending_packet_path",
+        "role_top_pending_result_resolution_mode",
+        "role_top_pending_requires_manual_gate",
+        "role_top_pending_closure_command",
+        "role_top_autonomous_pending_task_id",
+        "role_top_autonomous_pending_role_id",
+        "role_top_autonomous_pending_packet_path",
+        "role_top_autonomous_next_result_command",
+        "role_top_blocked_task_id",
+        "role_top_blocked_role_id",
+        "role_top_blocked_packet_path",
+        "role_top_blocked_result_resolution_mode",
+        "role_top_blocked_validation_status",
+        "role_top_blocked_closure_command",
+        "role_top_blocked_review_status",
+        "role_top_blocked_result_path",
+        "role_top_blocked_next_action",
+        "role_top_blocked_finding",
+        "role_next_result_command",
+        "approval_queue_status",
+        "approval_pending_count",
+        "approval_top_pending_id",
+        "approval_record_command",
+        "approval_apply_command",
     ]:
         lines.append(f"- {key}: {situation.get(key)}")
+    approval = brief.get("approval_work", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Approval Work",
+            "",
+            f"- Status: {approval.get('status')}",
+            f"- Pending: {approval.get('pending_count')}",
+            f"- Top approval: {approval.get('top_pending_approval_id') or 'none'}",
+            f"- Record command: `{approval.get('approval_record_command') or ''}`",
+            f"- Apply command: `{approval.get('approval_apply_command') or ''}`",
+            f"- Authority: {approval.get('authority')}",
+            f"- Readiness effect: {approval.get('readiness_effect')}",
+        ]
+    )
+    trace = brief.get("trace_health", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Trace Health",
+            "",
+            f"- Status: {trace.get('status')}",
+            f"- Score: {trace.get('score')}",
+            f"- Recommended next action: {trace.get('recommended_next_action') or 'none'}",
+            f"- Manual data import required: {trace.get('manual_data_import_required')}",
+            f"- Issues: {trace.get('issues') or []}",
+            f"- Readiness effect: {trace.get('readiness_effect')}",
+        ]
+    )
+    specialist = brief.get("specialist_work", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Specialist Work",
+            "",
+            f"- Status: {specialist.get('status')}",
+            f"- Pending: {specialist.get('pending_task_count')}",
+            f"- Pending manual: {specialist.get('pending_manual_task_count')}",
+            f"- Pending autonomous: {specialist.get('pending_autonomous_task_count')}",
+            f"- Completed: {specialist.get('completed_task_count')}",
+            f"- Blocked: {specialist.get('blocked_task_count')}",
+            f"- Top task: {specialist.get('top_pending_task_id') or 'none'}",
+            f"- Top role: {specialist.get('top_pending_role_id') or 'none'}",
+            f"- Top packet: {specialist.get('top_pending_packet_path') or 'none'}",
+            f"- Top result mode: {specialist.get('top_pending_result_resolution_mode') or 'none'}",
+            f"- Top requires manual gate: {specialist.get('top_pending_requires_manual_gate')}",
+            f"- Top closure command: `{specialist.get('top_pending_closure_command') or ''}`",
+            f"- Top autonomous task: {specialist.get('top_autonomous_pending_task_id') or 'none'}",
+            f"- Top autonomous role: {specialist.get('top_autonomous_pending_role_id') or 'none'}",
+            f"- Top autonomous packet: {specialist.get('top_autonomous_pending_packet_path') or 'none'}",
+            f"- Top autonomous result: `{specialist.get('top_autonomous_next_role_result_command') or ''}`",
+            f"- Top blocked task: {specialist.get('top_blocked_task_id') or 'none'}",
+            f"- Top blocked role: {specialist.get('top_blocked_role_id') or 'none'}",
+            f"- Top blocked packet: {specialist.get('top_blocked_packet_path') or 'none'}",
+            f"- Top blocked result mode: {specialist.get('top_blocked_result_resolution_mode') or 'none'}",
+            f"- Top blocked validation: {specialist.get('top_blocked_validation_status') or 'none'}",
+            f"- Top blocked closure command: `{specialist.get('top_blocked_closure_command') or ''}`",
+            f"- Top blocked review status: {specialist.get('top_blocked_review_status') or 'none'}",
+            f"- Top blocked result path: {specialist.get('top_blocked_result_path') or 'none'}",
+            f"- Top blocked next action: {specialist.get('top_blocked_next_action') or 'none'}",
+            f"- Top blocked finding: {specialist.get('top_blocked_finding') or 'none'}",
+            f"- Next role dispatch: `{specialist.get('next_role_dispatch_command') or ''}`",
+            f"- Next role result: `{specialist.get('next_role_result_command') or ''}`",
+            f"- Readiness effect: {specialist.get('readiness_effect')}",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -12578,22 +16100,38 @@ def render_ceo_operator_brief(brief: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_ceo_operator_brief(options: CeoOpsOptions) -> dict[str, Any]:
+def run_ceo_operator_brief(
+    options: CeoOpsOptions,
+    *,
+    action_board_result: dict[str, Any] | None = None,
+    decision_quality_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ceo_run_id = resolve_ceo_run_id(options)
     lab_run_id = resolve_lab_run_id(options, ceo_run_id)
     root = ceo_dir(options, ceo_run_id)
     root.mkdir(parents=True, exist_ok=True)
     diagnostic_options = _with_ceo_context(options, context="diagnostic_refresh")
     status_result = run_ceo_status(diagnostic_options)
-    action_board_result = run_ceo_action_board(diagnostic_options)
-    decision_quality_result = run_ceo_decision_quality(diagnostic_options)
+    action_board_result = action_board_result or run_ceo_action_board(diagnostic_options)
+    decision_quality_result = decision_quality_result or run_ceo_decision_quality(
+        diagnostic_options,
+        action_board_result=action_board_result,
+    )
+    final_action_board = _load_yaml_if_exists(root / "action_board.yaml") or action_board_result["action_board"]
+    final_decision_quality = _load_yaml_if_exists(root / "decision_quality.yaml") or decision_quality_result["decision_quality"]
+    trace_grade = _load_yaml_if_exists(root / "trace_grade.yaml")
+    approval_result = run_ceo_approval_queue(diagnostic_options)
+    role_result = run_ceo_role_queue(diagnostic_options)
     brief = build_ceo_operator_brief(
         ceo_run_id=ceo_run_id,
         lab_run_id=lab_run_id,
         company_status=status_result["company_status"],
-        action_board=action_board_result["action_board"],
-        decision_quality=decision_quality_result["decision_quality"],
+        action_board=final_action_board,
+        decision_quality=final_decision_quality,
         operator_step=_load_yaml_if_exists(root / "operator_step.yaml"),
+        role_queue=role_result["queue"],
+        approval_queue=approval_result["queue"],
+        trace_grade=trace_grade,
     )
     path = root / "operator_brief.yaml"
     report_path = root / "operator_brief.md"
@@ -12608,6 +16146,9 @@ def run_ceo_operator_brief(options: CeoOpsOptions) -> dict[str, Any]:
             "operator_brief_report": report_path,
             "action_board": action_board_result["paths"]["action_board"],
             "decision_quality": decision_quality_result["paths"]["decision_quality"],
+            "approval_queue": approval_result["paths"]["queue"],
+            "approval_status": approval_result["paths"]["approval_status"],
+            "role_task_queue": role_result["paths"]["role_task_queue"],
         },
     }
 
@@ -12955,6 +16496,39 @@ def run_ceo_execute_next(options: CeoOpsOptions) -> dict[str, Any]:
         paths.update(receipt_paths)
         return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
 
+    if decision_kind == "import_or_curate_fresh_ohlcv_data":
+        receipt_paths = _write_ceo_dispatch_receipt(
+            options,
+            ceo_run_id,
+            lab_run_id,
+            decision,
+            preflight_gate=preflight_gate,
+            approval_queue=approval_queue,
+            safe_to_dispatch=False,
+            reason="manual OHLCV import or curation is required before fresh validation",
+            dispatch_mode="execute_next",
+            preflight_allows_repair=preflight_allows_repair,
+        )
+        action_result = {
+            "model": CEO_ACTION_RESULT_MODEL,
+            "generated_at": utc_now_iso(),
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "decision": decision_kind,
+            "action_taken": "blocked_manual_data_import_required",
+            "command_executed": None,
+            "status": "manual_gate",
+            "meaningful_progress": False,
+            "reason": "local OHLCV data is not ready; manual import or curation is required before fresh validation",
+            "next_allowed_actions": ["request_fresh_data"],
+            "dispatch_receipt": _dispatch_receipt_reference(receipt_paths["dispatch_receipt_snapshot"]),
+            "production_effect": "none",
+        }
+        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
+        paths.update(contract_paths)
+        paths.update(receipt_paths)
+        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
+
     receipt_paths = _write_ceo_dispatch_receipt(
         options,
         ceo_run_id,
@@ -13054,25 +16628,6 @@ def run_ceo_execute_next(options: CeoOpsOptions) -> dict[str, Any]:
         result = run_ceo_fresh_withheld_validation_executor(dispatch_options)
         result["paths"].update(dispatch_metadata_paths)
         return result
-
-    if decision_kind == "import_or_curate_fresh_ohlcv_data":
-        action_result = {
-            "model": CEO_ACTION_RESULT_MODEL,
-            "generated_at": utc_now_iso(),
-            "run_id": ceo_run_id,
-            "lab_run_id": lab_run_id,
-            "decision": decision_kind,
-            "action_taken": "blocked_manual_data_import_required",
-            "command_executed": None,
-            "status": "manual_gate",
-            "meaningful_progress": False,
-            "reason": "local OHLCV data is not ready; manual import or curation is required before fresh validation",
-            "next_allowed_actions": ["request_fresh_data"],
-            "production_effect": "none",
-        }
-        paths = _write_binding_action_result(options, ceo_run_id, lab_run_id, action_result)
-        paths.update(dispatch_metadata_paths)
-        return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "action_result": action_result, "paths": paths}
 
     if decision_kind == "continue_governed_research":
         block = run_ceo_run_block(dispatch_options)
@@ -13210,23 +16765,65 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
     kpi_result = run_ceo_executive_kpis(diagnostic_options)
     role_result = run_ceo_role_queue(diagnostic_options)
     role_dispatch_result = run_ceo_role_dispatch(diagnostic_options)
+    org_progress_result = run_ceo_org_progress_score(diagnostic_options)
     operating_result = run_ceo_operating_dashboard(diagnostic_options)
     backlog_result = run_ceo_capability_backlog(diagnostic_options)
     mission_result = run_ceo_mission_score(diagnostic_options)
     strategy_result = run_ceo_strategy_capital_dashboard(diagnostic_options)
-    decision_quality_result = run_ceo_decision_quality(diagnostic_options)
     replay_result = run_ceo_replay(diagnostic_options)
     eval_result = run_ceo_eval_suite(diagnostic_options)
     guardrail_result = run_ceo_guardrail_audit(diagnostic_options)
     preflight_result = run_ceo_preflight_gate(diagnostic_options, enforce_memory_delta=True)
     dispatch_result = run_ceo_dispatch_receipt(diagnostic_options)
     coherence_result = run_ceo_artifact_coherence(diagnostic_options)
-    resumption_result = run_ceo_resumption_brief(diagnostic_options)
-    blocker_stack_result = run_ceo_blocker_stack(diagnostic_options)
+    resumption_result = run_ceo_resumption_brief(
+        diagnostic_options,
+        preflight_result=preflight_result,
+        coherence_result=coherence_result,
+        mission_result=mission_result,
+        strategy_result=strategy_result,
+    )
+    blocker_stack_result = run_ceo_blocker_stack(
+        diagnostic_options,
+        resumption_result=resumption_result,
+        dispatch_result=dispatch_result,
+    )
     incident_result = run_ceo_operating_incident_register(diagnostic_options)
-    repair_result = run_ceo_repair_plan(diagnostic_options)
-    action_board_result = run_ceo_action_board(diagnostic_options)
-    operator_brief_result = run_ceo_operator_brief(diagnostic_options)
+    repair_result = run_ceo_repair_plan(
+        diagnostic_options,
+        blocker_result=blocker_stack_result,
+        incident_result=incident_result,
+    )
+    action_board_result = run_ceo_action_board(
+        diagnostic_options,
+        resumption_result=resumption_result,
+        repair_result=repair_result,
+        dispatch_result=dispatch_result,
+        kpi_result=kpi_result,
+    )
+    decision_quality_result = run_ceo_decision_quality(diagnostic_options, action_board_result=action_board_result)
+    operator_brief_result = run_ceo_operator_brief(
+        diagnostic_options,
+        action_board_result=action_board_result,
+        decision_quality_result=decision_quality_result,
+    )
+    coherence_result = run_ceo_artifact_coherence(diagnostic_options)
+    final_decision_quality = _load_yaml_if_exists(root / "decision_quality.yaml") or decision_quality_result["decision_quality"]
+    final_action_board = _load_yaml_if_exists(root / "action_board.yaml") or action_board_result["action_board"]
+    final_operator_brief = _load_yaml_if_exists(root / "operator_brief.yaml") or operator_brief_result["operator_brief"]
+    final_artifact_coherence = _load_yaml_if_exists(root / "artifact_coherence.yaml") or coherence_result["coherence"]
+    final_artifact_coherence_issues = final_artifact_coherence.get("issues", []) or []
+    final_artifact_coherence_top_issue = final_artifact_coherence_issues[0] if final_artifact_coherence_issues else {}
+    final_effective_operator = _effective_operator_status(
+        action_board=final_action_board,
+        operator_brief=final_operator_brief,
+        decision_quality=final_decision_quality,
+    )
+    repair_apply = _load_yaml_if_exists(root / "repair_apply.yaml")
+    repair_apply_report = root / "repair_apply.md"
+    role_result_validation = _load_yaml_if_exists(root / "role_result_validation.yaml")
+    role_queue = role_result["queue"]
+    approval_top_pending_item = (approval_result["queue"].get("pending_items", []) or [{}])[0]
     packet_path = latest_packet
     readiness = eval_result["eval_suite"].get("nine_nine_readiness", {}) or {}
     preflight_blockers = [
@@ -13234,6 +16831,12 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         for item in preflight_result["preflight_gate"].get("blockers", []) or []
         if item.get("blocker")
     ]
+    portfolio_allocator = _load_yaml_if_exists(root / "portfolio_allocator.yaml")
+    portfolio_allocator_report = root / "portfolio_allocator.md"
+    portfolio_selected = portfolio_allocator.get("selected_lane", {}) or {}
+    final_flight_dashboard = flight_result["dashboard"]
+    final_mission_score = mission_result["mission_score"]
+    final_strategy_dashboard = strategy_result["dashboard"]
     lines = [
         "# Riskflow CEO Final Report",
         "",
@@ -13252,6 +16855,7 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         f"- Trace grade: {trace_result['paths']['trace_grade_report']}",
         f"- Flight dashboard: {flight_result['paths']['dashboard_report']}",
         f"- Operating dashboard: {operating_result['paths']['dashboard_report']}",
+        f"- Portfolio allocator: {portfolio_allocator_report}" if portfolio_allocator_report.exists() else "- Portfolio allocator: missing",
         f"- Mission score: {mission_result['paths']['mission_score_report']}",
         f"- Strategy capital dashboard: {strategy_result['paths']['strategy_capital_dashboard_report']}",
         f"- Decision quality: {decision_quality_result['paths']['decision_quality_report']}",
@@ -13263,6 +16867,7 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         f"- Blocker stack: {blocker_stack_result['paths']['blocker_stack_report']}",
         f"- Operating incident register: {incident_result['paths']['incident_register_report']}",
         f"- Repair plan: {repair_result['paths']['repair_plan_report']}",
+        f"- Repair apply: {repair_apply_report}" if repair_apply_report.exists() else "- Repair apply: missing",
         f"- Action board: {action_board_result['paths']['action_board_report']}",
         f"- Operator brief: {operator_brief_result['paths']['operator_brief_report']}",
         f"- Artifact coherence: {coherence_result['paths']['artifact_coherence_report']}",
@@ -13270,7 +16875,9 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         f"- Approval queue: {approval_result['paths']['queue_report']}",
         f"- Executive KPIs: {kpi_result['paths']['executive_kpis_report']}",
         f"- Role task queue: {role_result['paths']['role_task_queue_report']}",
+        f"- Role result validation: {root / 'role_result_validation.yaml'}" if role_result_validation else "- Role result validation: missing",
         f"- Role dispatch: {role_dispatch_result['paths']['role_dispatch_report']}",
+        f"- Org progress score: {org_progress_result['paths']['org_progress_score_report']}",
         f"- Capability backlog: {backlog_result['paths']['backlog_report']}",
         f"- Fresh/withheld validation contract: {contract_result['paths']['report']}",
         f"- Promotion proposal: {promotion_result['paths']['proposal_report']}",
@@ -13284,15 +16891,45 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             "## CEO Operating Snapshot",
             "",
             f"- Trace verdict: {trace_result['grade'].get('verdict')}",
-            f"- Safe to continue: {flight_result['dashboard'].get('safe_to_continue')}",
+            f"- Trace score: {trace_result['grade'].get('score')}",
+            f"- Trace recommended next action: {trace_result['grade'].get('recommended_next_action')}",
+            f"- Trace manual data import required: {_trace_grade_manual_data_import_required(trace_result['grade'])}",
+            f"- Trace issues: {trace_result['grade'].get('issues') or []}",
+            f"- Flight safe to continue: {final_flight_dashboard.get('safe_to_continue')}",
+            f"- Flight safety scope: {final_flight_dashboard.get('safe_to_continue_scope') or CEO_FLIGHT_SAFETY_SCOPE}",
+            f"- Flight dispatch authority: {final_flight_dashboard.get('dispatch_authority') or 'not_granted_by_flight_dashboard'}",
+            f"- Flight runtime authority note: {final_flight_dashboard.get('runtime_authority_note') or CEO_RUNTIME_AUTHORITY_NOTE}",
             f"- Candidate portfolio: {operating_result['dashboard'].get('candidate_portfolio_count')}",
-            f"- Mission score: {mission_result['mission_score'].get('overall_mission_score')}",
-            f"- Lowest mission dimension: {mission_result['mission_score'].get('lowest_dimension')}",
-            f"- Strategy capital bucket: {strategy_result['dashboard'].get('selected_capital_bucket')}",
-            f"- Strategy capital action: {strategy_result['dashboard'].get('selected_strategy')}",
-            f"- Decision quality selected action: {decision_quality_result['decision_quality'].get('selected_action')}",
-            f"- Decision quality confidence: {decision_quality_result['decision_quality'].get('confidence')}",
-            f"- Decision quality runner-up: {decision_quality_result['decision_quality'].get('runner_up_action') or 'none'}",
+            f"- Portfolio selected lane: {portfolio_selected.get('lane_id') or 'none'}",
+            f"- Portfolio attention action: {portfolio_selected.get('next_action') or 'none'}",
+            f"- Portfolio action scope: {portfolio_allocator.get('action_scope') or 'portfolio_attention_only'}",
+            f"- Portfolio dispatch authority: {portfolio_allocator.get('dispatch_authority') or 'not_granted_by_portfolio_allocator'}",
+            f"- Mission score: {final_mission_score.get('overall_mission_score')}",
+            f"- Lowest mission dimension: {final_mission_score.get('lowest_dimension')}",
+            f"- Mission attention action: {final_mission_score.get('next_best_mission_action')}",
+            f"- Mission action scope: {final_mission_score.get('action_scope') or 'mission_strategy_only'}",
+            f"- Mission dispatch authority: {final_mission_score.get('dispatch_authority') or 'not_granted_by_mission_score'}",
+            f"- Strategy capital bucket: {final_strategy_dashboard.get('selected_capital_bucket')}",
+            f"- Strategy capital action: {final_strategy_dashboard.get('selected_strategy')}",
+            f"- Strategy capital safety scope: {final_strategy_dashboard.get('safe_to_continue_scope') or CEO_STRATEGY_SAFETY_SCOPE}",
+            f"- Strategy capital dispatch authority: {final_strategy_dashboard.get('dispatch_authority') or 'not_granted_by_strategy_capital_dashboard'}",
+            f"- Runtime authority source: ceo status, approval queue, action board, resumption brief, preflight gate, and dispatch receipt",
+            f"- Decision quality effective runtime action: {final_decision_quality.get('effective_runtime_action') or 'none'}",
+            f"- Decision quality effective runtime command kind: {final_decision_quality.get('effective_runtime_command_kind') or 'none'}",
+            f"- Decision quality effective runtime can execute now: {final_decision_quality.get('effective_runtime_can_execute_now')}",
+            f"- Decision quality runtime blocked: {final_decision_quality.get('runtime_blocked')}",
+            f"- Decision quality runtime block reason: {final_decision_quality.get('runtime_block_reason') or 'none'}",
+            f"- Decision quality selected action: {final_decision_quality.get('selected_action')}",
+            f"- Decision quality selected strategic route advisory: {final_decision_quality.get('selected_strategic_route_advisory') or 'none'}",
+            f"- Decision quality confidence: {final_decision_quality.get('confidence')}",
+            f"- Decision quality runner-up: {final_decision_quality.get('runner_up_action') or 'none'}",
+            f"- Decision quality runtime authority: {final_decision_quality.get('runtime_authority_status')}",
+            f"- Decision quality executable next action: {final_decision_quality.get('executable_next_action') or 'none'}",
+            f"- Decision quality executable command kind: {final_decision_quality.get('executable_next_command_kind') or 'none'}",
+            f"- Decision quality runtime authorized strategic route: {final_decision_quality.get('runtime_authorized_strategic_route') or 'none'}",
+            f"- Decision quality can execute now: {final_decision_quality.get('executable_can_execute_now')}",
+            f"- Decision quality selected action executable now: {final_decision_quality.get('selected_action_is_executable_now')}",
+            f"- Decision quality selected action blocked by: {final_decision_quality.get('selected_action_blocked_by') or 'none'}",
             f"- Replay status: {replay_result['replay'].get('status')}",
             f"- Eval suite status: {eval_result['eval_suite'].get('status')}",
             f"- Eval suite score: {eval_result['eval_suite'].get('score')}",
@@ -13312,20 +16949,68 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             f"- Top repair: {repair_result['repair_plan'].get('top_repair') or 'none'}",
             f"- Top repair kind: {repair_result['repair_plan'].get('top_repair_kind') or 'none'}",
             f"- Repair next command: {repair_result['repair_plan'].get('next_command')}",
-            f"- Action board status: {action_board_result['action_board'].get('status')}",
-            f"- Action board primary action: {(action_board_result['action_board'].get('primary_action', {}) or {}).get('action_id') or 'none'}",
-            f"- Action board primary kind: {(action_board_result['action_board'].get('primary_action', {}) or {}).get('command_kind') or 'none'}",
-            f"- Action board command: {(action_board_result['action_board'].get('primary_action', {}) or {}).get('command') or 'none'}",
-            f"- Operator brief status: {operator_brief_result['operator_brief'].get('status')}",
-            f"- Operator brief summary: {operator_brief_result['operator_brief'].get('plain_english_summary')}",
-            f"- Artifact coherence status: {coherence_result['coherence'].get('status')}",
-            f"- Artifact coherence issues: {coherence_result['coherence'].get('issues') or []}",
+            f"- Repair apply status: {repair_apply.get('status', 'missing_repair_apply')}",
+            f"- Repair apply key: {repair_apply.get('repair_key', '') or 'none'}",
+            f"- Repair apply executed: {repair_apply.get('action_executed', '')}",
+            f"- Repair apply closed: {repair_apply.get('repair_closed', '')}",
+            f"- Effective operator status: {final_effective_operator.get('effective_operator_status')}",
+            f"- Manual gate active: {final_effective_operator.get('manual_gate_active')}",
+            f"- Effective operator runtime blocked: {final_effective_operator.get('runtime_blocked')}",
+            f"- Effective operator runtime block reason: {final_effective_operator.get('runtime_block_reason') or 'none'}",
+            f"- Action board status: {final_action_board.get('status')}",
+            f"- Action board primary action: {(final_action_board.get('primary_action', {}) or {}).get('action_id') or 'none'}",
+            f"- Action board primary kind: {(final_action_board.get('primary_action', {}) or {}).get('command_kind') or 'none'}",
+            f"- Action board command: {(final_action_board.get('primary_action', {}) or {}).get('command') or 'none'}",
+            f"- Operator brief status: {final_operator_brief.get('status')}",
+            f"- Operator brief summary: {final_operator_brief.get('plain_english_summary')}",
+            f"- Artifact coherence status: {final_artifact_coherence.get('status')}",
+            f"- Artifact coherence top issue: {final_artifact_coherence_top_issue.get('artifact') or 'none'}",
+            f"- Artifact coherence top issue severity: {final_artifact_coherence_top_issue.get('severity', 'unknown') if final_artifact_coherence_top_issue else 'none'}",
+            f"- Artifact coherence top issue types: {final_artifact_coherence_top_issue.get('issues', []) if final_artifact_coherence_top_issue else []}",
+            f"- Artifact coherence issues: {final_artifact_coherence.get('issues') or []}",
             f"- Resumption status: {resumption_result['brief'].get('resume_status')}",
             f"- Resumption next command: {resumption_result['brief'].get('next_command')}",
             f"- Pending approvals: {approval_result['queue'].get('pending_count')}",
+            f"- Approval top pending id: {approval_result['queue'].get('top_pending_approval_id') or 'none'}",
+            f"- Approval top pending kind: {approval_top_pending_item.get('kind') or 'none'}",
+            f"- Approval top pending reason: {approval_top_pending_item.get('reason') or 'none'}",
+            f"- Approval top pending source: {approval_top_pending_item.get('source_artifact') or 'none'}",
+            f"- Approval top pending required user decision: {approval_top_pending_item.get('required_user_decision') or 'none'}",
+            f"- Approval top pending authority: {approval_top_pending_item.get('approval_authority', approval_top_pending_item.get('authority', '')) or 'none'}",
+            f"- Approval top pending fingerprint: {approval_top_pending_item.get('approval_item_fingerprint') or 'none'}",
             f"- Executive KPI status: {kpi_result['kpis'].get('status')}",
-            f"- Role tasks: {role_result['queue'].get('task_count')}",
+            f"- Role queue status: {role_queue.get('status')}",
+            f"- Role tasks: {role_queue.get('task_count')}",
+            f"- Role pending: {role_queue.get('pending_task_count')}",
+            f"- Role pending manual: {role_queue.get('pending_manual_task_count')}",
+            f"- Role pending autonomous: {role_queue.get('pending_autonomous_task_count')}",
+            f"- Role completed: {role_queue.get('completed_task_count')}",
+            f"- Role blocked: {role_queue.get('blocked_task_count')}",
+            f"- Role top pending task: {role_queue.get('top_pending_task_id') or 'none'}",
+            f"- Role top pending role: {role_queue.get('top_pending_role_id') or 'none'}",
+            f"- Role top pending packet: {role_queue.get('top_pending_packet_path') or 'none'}",
+            f"- Role top pending result mode: {role_queue.get('top_pending_result_resolution_mode') or 'none'}",
+            f"- Role top pending closure command: {role_queue.get('top_pending_closure_command') or 'none'}",
+            f"- Role top autonomous pending task: {role_queue.get('top_autonomous_pending_task_id') or 'none'}",
+            f"- Role top autonomous result command: {role_queue.get('top_autonomous_next_role_result_command') or 'none'}",
+            f"- Role top blocked task: {role_queue.get('top_blocked_task_id') or 'none'}",
+            f"- Role top blocked role: {role_queue.get('top_blocked_role_id') or 'none'}",
+            f"- Role top blocked packet: {role_queue.get('top_blocked_packet_path') or 'none'}",
+            f"- Role top blocked result mode: {role_queue.get('top_blocked_result_resolution_mode') or 'none'}",
+            f"- Role top blocked validation: {role_queue.get('top_blocked_validation_status') or 'none'}",
+            f"- Role top blocked closure command: {_ceo_role_queue_top_blocked_closure_command(ceo_run_id=ceo_run_id, role_queue=role_queue) or 'none'}",
+            f"- Role top blocked review status: {role_queue.get('top_blocked_review_status') or 'none'}",
+            f"- Role top blocked result path: {role_queue.get('top_blocked_result_path') or 'none'}",
+            f"- Role top blocked next action: {role_queue.get('top_blocked_next_action') or 'none'}",
+            f"- Role top blocked finding: {role_queue.get('top_blocked_finding') or 'none'}",
+            f"- Role result validation status: {role_result_validation.get('status', 'missing_role_result_validation')}",
+            f"- Role result validation issues: {role_result_validation.get('issues', []) if role_result_validation else []}",
             f"- Role dispatch packets: {role_dispatch_result['role_dispatch'].get('packet_count')}",
+            f"- Org progress status: {org_progress_result['org_progress_score'].get('status')}",
+            f"- Org progress score: {org_progress_result['org_progress_score'].get('org_progress_score')}",
+            f"- Org fake-progress flags: {org_progress_result['org_progress_score'].get('fake_progress_flags') or []}",
+            f"- Org completed without merge: {org_progress_result['org_progress_score'].get('completed_without_merge_count')}",
+            f"- Org decision deltas: {org_progress_result['org_progress_score'].get('decision_delta_count')}",
             f"- Capability backlog items: {backlog_result['backlog'].get('backlog_count')}",
             f"- Fresh/withheld contract status: {contract_result['contract'].get('status')}",
             f"- Promotion proposal status: {promotion_result['proposal'].get('status')}",
@@ -13357,6 +17042,7 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             "blocker_stack_report": blocker_stack_result["paths"]["blocker_stack_report"],
             "incident_register_report": incident_result["paths"]["incident_register_report"],
             "repair_plan_report": repair_result["paths"]["repair_plan_report"],
+            **({"repair_apply_report": repair_apply_report} if repair_apply_report.exists() else {}),
             "action_board_report": action_board_result["paths"]["action_board_report"],
             "operator_brief_report": operator_brief_result["paths"]["operator_brief_report"],
             "artifact_coherence_report": coherence_result["paths"]["artifact_coherence_report"],
@@ -13364,7 +17050,9 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             "approval_queue_report": approval_result["paths"]["queue_report"],
             "executive_kpis_report": kpi_result["paths"]["executive_kpis_report"],
             "role_task_queue_report": role_result["paths"]["role_task_queue_report"],
+            **({"role_result_validation": root / "role_result_validation.yaml"} if role_result_validation else {}),
             "role_dispatch_report": role_dispatch_result["paths"]["role_dispatch_report"],
+            "org_progress_score_report": org_progress_result["paths"]["org_progress_score_report"],
             "capability_backlog_report": backlog_result["paths"]["backlog_report"],
             "fresh_withheld_validation_contract_report": contract_result["paths"]["report"],
             "promotion_proposal_report": promotion_result["paths"]["proposal_report"],
@@ -13390,6 +17078,7 @@ def render_ceo_trace_grade_report(grade: dict[str, Any]) -> str:
         f"- Latest action: {grade.get('latest_action')}",
         f"- Latest status: {grade.get('latest_status')}",
         f"- Recommended next action: {grade.get('recommended_next_action')}",
+        f"- Manual data import required: {_trace_grade_manual_data_import_required(grade)}",
         f"- Trace scope: {grade.get('trace_scope')}",
         f"- Product evidence status: {grade.get('product_evidence_status')}",
         f"- Product language allowed: {grade.get('product_language_allowed')}",

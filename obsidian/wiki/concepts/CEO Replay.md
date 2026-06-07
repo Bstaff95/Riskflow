@@ -30,6 +30,8 @@ It writes:
 - `heartbeat_journal.jsonl`
 - `approval_decision_ledger.jsonl`
 - `role_task_ledger.jsonl`
+- `repair_apply_ledger.jsonl`
+- `operator_step_ledger.jsonl`
 - `guardrail_audit.yaml`
 - `preflight_gate.yaml`
 - `action_contract.yaml`
@@ -47,6 +49,22 @@ whether the next action is safe.
 If `ceo_action_ledger.jsonl` is missing, replay may reconstruct a diagnostic
 single-action timeline from `binding_action_result.yaml`, but that fallback is a
 replay gap. It is not equivalent to append-only replay.
+
+Replay distinguishes current unsafe transitions from legacy policy drift. Known
+old no-snapshot transitions can be tagged `legacy_policy_gap` so historical runs
+remain understandable, but receipt-backed or policy-versioned current actions
+must still follow the previous action's `next_allowed_actions`.
+
+Replay also validates operator-step ledger rows: before/after action-board
+snapshot paths must exist and match their recorded SHA-256 hashes, otherwise the
+run has an operator-step replay gap.
+
+Replay validates repair-apply ledger rows the same way: before/after
+repair-plan snapshot paths must exist under `repair_apply_plans/` and match
+their recorded SHA-256 hashes, otherwise the run has a repair-apply replay gap.
+Old no-action manual-gate repair-apply rows that predate those snapshots can be
+classified as `legacy_snapshot_gap`; replay keeps them visible without treating
+them as current unsafe execution.
 
 Related:
 

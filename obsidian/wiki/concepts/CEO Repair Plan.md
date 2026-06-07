@@ -34,10 +34,11 @@ Each repair item includes:
 - source artifact
 - severity
 - owner command
-- recommended command
+- recommended command and governed repair-apply command
 - closure condition
 - runnable/manual/diagnostic/implementation flags
 - command kind
+- implementation playbook when code work is required
 
 ## Command Kinds
 
@@ -52,6 +53,17 @@ Each repair item includes:
 Diagnostic refreshes are safe to run, but they are counted separately from
 runnable repairs because they do not close the repair condition by themselves.
 
+Implementation-required items include structured playbooks naming target files,
+target functions, focused test selectors, acceptance criteria, and the evidence
+that created the repair. These playbooks are code-work contracts for Codex or a
+worker agent. They are deliberately marked non-executable by [[CEO Repair
+Apply]].
+
+Use [[CEO Repair Apply]] when one exact repair key should be executed. Repair
+Plan stays diagnostic; Repair Apply owns the before/after closure receipt.
+Executable repair-plan next commands should point to `ceo repair-apply`, not the
+lower-level owner command.
+
 ## Boundary
 
 This is diagnostic repair routing only. It does not approve manual gates,
@@ -62,6 +74,7 @@ Related:
 
 - [[CEO Blocker Stack]]
 - [[CEO Operating Incident Register]]
+- [[CEO Repair Apply]]
 - [[CEO Dispatch Receipt]]
 - [[CEO Resumption Brief]]
 - [[True CEO Autonomy]]

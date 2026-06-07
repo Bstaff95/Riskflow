@@ -31,7 +31,7 @@ The summary tracks:
 
 ## Riskflow Rule
 
-If repeated manual gates appear, stop for manual data import or curation. Do not rerun fresh-data preflight until the CSV state changes.
+If repeated manual gates appear, stop for manual data import or curation. Do not rerun fresh-data preflight until the CSV state changes. A single `import_or_curate_fresh_ohlcv_data` gate is already a trace-grade blocker; repetition only confirms the loop is melting down.
 
 If repeated capability-builder next actions appear, build the missing capability or stop.
 

@@ -35,6 +35,11 @@ It writes:
 
 If the backlog has open items, the CEO should decide whether the top item is higher leverage than another research block.
 
+If the backlog is empty, `next_action` is `defer_to_runtime_authority_surface`.
+That means this queue has no infrastructure work; it does not mean CEO mode is
+authorized to dispatch. Check [[CEO Action Board]], [[CEO Resumption Brief]], and
+[[CEO Preflight Gate]] for runtime authority.
+
 The backlog is research infrastructure only. It does not change production formulas or validate candidates.
 
 Related:

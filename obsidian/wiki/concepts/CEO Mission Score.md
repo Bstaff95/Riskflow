@@ -2,7 +2,7 @@
 rf_type: concept
 concept_id: ceo_mission_score
 status: active
-updated_at: 2026-06-06
+updated_at: 2026-06-07
 production_effect: none
 future_action_changed: Use mission-score to identify which Riskflow mission dimension has the weakest evidence coverage before allocating another CEO block.
 not_product_proof: true
@@ -45,6 +45,14 @@ approval, stop, preflight, trace, or promotion gates take priority.
 
 This is diagnostic only. It does not validate a candidate, approve product
 language, change formulas, change Pine defaults, or mutate production behavior.
+
+Current artifacts label this boundary directly:
+
+- top-level `action_scope: mission_strategy_only`
+- dimension-level `action_scope: mission_strategy_only`
+- `dispatch_authority: not_granted_by_mission_score`
+- `runtime_authority_note` points dispatch decisions back to status, approvals,
+  action board, resumption brief, preflight gate, and dispatch receipt
 
 Related:
 

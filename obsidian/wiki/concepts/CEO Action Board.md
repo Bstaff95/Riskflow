@@ -29,6 +29,10 @@ It refreshes [[CEO Resumption Brief]], [[CEO Repair Plan]], [[CEO Dispatch
 Receipt]], and [[Executive KPIs]], then turns them into one ranked operating
 surface.
 
+When another report path passes freshly generated artifacts into the board, the
+board must only reuse artifacts with matching run/lab ids and must still recheck
+the live stop/manual-gate state before exposing a bounded action.
+
 The board separates:
 
 - primary action
@@ -37,6 +41,15 @@ The board separates:
 - diagnostic refreshes
 - implementation repairs
 - blocked actions
+
+If any manual gate exists, the board must not leave lower-priority work in
+`runnable_repairs`. It demotes otherwise-runnable items into blocked actions
+with `blocked_by_runtime_authority: manual_gate_required`. This matters because
+a fresh session or agent may scan queue fields directly; the artifact should not
+require priority-rule knowledge to avoid unsafe execution.
+
+When the primary action is a repair-plan item rather than bounded dispatch, use
+[[CEO Repair Apply]] to execute a specific allowlisted repair key.
 
 ## Boundary
 
@@ -50,6 +63,7 @@ Related:
 
 - [[CEO Resumption Brief]]
 - [[CEO Repair Plan]]
+- [[CEO Repair Apply]]
 - [[CEO Dispatch Receipt]]
 - [[Executive KPIs]]
 - [[True CEO Autonomy]]

@@ -32,7 +32,7 @@ It writes:
 
 ## Guardrail
 
-`heartbeat-tick` does not sleep, daemonize, or run an unbounded loop. It refuses stop requests, true blockers, independent unsafe flight state, pending [[Approval Queue]] items, failed [[CEO Guardrail Audit]], failed [[CEO Preflight Gate]], unresolved [[CEO Memory Delta]] requirements, replay/eval gaps, and elapsed heartbeat-plan time budgets. If the only pre-action blocker is `trace_grade_failed`, plus the flight-dashboard warning derived from that trace, the tick records `pre_action_warnings` and lets `ceo execute-next` either run a bounded trace repair or write a blocked preflight result. If clear, it runs at most one `ceo execute-next` action.
+`heartbeat-tick` does not sleep, daemonize, or run an unbounded loop. It refuses stop requests, true blockers, flight-dashboard-local process-safety blockers, pending [[Approval Queue]] items, failed [[CEO Guardrail Audit]], failed [[CEO Preflight Gate]], unresolved [[CEO Memory Delta]] requirements, replay/eval gaps, and elapsed heartbeat-plan time budgets. If the only pre-action blocker is `trace_grade_failed`, plus the flight-dashboard warning derived from that trace, the tick records `pre_action_warnings` and lets `ceo execute-next` either run a bounded trace repair or write a blocked preflight result. If clear, it runs at most one `ceo execute-next` action.
 
 Each tick now records `heartbeat_plan_budget` in `heartbeat_state.yaml` and
 `heartbeat_journal.jsonl`, including elapsed hours, max hours, and whether the

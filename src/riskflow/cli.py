@@ -80,6 +80,7 @@ from .lab_ops import (
 )
 from .ceo_ops import (
     CEO_REPORT_ROOT,
+    _trace_grade_manual_data_import_required,
     run_ceo_action_board,
     run_ceo_artifact_coherence,
     run_ceo_approval_apply,
@@ -115,6 +116,7 @@ from .ceo_ops import (
     run_ceo_lab_status_text,
     run_ceo_memory_delta,
     run_ceo_mission_score,
+    run_ceo_org_progress_score,
     run_ceo_operating_dashboard,
     run_ceo_operating_incident_register,
     run_ceo_operator_brief,
@@ -124,6 +126,7 @@ from .ceo_ops import (
     run_ceo_portfolio_allocator,
     run_ceo_preflight_gate,
     run_ceo_promotion_proposal,
+    run_ceo_repair_apply,
     run_ceo_repair_plan,
     run_ceo_report,
     run_ceo_replay,
@@ -1866,6 +1869,29 @@ def _ceo_options_from_args(args: argparse.Namespace) -> CeoOpsOptions:
     )
 
 
+def _print_ceo_preflight_trace_source(gate: dict[str, Any]) -> None:
+    source_status = gate.get("source_status", {}) or {}
+    print(f"Trace verdict: {source_status.get('trace_verdict') or 'none'}")
+    print(f"Trace score: {source_status.get('trace_score') if source_status.get('trace_score') != '' else 'n/a'}")
+    print(f"Trace recommended next action: {source_status.get('trace_recommended_next_action') or 'none'}")
+    print(
+        "Trace manual data import required: "
+        f"{source_status.get('trace_manual_data_import_required') if source_status.get('trace_manual_data_import_required') != '' else 'n/a'}"
+    )
+    print(f"Trace issues: {source_status.get('trace_issues') or []}")
+
+
+def _print_ceo_trace_summary(trace: dict[str, Any], *, verdict_key: str = "verdict") -> None:
+    print(f"Trace verdict: {trace.get(verdict_key) or 'none'}")
+    print(f"Trace score: {trace.get('score') if trace.get('score') != '' else 'n/a'}")
+    print(f"Trace recommended next action: {trace.get('recommended_next_action') or 'none'}")
+    print(
+        "Trace manual data import required: "
+        f"{trace.get('manual_data_import_required') if trace.get('manual_data_import_required') != '' else 'n/a'}"
+    )
+    print(f"Trace issues: {trace.get('issues') or []}")
+
+
 def ceo_command(args: argparse.Namespace) -> int:
     action = args.ceo_action
     options = _ceo_options_from_args(args)
@@ -1901,6 +1927,8 @@ def ceo_command(args: argparse.Namespace) -> int:
             "role-queue",
             "role-dispatch",
             "role-result",
+            "org-progress-score",
+            "repair-apply",
             "capability-backlog",
             "fresh-data-preflight",
             "frozen-candidate-validation",
@@ -1941,6 +1969,7 @@ def ceo_command(args: argparse.Namespace) -> int:
                 print(f"Preflight gate report: {preflight_result['paths']['preflight_gate_report']}")
                 print(f"Status: {preflight_gate.get('status')}")
                 print(f"Blockers: {[item.get('blocker') for item in preflight_gate.get('blockers', []) or []]}")
+                _print_ceo_preflight_trace_source(preflight_gate)
                 return 1
             options = replace(options, ceo_context="guarded_direct", ceo_authorized_action=action)
         authority_mutating_actions = {
@@ -1962,12 +1991,50 @@ def ceo_command(args: argparse.Namespace) -> int:
             open_lanes = status.get("governance", {}).get("open_lanes", [])
             print(f"Open lanes: {', '.join(open_lanes) or 'none'}")
             print(f"True blocker: {status.get('true_blocker')}")
+            print(f"Stop requested: {status.get('stop_requested')}")
             operating = status.get("operating_artifacts", {}) or {}
+            if operating.get("runtime_authority_override"):
+                print(f"Runtime authority override: {operating.get('runtime_authority_override')}")
             print(f"Blocker stack: {operating.get('blocker_stack_status')}")
             print(f"Top blocker: {operating.get('top_blocker') or 'none'}")
             print(f"Operating incidents: {operating.get('operating_incident_count', 0)}")
             print(f"Dispatch receipt: {operating.get('dispatch_receipt_status')}")
             print(f"Safe to dispatch: {operating.get('dispatch_safe_to_dispatch')}")
+            print(f"Trace grade: {operating.get('trace_grade_status')}")
+            if operating.get("trace_grade_score") != "":
+                print(f"Trace score: {operating.get('trace_grade_score')}")
+            if operating.get("trace_grade_recommended_next_action"):
+                print(f"Trace recommended next action: {operating.get('trace_grade_recommended_next_action')}")
+            if operating.get("trace_grade_manual_data_import_required") != "":
+                print(f"Trace manual data import required: {operating.get('trace_grade_manual_data_import_required')}")
+            if operating.get("trace_grade_issues"):
+                print(f"Trace issues: {operating.get('trace_grade_issues')}")
+            print(f"Replay: {operating.get('replay_status')}")
+            print(f"Replay issues: {operating.get('replay_issue_count')}")
+            if operating.get("replay_dispatch_receipt_status"):
+                print(f"Replay dispatch receipts: {operating.get('replay_dispatch_receipt_status')}")
+            print(f"Operator step: {operating.get('operator_step_status')}")
+            if operating.get("operator_step_count") != "":
+                print(f"Operator step count: {operating.get('operator_step_count')}")
+            print(f"Eval suite: {operating.get('eval_suite_status')}")
+            if operating.get("eval_suite_score") != "":
+                print(f"Eval score: {operating.get('eval_suite_score')}")
+            if operating.get("nine_nine_readiness"):
+                print(f"9.9 readiness: {operating.get('nine_nine_readiness')}")
+                print(f"9.9 blocking cases: {operating.get('nine_nine_blocking_case_count')}")
+                print(f"9.9 advisory cases: {operating.get('nine_nine_advisory_case_count')}")
+            print(f"Artifact coherence: {operating.get('artifact_coherence_status')}")
+            if operating.get("artifact_coherence_issue_count") != "":
+                print(f"Artifact coherence issues: {operating.get('artifact_coherence_issue_count')}")
+            if operating.get("artifact_coherence_top_issue_artifact"):
+                print(f"Artifact coherence top issue: {operating.get('artifact_coherence_top_issue_artifact')}")
+                print(f"Artifact coherence top issue types: {operating.get('artifact_coherence_top_issue_types')}")
+                print(f"Artifact coherence top issue severity: {operating.get('artifact_coherence_top_issue_severity') or 'unknown'}")
+            print(f"Effective operator status: {operating.get('effective_operator_status')}")
+            print(f"Manual gate active: {operating.get('manual_gate_active')}")
+            print(f"Effective operator runtime blocked: {operating.get('effective_operator_runtime_blocked')}")
+            if operating.get("effective_operator_runtime_block_reason"):
+                print(f"Effective operator runtime block reason: {operating.get('effective_operator_runtime_block_reason')}")
             print(f"Resumption status: {operating.get('resumption_status')}")
             print(f"Default handoff command: {operating.get('default_handoff_command')}")
             if operating.get("blocker_next_command"):
@@ -1979,16 +2046,110 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Top repair kind: {operating.get('top_repair_kind') or 'none'}")
             if operating.get("repair_next_command"):
                 print(f"Repair next command: {operating.get('repair_next_command')}")
+            print(f"Repair apply: {operating.get('repair_apply_status')}")
+            if operating.get("repair_apply_key"):
+                print(f"Repair apply key: {operating.get('repair_apply_key')}")
+            if operating.get("repair_apply_executed") != "":
+                print(f"Repair apply executed: {operating.get('repair_apply_executed')}")
+            if operating.get("repair_apply_closed") != "":
+                print(f"Repair apply closed: {operating.get('repair_apply_closed')}")
+            print(f"Approval queue: {operating.get('approval_queue_status')}")
+            if operating.get("approval_pending_count") != "":
+                print(f"Approval pending: {operating.get('approval_pending_count')}")
+            if operating.get("approval_top_pending_id"):
+                print(f"Approval top id: {operating.get('approval_top_pending_id')}")
+                print(f"Approval top kind: {operating.get('approval_top_pending_kind') or 'none'}")
+                print(f"Approval top reason: {operating.get('approval_top_pending_reason') or 'none'}")
+                print(f"Approval top source: {operating.get('approval_top_pending_source') or 'none'}")
+                print(
+                    "Approval required user decision: "
+                    f"{operating.get('approval_top_pending_required_user_decision') or 'none'}"
+                )
+                print(f"Approval authority: {operating.get('approval_top_pending_authority') or 'none'}")
+                print(f"Approval fingerprint: {operating.get('approval_top_pending_fingerprint') or 'none'}")
+                print(f"Approval record command: {operating.get('approval_record_command') or 'none'}")
+                print(f"Approval apply command: {operating.get('approval_apply_command') or 'none'}")
+            print(f"Approval status: {operating.get('approval_status')}")
             print(f"Action board: {operating.get('action_board_status')}")
             print(f"Action board primary: {operating.get('action_board_primary_action') or 'none'}")
             print(f"Action board kind: {operating.get('action_board_primary_kind') or 'none'}")
             if operating.get("action_board_command"):
                 print(f"Action board command: {operating.get('action_board_command')}")
+            print(f"Decision quality: {operating.get('decision_quality_status')}")
+            if (
+                operating.get("decision_quality_status")
+                or operating.get("decision_quality_effective_runtime_action")
+                or operating.get("decision_quality_runtime_authority")
+            ):
+                print(f"Decision quality effective runtime action: {operating.get('decision_quality_effective_runtime_action') or 'none'}")
+                print(
+                    "Decision quality effective runtime command kind: "
+                    f"{operating.get('decision_quality_effective_runtime_command_kind') or 'none'}"
+                )
+                print(
+                    "Decision quality effective runtime can execute now: "
+                    f"{operating.get('decision_quality_effective_runtime_can_execute_now')}"
+                )
+                print(f"Decision quality runtime blocked: {operating.get('decision_quality_runtime_blocked')}")
+                print(f"Decision quality runtime block reason: {operating.get('decision_quality_runtime_block_reason') or 'none'}")
+                print(f"Decision quality selected action: {operating.get('decision_quality_selected_action') or 'none'}")
+                print(
+                    "Decision quality selected strategic route advisory: "
+                    f"{operating.get('decision_quality_selected_strategic_route_advisory') or 'none'}"
+                )
+                print(f"Decision quality confidence: {operating.get('decision_quality_confidence')}")
+                print(f"Decision quality runtime authority: {operating.get('decision_quality_runtime_authority') or 'none'}")
+                print(f"Decision quality executable next action: {operating.get('decision_quality_executable_next_action') or 'none'}")
+                print(f"Decision quality executable command kind: {operating.get('decision_quality_executable_command_kind') or 'none'}")
+                print(
+                    "Decision quality runtime authorized strategic route: "
+                    f"{operating.get('decision_quality_runtime_authorized_strategic_route') or 'none'}"
+                )
+                print(f"Decision quality can execute now: {operating.get('decision_quality_executable_can_execute_now')}")
+                print(
+                    "Decision quality selected action executable now: "
+                    f"{operating.get('decision_quality_selected_action_is_executable_now')}"
+                )
+                print(f"Decision quality selected action blocked by: {operating.get('decision_quality_selected_action_blocked_by') or 'none'}")
             print(f"Operator brief: {operating.get('operator_brief_status')}")
             if operating.get("operator_brief_summary"):
                 print(f"Operator brief summary: {operating.get('operator_brief_summary')}")
             if operating.get("operator_brief_next_action"):
                 print(f"Operator brief next action: {operating.get('operator_brief_next_action')}")
+            print(f"Role queue: {operating.get('role_queue_status')}")
+            if operating.get("role_pending_task_count") != "":
+                print(f"Role pending: {operating.get('role_pending_task_count')}")
+                print(f"Role pending manual: {operating.get('role_pending_manual_task_count')}")
+                print(f"Role pending autonomous: {operating.get('role_pending_autonomous_task_count')}")
+                print(f"Role completed: {operating.get('role_completed_task_count')}")
+                print(f"Role blocked: {operating.get('role_blocked_task_count')}")
+            if operating.get("role_top_pending_task_id"):
+                print(f"Role top pending task: {operating.get('role_top_pending_task_id')}")
+                print(f"Role top pending role: {operating.get('role_top_pending_role_id')}")
+                print(f"Role top pending packet: {operating.get('role_top_pending_packet_path')}")
+                print(f"Role top pending result mode: {operating.get('role_top_pending_result_resolution_mode')}")
+                print(f"Role top pending requires manual gate: {operating.get('role_top_pending_requires_manual_gate')}")
+                print(f"Role top pending closure command: {operating.get('role_top_pending_closure_command')}")
+                print(f"Role top autonomous task: {operating.get('role_top_autonomous_pending_task_id') or 'none'}")
+                print(f"Role top autonomous packet: {operating.get('role_top_autonomous_pending_packet_path') or 'none'}")
+                print(f"Role top autonomous result command: {operating.get('role_top_autonomous_next_result_command') or 'none'}")
+                print(f"Role next result command: {operating.get('role_next_result_command')}")
+            if operating.get("role_top_blocked_task_id"):
+                print(f"Role top blocked task: {operating.get('role_top_blocked_task_id') or 'none'}")
+                print(f"Role top blocked role: {operating.get('role_top_blocked_role_id') or 'none'}")
+                print(f"Role top blocked packet: {operating.get('role_top_blocked_packet_path') or 'none'}")
+                print(f"Role top blocked result mode: {operating.get('role_top_blocked_result_resolution_mode') or 'none'}")
+                print(f"Role top blocked validation: {operating.get('role_top_blocked_validation_status') or 'none'}")
+                print(f"Role top blocked closure command: {operating.get('role_top_blocked_closure_command') or 'none'}")
+                print(f"Role top blocked review status: {operating.get('role_top_blocked_review_status') or 'none'}")
+                print(f"Role top blocked result path: {operating.get('role_top_blocked_result_path') or 'none'}")
+                print(f"Role top blocked next action: {operating.get('role_top_blocked_next_action') or 'none'}")
+                print(f"Role top blocked finding: {operating.get('role_top_blocked_finding') or 'none'}")
+            print(f"Role result validation: {operating.get('role_result_validation_status')}")
+            if operating.get("role_result_validation_task"):
+                print(f"Role result validation task: {operating.get('role_result_validation_task')}")
+            if operating.get("role_result_validation_issues"):
+                print(f"Role result validation issues: {operating.get('role_result_validation_issues')}")
             if getattr(args, "show_lab_status", False):
                 print(run_ceo_lab_status_text(options))
             return 0
@@ -2223,6 +2384,8 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Verdict: {grade.get('verdict')}")
             print(f"Score: {grade.get('score')}")
             print(f"Recommended next action: {grade.get('recommended_next_action')}")
+            print(f"Manual data import required: {_trace_grade_manual_data_import_required(grade)}")
+            print(f"Issues: {grade.get('issues') or []}")
             return 0 if grade.get("verdict") != "fail" else 1
         if action == "flight-dashboard":
             result = run_ceo_flight_dashboard(options)
@@ -2230,8 +2393,12 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO flight dashboard: {result['paths']['dashboard']}")
             print(f"Dashboard report: {result['paths']['dashboard_report']}")
             print(f"Safe to continue: {dashboard.get('safe_to_continue')}")
+            print(f"Safety scope: {dashboard.get('safe_to_continue_scope') or 'flight_dashboard_only_not_dispatch_authority'}")
+            print(f"Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_flight_dashboard'}")
+            print(f"Runtime authority note: {dashboard.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             print(f"Blockers: {', '.join(dashboard.get('blockers', []) or []) or 'none'}")
             print(f"Next action: {dashboard.get('next_recommended_action')}")
+            _print_ceo_trace_summary(dashboard.get("trace_grade", {}) or {})
             return 0
         if action == "operating-dashboard":
             result = run_ceo_operating_dashboard(options)
@@ -2240,7 +2407,11 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Dashboard report: {result['paths']['dashboard_report']}")
             print(f"Candidate portfolio: {dashboard.get('candidate_portfolio_count')}")
             print(f"Capability backlog: {dashboard.get('capability_backlog_count')}")
+            print(f"Safety scope: {dashboard.get('safe_to_continue_scope') or 'flight_dashboard_only_not_dispatch_authority'}")
+            print(f"Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_operating_dashboard'}")
+            print(f"Runtime authority note: {dashboard.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             print(f"Next recommended action: {dashboard.get('next_recommended_action')}")
+            _print_ceo_trace_summary(dashboard.get("trace", {}) or {})
             return 0
         if action == "portfolio-allocator":
             result = run_ceo_portfolio_allocator(options)
@@ -2250,7 +2421,10 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Portfolio allocator report: {result['paths']['portfolio_allocator_report']}")
             print(f"Selected lane: {selected.get('lane_id')}")
             print(f"Score: {selected.get('score')}")
-            print(f"Next action: {selected.get('next_action')}")
+            print(f"Attention next action: {selected.get('next_action')}")
+            print(f"Action scope: {allocator.get('action_scope') or 'portfolio_attention_only'}")
+            print(f"Dispatch authority: {allocator.get('dispatch_authority') or 'not_granted_by_portfolio_allocator'}")
+            print(f"Runtime authority note: {allocator.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             return 0
         if action == "mission-score":
             result = run_ceo_mission_score(options)
@@ -2260,7 +2434,10 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Status: {score.get('status')}")
             print(f"Overall mission score: {score.get('overall_mission_score')}")
             print(f"Lowest dimension: {score.get('lowest_dimension')}")
-            print(f"Next action: {score.get('next_best_mission_action')}")
+            print(f"Mission attention action: {score.get('next_best_mission_action')}")
+            print(f"Action scope: {score.get('action_scope') or 'mission_strategy_only'}")
+            print(f"Dispatch authority: {score.get('dispatch_authority') or 'not_granted_by_mission_score'}")
+            print(f"Runtime authority note: {score.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             return 0
         if action == "strategy-capital-dashboard":
             result = run_ceo_strategy_capital_dashboard(options)
@@ -2268,6 +2445,9 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Strategy capital dashboard: {result['paths']['strategy_capital_dashboard']}")
             print(f"Strategy capital dashboard report: {result['paths']['strategy_capital_dashboard_report']}")
             print(f"Safe to continue: {dashboard.get('safe_to_continue')}")
+            print(f"Safety scope: {dashboard.get('safe_to_continue_scope') or 'strategy_attention_only_not_dispatch_authority'}")
+            print(f"Dispatch authority: {dashboard.get('dispatch_authority') or 'not_granted_by_strategy_capital_dashboard'}")
+            print(f"Runtime authority note: {dashboard.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             print(f"Selected bucket: {dashboard.get('selected_capital_bucket')}")
             print(f"Selected strategy: {dashboard.get('selected_strategy')}")
             print(f"Capital points: {dashboard.get('total_points')}")
@@ -2277,11 +2457,26 @@ def ceo_command(args: argparse.Namespace) -> int:
             quality = result["decision_quality"]
             print(f"Decision quality: {result['paths']['decision_quality']}")
             print(f"Decision quality report: {result['paths']['decision_quality_report']}")
+            print(f"Effective runtime action: {quality.get('effective_runtime_action') or 'none'}")
+            print(f"Effective runtime command kind: {quality.get('effective_runtime_command_kind') or 'none'}")
+            print(f"Effective runtime can execute now: {quality.get('effective_runtime_can_execute_now')}")
+            print(f"Runtime blocked: {quality.get('runtime_blocked')}")
+            print(f"Runtime block reason: {quality.get('runtime_block_reason') or 'none'}")
             print(f"Selected action: {quality.get('selected_action')}")
+            print(f"Selected strategic route advisory: {quality.get('selected_strategic_route_advisory') or 'none'}")
             print(f"Selected score: {quality.get('selected_score')}")
             print(f"Runner-up action: {quality.get('runner_up_action') or 'none'}")
             print(f"Confidence: {quality.get('confidence')}")
             print(f"Expected artifact: {quality.get('expected_artifact')}")
+            print(f"Runtime authority: {quality.get('runtime_authority_status')}")
+            print(f"Executable next action: {quality.get('executable_next_action') or 'none'}")
+            print(f"Executable command kind: {quality.get('executable_next_command_kind') or 'none'}")
+            print(f"Runtime authorized strategic route: {quality.get('runtime_authorized_strategic_route') or 'none'}")
+            print(f"Runtime authorized route source: {quality.get('runtime_authorized_route_source') or 'none'}")
+            print(f"Can execute now: {quality.get('executable_can_execute_now')}")
+            print(f"Selected action executable now: {quality.get('selected_action_is_executable_now')}")
+            print(f"Selected action blocked by: {quality.get('selected_action_blocked_by') or 'none'}")
+            print(f"Runtime note: {quality.get('selected_action_runtime_note') or ''}")
             return 0
         if action == "action-board":
             result = run_ceo_action_board(options)
@@ -2324,8 +2519,52 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO operator brief report: {result['paths']['operator_brief_report']}")
             print(f"Status: {brief.get('status')}")
             print(f"Summary: {brief.get('plain_english_summary')}")
+            print(f"Effective operator status: {situation.get('effective_operator_status') or 'unknown_or_diagnostic'}")
+            print(f"Manual gate active: {situation.get('manual_gate_active')}")
+            print(f"Effective operator runtime blocked: {situation.get('effective_operator_runtime_blocked')}")
+            print(f"Effective operator runtime block reason: {situation.get('effective_operator_runtime_block_reason') or 'none'}")
             print(f"Primary action: {situation.get('primary_action') or 'none'}")
             print(f"Primary kind: {situation.get('primary_kind') or 'none'}")
+            print(f"Effective runtime action: {situation.get('decision_quality_effective_runtime_action') or 'none'}")
+            print(f"Effective runtime command kind: {situation.get('decision_quality_effective_runtime_command_kind') or 'none'}")
+            print(f"Effective runtime can execute now: {situation.get('decision_quality_effective_runtime_can_execute_now')}")
+            print(f"Runtime blocked: {situation.get('decision_quality_runtime_blocked')}")
+            print(f"Runtime block reason: {situation.get('decision_quality_runtime_block_reason') or 'none'}")
+            print(f"Selected advisory route: {situation.get('decision_quality_selected_strategic_route_advisory') or 'none'}")
+            trace = brief.get("trace_health", {}) or {}
+            print(f"Trace status: {trace.get('status') or 'missing_trace_grade'}")
+            print(f"Trace score: {trace.get('score') if trace.get('score') != '' else 'n/a'}")
+            print(f"Trace recommended next action: {trace.get('recommended_next_action') or 'none'}")
+            print(f"Trace manual data import required: {trace.get('manual_data_import_required') if trace.get('manual_data_import_required') != '' else 'n/a'}")
+            print(f"Trace issues: {trace.get('issues') or []}")
+            approval = brief.get("approval_work", {}) or {}
+            print(f"Approval status: {approval.get('status') or 'none'}")
+            print(f"Approval pending: {approval.get('pending_count') if approval.get('pending_count') != '' else 'n/a'}")
+            print(f"Approval top id: {approval.get('top_pending_approval_id') or 'none'}")
+            print(f"Approval record command: {approval.get('approval_record_command') or 'none'}")
+            print(f"Approval apply command: {approval.get('approval_apply_command') or 'none'}")
+            specialist = brief.get("specialist_work", {}) or {}
+            print(f"Specialist status: {specialist.get('status') or 'none'}")
+            print(f"Specialist pending: {specialist.get('pending_task_count') if specialist.get('pending_task_count') != '' else 'n/a'}")
+            print(f"Specialist completed: {specialist.get('completed_task_count') if specialist.get('completed_task_count') != '' else 'n/a'}")
+            print(f"Specialist blocked: {specialist.get('blocked_task_count') if specialist.get('blocked_task_count') != '' else 'n/a'}")
+            print(f"Specialist top task: {specialist.get('top_pending_task_id') or 'none'}")
+            print(f"Specialist top packet: {specialist.get('top_pending_packet_path') or 'none'}")
+            print(f"Specialist top result mode: {specialist.get('top_pending_result_resolution_mode') or 'none'}")
+            print(f"Specialist top requires manual gate: {specialist.get('top_pending_requires_manual_gate')}")
+            print(f"Specialist top closure command: {specialist.get('top_pending_closure_command') or 'none'}")
+            print(f"Specialist top autonomous task: {specialist.get('top_autonomous_pending_task_id') or 'none'}")
+            print(f"Specialist top autonomous packet: {specialist.get('top_autonomous_pending_packet_path') or 'none'}")
+            print(f"Specialist top autonomous result command: {specialist.get('top_autonomous_next_role_result_command') or 'none'}")
+            print(f"Specialist top blocked task: {specialist.get('top_blocked_task_id') or 'none'}")
+            print(f"Specialist top blocked packet: {specialist.get('top_blocked_packet_path') or 'none'}")
+            print(f"Specialist top blocked validation: {specialist.get('top_blocked_validation_status') or 'none'}")
+            print(f"Specialist top blocked closure command: {specialist.get('top_blocked_closure_command') or 'none'}")
+            print(f"Specialist top blocked review status: {specialist.get('top_blocked_review_status') or 'none'}")
+            print(f"Specialist top blocked result path: {specialist.get('top_blocked_result_path') or 'none'}")
+            print(f"Specialist top blocked next action: {specialist.get('top_blocked_next_action') or 'none'}")
+            print(f"Specialist top blocked finding: {specialist.get('top_blocked_finding') or 'none'}")
+            print(f"Specialist next result command: {specialist.get('next_role_result_command') or 'none'}")
             print(f"Recommended next action: {brief.get('recommended_next_action')}")
             return 0
         if action == "memory-delta":
@@ -2355,6 +2594,7 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Status: {gate.get('status')}")
             print(f"Safe to execute: {gate.get('safe_to_execute')}")
             print(f"Blockers: {[item.get('blocker') for item in gate.get('blockers', []) or []]}")
+            _print_ceo_preflight_trace_source(gate)
             return 0 if gate.get("safe_to_execute") else 1
         if action == "promotion-proposal":
             result = run_ceo_promotion_proposal(options)
@@ -2382,6 +2622,9 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Approval status: {result['paths']['approval_status']}")
             print(f"Status: {queue.get('status')}")
             print(f"Pending approvals: {queue.get('pending_count')}")
+            print(f"Top pending approval: {queue.get('top_pending_approval_id') or 'none'}")
+            print(f"Approval record command: {queue.get('top_pending_approval_record_command') or 'none'}")
+            print(f"Approval apply command: {queue.get('top_pending_approval_apply_command') or 'none'}")
             print(f"Next action: {queue.get('next_action')}")
             return 0
         if action == "approval-record":
@@ -2411,6 +2654,7 @@ def ceo_command(args: argparse.Namespace) -> int:
                 print(f"Preflight gate report: {preflight_result['paths']['preflight_gate_report']}")
                 print(f"Status: {preflight_gate.get('status')}")
                 print(f"Unexpected blockers: {unexpected_blockers}")
+                _print_ceo_preflight_trace_source(preflight_gate)
                 return 1
             result = run_ceo_approval_apply(
                 replace(options, ceo_context="guarded_direct", ceo_authorized_action="approval-apply"),
@@ -2426,17 +2670,40 @@ def ceo_command(args: argparse.Namespace) -> int:
         if action == "executive-kpis":
             result = run_ceo_executive_kpis(options)
             kpis = result["kpis"]
+            values = kpis.get("kpis", {}) or {}
             print(f"Executive KPIs: {result['paths']['executive_kpis']}")
             print(f"Executive KPI report: {result['paths']['executive_kpis_report']}")
             print(f"Status: {kpis.get('status')}")
-            print(f"Next action: {kpis.get('next_action')}")
-            print(f"Open approvals: {(kpis.get('kpis', {}) or {}).get('open_approval_count')}")
-            print(f"Evidence debt: {(kpis.get('kpis', {}) or {}).get('evidence_debt_count')}")
-            print(f"Top blocker: {(kpis.get('kpis', {}) or {}).get('top_blocker') or 'none'}")
-            print(f"Repair plan status: {(kpis.get('kpis', {}) or {}).get('repair_plan_status') or 'none'}")
-            print(f"Top repair: {(kpis.get('kpis', {}) or {}).get('top_repair') or 'none'}")
-            print(f"Top repair kind: {(kpis.get('kpis', {}) or {}).get('top_repair_kind') or 'none'}")
-            print(f"Repair next command: {(kpis.get('kpis', {}) or {}).get('repair_next_command') or 'none'}")
+            print(f"Attention next action: {kpis.get('next_action')}")
+            print(f"Next action scope: {kpis.get('next_action_scope') or 'executive_health_diagnostic_only'}")
+            print(f"Dispatch authority: {kpis.get('dispatch_authority') or 'not_granted_by_executive_kpis'}")
+            print(f"Runtime authority note: {kpis.get('runtime_authority_note') or 'check ceo status before dispatch'}")
+            print(f"Open approvals: {values.get('open_approval_count')}")
+            print(f"Evidence debt: {values.get('evidence_debt_count')}")
+            print(f"Trace verdict: {values.get('trace_verdict') or 'none'}")
+            print(f"Trace score: {values.get('trace_score') if values.get('trace_score') != '' else 'n/a'}")
+            print(f"Trace recommended next action: {values.get('trace_recommended_next_action') or 'none'}")
+            print(
+                "Trace manual data import required: "
+                f"{values.get('trace_manual_data_import_required') if values.get('trace_manual_data_import_required') != '' else 'n/a'}"
+            )
+            print(f"Trace issues: {values.get('trace_issues') or []}")
+            print(f"Top blocker: {values.get('top_blocker') or 'none'}")
+            print(f"Repair plan status: {values.get('repair_plan_status') or 'none'}")
+            print(f"Top repair: {values.get('top_repair') or 'none'}")
+            print(f"Top repair kind: {values.get('top_repair_kind') or 'none'}")
+            print(f"Repair next command: {values.get('repair_next_command') or 'none'}")
+            print(f"Role queue: {values.get('role_queue_status') or 'none'}")
+            print(f"Role pending: {values.get('role_pending_count', 0)}")
+            print(f"Role blocked: {values.get('role_blocked_count', 0)}")
+            print(f"Role top blocked task: {values.get('role_top_blocked_task') or 'none'}")
+            print(f"Role top blocked review: {values.get('role_top_blocked_review_status') or 'none'}")
+            if values.get("role_top_blocked_next_action"):
+                print(f"Role top blocked next action: {values.get('role_top_blocked_next_action')}")
+            if values.get("role_top_blocked_finding"):
+                print(f"Role top blocked finding: {values.get('role_top_blocked_finding')}")
+            if values.get("role_next_action"):
+                print(f"Role next action: {values.get('role_next_action')}")
             return 0
         if action == "role-queue":
             result = run_ceo_role_queue(options)
@@ -2446,6 +2713,31 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Role task queue report: {result['paths']['role_task_queue_report']}")
             print(f"Status: {queue.get('status')}")
             print(f"Tasks: {queue.get('task_count')}")
+            print(f"Pending: {queue.get('pending_task_count')}")
+            print(f"Pending manual: {queue.get('pending_manual_task_count')}")
+            print(f"Pending autonomous: {queue.get('pending_autonomous_task_count')}")
+            print(f"Completed: {queue.get('completed_task_count')}")
+            print(f"Blocked: {queue.get('blocked_task_count')}")
+            print(f"Top pending task: {queue.get('top_pending_task_id') or 'none'}")
+            print(f"Top pending role: {queue.get('top_pending_role_id') or 'none'}")
+            print(f"Top pending packet: {queue.get('top_pending_packet_path') or 'none'}")
+            print(f"Top pending result mode: {queue.get('top_pending_result_resolution_mode') or 'none'}")
+            print(f"Top pending requires manual gate: {queue.get('top_pending_requires_manual_gate')}")
+            print(f"Top pending closure command: {queue.get('top_pending_closure_command') or 'none'}")
+            print(f"Top autonomous task: {queue.get('top_autonomous_pending_task_id') or 'none'}")
+            print(f"Top autonomous packet: {queue.get('top_autonomous_pending_packet_path') or 'none'}")
+            print(f"Top autonomous result command: {queue.get('top_autonomous_next_role_result_command') or 'none'}")
+            print(f"Top blocked task: {queue.get('top_blocked_task_id') or 'none'}")
+            print(f"Top blocked role: {queue.get('top_blocked_role_id') or 'none'}")
+            print(f"Top blocked packet: {queue.get('top_blocked_packet_path') or 'none'}")
+            print(f"Top blocked validation: {queue.get('top_blocked_validation_status') or 'none'}")
+            print(f"Top blocked closure command: {queue.get('top_blocked_closure_command') or 'none'}")
+            print(f"Top blocked review status: {queue.get('top_blocked_review_status') or 'none'}")
+            print(f"Top blocked result path: {queue.get('top_blocked_result_path') or 'none'}")
+            print(f"Top blocked next action: {queue.get('top_blocked_next_action') or 'none'}")
+            print(f"Top blocked finding: {queue.get('top_blocked_finding') or 'none'}")
+            print(f"Next role dispatch command: {queue.get('next_role_dispatch_command') or 'none'}")
+            print(f"Next role result command: {queue.get('next_role_result_command') or 'none'}")
             print(f"Next action: {queue.get('next_action')}")
             return 0
         if action == "role-dispatch":
@@ -2456,6 +2748,16 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Packet dir: {result['paths']['packet_dir']}")
             print(f"Status: {dispatch.get('status')}")
             print(f"Packets: {dispatch.get('packet_count')}")
+            print(f"Top task: {dispatch.get('top_task_id') or 'none'}")
+            print(f"Top role: {dispatch.get('top_role_id') or 'none'}")
+            print(f"Top packet: {dispatch.get('top_packet_path') or 'none'}")
+            print(f"Top result mode: {dispatch.get('top_result_resolution_mode') or 'none'}")
+            print(f"Top requires manual gate: {dispatch.get('top_requires_manual_gate')}")
+            print(f"Top closure command: {dispatch.get('top_closure_command') or 'none'}")
+            print(f"Top autonomous task: {dispatch.get('top_autonomous_task_id') or 'none'}")
+            print(f"Top autonomous packet: {dispatch.get('top_autonomous_packet_path') or 'none'}")
+            print(f"Top autonomous result command: {dispatch.get('top_autonomous_next_role_result_command') or 'none'}")
+            print(f"Next role result command: {dispatch.get('next_role_result_command') or 'none'}")
             return 0
         if action == "role-result":
             result = run_ceo_role_result(
@@ -2465,8 +2767,31 @@ def ceo_command(args: argparse.Namespace) -> int:
                 result_path=args.result_path,
             )
             print(f"Role task ledger: {result['paths']['role_task_ledger']}")
+            print(f"Role result validation: {result['paths']['role_result_validation']}")
             print(f"Task: {result['result']['task_id']}")
             print(f"Status: {result['result']['status']}")
+            print(f"Validation: {result['result'].get('validation_status')}")
+            return 0
+        if action == "org-progress-score":
+            result = run_ceo_org_progress_score(options)
+            scorecard = result["org_progress_score"]
+            print(f"Org progress score: {result['paths']['org_progress_score']}")
+            print(f"Org progress score report: {result['paths']['org_progress_score_report']}")
+            print(f"Status: {scorecard.get('status')}")
+            print(f"Score: {scorecard.get('org_progress_score')}")
+            print(f"Action scope: {scorecard.get('action_scope') or 'org_progress_diagnostic_only'}")
+            print(f"Dispatch authority: {scorecard.get('dispatch_authority') or 'not_granted_by_org_progress_score'}")
+            print(f"Pending: {scorecard.get('pending_task_count')}")
+            print(f"Blocked: {scorecard.get('blocked_task_count')}")
+            print(f"Completed: {scorecard.get('completed_task_count')}")
+            print(f"Accepted completed: {scorecard.get('accepted_completed_count')}")
+            print(f"Merge receipts: {scorecard.get('merge_receipt_count')}")
+            print(f"Completed without merge: {scorecard.get('completed_without_merge_count')}")
+            print(f"Decision deltas: {scorecard.get('decision_delta_count')}")
+            print(f"Fake progress flags: {scorecard.get('fake_progress_flags') or []}")
+            print(f"Top blocked task: {scorecard.get('top_blocked_task_id') or 'none'}")
+            print(f"Top blocked next action: {scorecard.get('top_blocked_next_action') or 'none'}")
+            print(f"Next action: {scorecard.get('next_action')}")
             return 0
         if action == "capability-backlog":
             result = run_ceo_capability_backlog(options)
@@ -2493,6 +2818,14 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Resume status: {brief.get('resume_status')}")
             print(f"Next command: {brief.get('next_command')}")
             print(f"Preflight blockers: {brief.get('preflight_blockers') or []}")
+            print(f"Trace grade: {brief.get('trace_grade_status') or 'none'}")
+            print(f"Trace score: {brief.get('trace_grade_score') if brief.get('trace_grade_score') != '' else 'n/a'}")
+            print(f"Trace recommended next action: {brief.get('trace_grade_recommended_next_action') or 'none'}")
+            print(
+                "Trace manual data import required: "
+                f"{brief.get('trace_grade_manual_data_import_required') if brief.get('trace_grade_manual_data_import_required') != '' else 'n/a'}"
+            )
+            print(f"Trace issues: {brief.get('trace_grade_issues') or []}")
             return 0 if brief.get("resume_status") in {"safe_for_one_bound_action", "diagnostic_advisory_before_extended_autonomy"} else 1
         if action == "artifact-coherence":
             result = run_ceo_artifact_coherence(options)
@@ -2501,7 +2834,9 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO artifact coherence report: {result['paths']['artifact_coherence_report']}")
             print(f"Status: {coherence.get('status')}")
             print(f"Issues: {coherence.get('issue_count')}")
-            return 0 if coherence.get("status") == "pass" else 1
+            print(f"Hard issues: {coherence.get('hard_issue_count', 0)}")
+            print(f"Advisory issues: {coherence.get('advisory_issue_count', 0)}")
+            return 0 if coherence.get("status") != "fail" else 1
         if action == "run-index":
             result = run_ceo_run_index(options, limit=args.limit)
             index = result["run_index"]
@@ -2510,6 +2845,57 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Status: {index.get('status')}")
             print(f"Run count: {index.get('run_count')}")
             print(f"Status counts: {index.get('status_counts')}")
+            latest = (index.get("runs", []) or [{}])[0]
+            if latest:
+                print(f"Latest run: {latest.get('run_id')}")
+                print(f"Latest status: {latest.get('status')}")
+                print(f"Latest trace grade: {latest.get('trace_grade_status') or 'missing_trace_grade'}")
+                print(f"Latest trace score: {latest.get('trace_grade_score') if latest.get('trace_grade_score') != '' else 'n/a'}")
+                print(f"Latest trace recommended next action: {latest.get('trace_grade_recommended_next_action') or 'none'}")
+                print(
+                    "Latest trace manual data import required: "
+                    f"{latest.get('trace_grade_manual_data_import_required') if latest.get('trace_grade_manual_data_import_required') != '' else 'n/a'}"
+                )
+                if latest.get("trace_grade_issues"):
+                    print(f"Latest trace issues: {latest.get('trace_grade_issues')}")
+                print(f"Latest artifact coherence: {latest.get('artifact_coherence_status') or 'none'}")
+                print(f"Latest artifact coherence top issue: {latest.get('artifact_coherence_top_issue') or 'none'}")
+                print(
+                    "Latest artifact coherence top issue severity: "
+                    f"{latest.get('artifact_coherence_top_issue_severity') or 'unknown'}"
+                )
+                print(f"Latest effective operator status: {latest.get('effective_operator_status') or 'unknown_or_diagnostic'}")
+                print(f"Latest manual gate active: {latest.get('manual_gate_active')}")
+                print(f"Latest effective runtime action: {latest.get('decision_quality_effective_runtime_action') or 'none'}")
+                print(f"Latest runtime blocked: {latest.get('decision_quality_runtime_blocked')}")
+                print(f"Latest runtime block reason: {latest.get('decision_quality_runtime_block_reason') or 'none'}")
+                print(f"Latest decision: {latest.get('decision_quality_selected_action') or 'none'}")
+                print(f"Latest decision advisory route: {latest.get('decision_quality_selected_strategic_route_advisory') or 'none'}")
+                print(f"Latest decision authority: {latest.get('decision_quality_runtime_authority') or 'none'}")
+                print(f"Latest decision can execute: {latest.get('decision_quality_executable_can_execute_now')}")
+                print(f"Latest decision blocked by: {latest.get('decision_quality_selected_action_blocked_by') or 'none'}")
+                if latest.get("approval_top_pending_id"):
+                    print(f"Latest top approval: {latest.get('approval_top_pending_id')}")
+                    print(f"Latest top approval kind: {latest.get('approval_top_pending_kind') or 'none'}")
+                    print(f"Latest top approval reason: {latest.get('approval_top_pending_reason') or 'none'}")
+                    print(f"Latest top approval source: {latest.get('approval_top_pending_source') or 'none'}")
+                    print(
+                        "Latest top approval required user decision: "
+                        f"{latest.get('approval_top_pending_required_user_decision') or 'none'}"
+                    )
+                    print(f"Latest top approval authority: {latest.get('approval_top_pending_authority') or 'none'}")
+                    print(f"Latest top approval fingerprint: {latest.get('approval_top_pending_fingerprint') or 'none'}")
+                if latest.get("role_top_blocked_task_id"):
+                    print(f"Latest top blocked role task: {latest.get('role_top_blocked_task_id')}")
+                    print(f"Latest top blocked role: {latest.get('role_top_blocked_role_id') or 'none'}")
+                    print(f"Latest top blocked role mode: {latest.get('role_top_blocked_result_resolution_mode') or 'none'}")
+                    print(f"Latest top blocked role validation: {latest.get('role_top_blocked_validation_status') or 'none'}")
+                    print(f"Latest top blocked role closure: {latest.get('role_top_blocked_closure_command') or 'none'}")
+                    print(f"Latest top blocked role review: {latest.get('role_top_blocked_review_status') or 'none'}")
+                    print(f"Latest top blocked role result: {latest.get('role_top_blocked_result_path') or 'none'}")
+                    print(f"Latest top blocked role next action: {latest.get('role_top_blocked_next_action') or 'none'}")
+                    print(f"Latest top blocked role finding: {latest.get('role_top_blocked_finding') or 'none'}")
+                print(f"Latest next command: {latest.get('next_command')}")
             return 0
         if action == "dispatch-receipt":
             result = run_ceo_dispatch_receipt(options)
@@ -2527,6 +2913,7 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"CEO blocker stack report: {result['paths']['blocker_stack_report']}")
             print(f"Status: {stack.get('status')}")
             print(f"Top blocker: {stack.get('top_blocker') or 'none'}")
+            print(f"Top blocker evidence: {stack.get('top_blocker_evidence') or 'none'}")
             print(f"Next command: {stack.get('next_command')}")
             return 0 if stack.get("status") == "clear_for_one_bound_action" else 1
         if action == "incident-register":
@@ -2550,6 +2937,19 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Top repair kind: {plan.get('top_repair_kind') or 'none'}")
             print(f"Next command: {plan.get('next_command')}")
             return 0
+        if action == "repair-apply":
+            result = run_ceo_repair_apply(options, repair_key=args.repair_key)
+            apply_result = result["repair_apply"]
+            print(f"CEO repair apply: {result['paths']['repair_apply']}")
+            print(f"CEO repair apply report: {result['paths']['repair_apply_report']}")
+            print(f"Status: {apply_result.get('status')}")
+            print(f"Repair key: {apply_result.get('repair_key')}")
+            print(f"Command kind: {apply_result.get('command_kind') or 'n/a'}")
+            print(f"Action attempted: {apply_result.get('action_attempted')}")
+            print(f"Action executed: {apply_result.get('action_executed')}")
+            print(f"Repair closed: {apply_result.get('repair_closed')}")
+            print(f"Reason: {apply_result.get('reason')}")
+            return 0 if apply_result.get("action_executed") else 1
         if action == "eval-suite":
             result = run_ceo_eval_suite(options)
             eval_suite = result["eval_suite"]
@@ -2559,7 +2959,17 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Eval fixtures: {result['paths']['eval_fixtures']}")
             print(f"Status: {eval_suite.get('status')}")
             print(f"Score: {eval_suite.get('score')}")
-            print(f"9.9 readiness: {(eval_suite.get('nine_nine_readiness', {}) or {}).get('status')}")
+            readiness = (eval_suite.get("nine_nine_readiness", {}) or {})
+            print(f"9.9 readiness: {readiness.get('status')}")
+            print(f"9.9 blocking cases: {readiness.get('blocking_case_ids') or []}")
+            print(f"9.9 advisory cases: {readiness.get('advisory_case_ids') or []}")
+            failed_cases = [item for item in eval_suite.get("cases", []) or [] if item.get("status") != "pass"]
+            for item in failed_cases:
+                print(
+                    "Failed case: "
+                    f"{item.get('case_id')} severity={item.get('severity')} "
+                    f"next={item.get('next_action')} evidence={item.get('evidence')}"
+                )
             return 0 if eval_suite.get("status") != "fail" else 1
         if action == "eval-fixtures":
             result = run_ceo_eval_fixtures(options)
@@ -4228,6 +4638,13 @@ def build_parser() -> argparse.ArgumentParser:
     ceo_role_result.add_argument("--result-path", default="")
     ceo_role_result.set_defaults(func=ceo_command)
 
+    ceo_org_progress_score = ceo_subparsers.add_parser(
+        "org-progress-score",
+        help="Score whether role/specialist work changed decisions or only produced activity.",
+    )
+    add_ceo_common(ceo_org_progress_score)
+    ceo_org_progress_score.set_defaults(func=ceo_command)
+
     ceo_capability_backlog = ceo_subparsers.add_parser(
         "capability-backlog",
         help="Write a standalone CEO research-infrastructure capability backlog.",
@@ -4291,6 +4708,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_ceo_common(ceo_repair_plan)
     ceo_repair_plan.set_defaults(func=ceo_command)
+
+    ceo_repair_apply = ceo_subparsers.add_parser(
+        "repair-apply",
+        help="Execute one allowlisted CEO repair-plan item and write before/after closure evidence.",
+    )
+    add_ceo_common(ceo_repair_apply)
+    ceo_repair_apply.add_argument("--repair-key", required=True)
+    ceo_repair_apply.add_argument("--apply", action="store_true", help="Required to execute one allowlisted repair-plan item.")
+    ceo_repair_apply.set_defaults(func=ceo_command)
 
     ceo_eval_suite = ceo_subparsers.add_parser(
         "eval-suite",

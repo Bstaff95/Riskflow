@@ -3,6 +3,14 @@
 This document is the operating contract for Codex-supervised Riskflow CEO
 heartbeat runs.
 
+For company-building context, pair this contract with
+`docs/RISKFLOW_AS_BUSINESS.md`, `docs/CUSTOMER_DISCOVERY.md`,
+`docs/CUSTOMER_OUTREACH_DRAFTS.md`, `docs/PRICING_AND_PACKAGING.md`,
+`docs/BUSINESS_METRICS.md`, `docs/COMPETITIVE_POSITIONING.md`,
+`docs/CEO_STRATEGY_MEMO.md`, `docs/BUSINESS_PRODUCT_ROADMAP.md`,
+`docs/CEO_DELEGATION_MODEL.md`, `docs/CEO_OPERATING_CADENCE.md`,
+`docs/CEO_WEEKLY_REVIEW_TEMPLATE.md`, and `docs/CEO_BOARD_REPORTING.md`.
+
 Use it when the user asks Codex to run Riskflow autonomously for hours, overnight,
 or until stopped. The heartbeat operator is accountable for executive judgment.
 The Python command is only the executor.
@@ -39,6 +47,14 @@ approval in the active thread.
 The CEO should act as orchestrator, capital allocator, referee, memory editor,
 and risk officer. It should stop repeated bad loops, not merely keep tools busy.
 
+External agent-system research reinforces this contract: approvals should
+interrupt before risky execution, paused runs need durable resumable state,
+guardrails should be explicit and separately inspectable, tools should be
+evaluated against observed failures, and parallel specialist work still needs
+one accountable orchestrator. The Obsidian note
+`obsidian/wiki/concepts/CEO Agentic Systems Research Alignment.md` stores the
+background source anchors. It is design memory, not runtime authority.
+
 ## Run Id And Runtime Authority
 
 A CEO run is active only when generated runtime artifacts say it is active.
@@ -48,6 +64,13 @@ not runtime authority.
 Before any CEO action, inspect `heartbeat_status.yaml`, `trace_grade.yaml`, and
 `ceo_operating_dashboard.yaml` for the chosen `run_id`. If no `run_id` is
 explicitly supplied and no single active run is verified, plan a fresh run id.
+
+Dashboard `safe_to_continue` fields are process-safety diagnostics, not dispatch
+authority. Flight, operating, and strategy-capital dashboards must be read with
+their `safe_to_continue_scope`, `dispatch_authority`, and
+`runtime_authority_note` fields. Actual dispatch authority comes from `ceo
+status`, approval queue, action board, resumption brief, preflight gate, and
+dispatch receipt.
 
 Stopped runs require explicit user approval before clearing stop files, mutating
 runtime queues, or resuming. Smoke runs are test artifacts, not continuation
@@ -170,6 +193,12 @@ PYTHONPATH=src python3 -m riskflow ceo incident-register \
 PYTHONPATH=src python3 -m riskflow ceo repair-plan \
   --run-id <run_id>
 
+PYTHONPATH=src python3 -m riskflow ceo action-board \
+  --run-id <run_id>
+
+PYTHONPATH=src python3 -m riskflow ceo operator-brief \
+  --run-id <run_id>
+
 PYTHONPATH=src python3 -m riskflow ceo artifact-coherence \
   --run-id <run_id>
 
@@ -181,13 +210,30 @@ PYTHONPATH=src python3 -m riskflow ceo run-index \
 ```
 
 `ceo status` is the first quick-read command. In addition to lab progress and
-true-blocker state, it surfaces the latest existing blocker stack, top blocker,
+true-blocker state, it prints live stop-request state and applies it as a
+runtime-authority override. If a stop file exists after older safe artifacts
+were generated, status reports `manual_gate_required`, forces
+safe-to-dispatch false, and routes the default handoff command to
+`ceo approval-queue` instead of the stale `execute-next` command. The displayed
+action-board, decision-quality, and operator-brief fields are also forced to
+manual-gate state in the status view. It also
+surfaces the latest existing blocker stack, top blocker,
 operating incident count, dispatch receipt status, safe-to-dispatch flag, and
-the blocker stack's next repair command. It also prints resumption status and a
-default handoff command; if the resumption brief is missing, that command is
-`ceo resumption-brief`. When `repair_plan.yaml` exists, it also prints repair
-plan status, runnable repair count, diagnostic refresh count, top repair, top
-repair kind, and repair next command.
+trace-grade verdict/score/recommended next action/issues/manual-data flag plus
+replay/eval/operator-step/artifact-coherence health. It also prints resumption
+status and a default handoff command; if the resumption brief is missing, that
+command is `ceo resumption-brief`. When `repair_plan.yaml` exists, it also
+prints repair plan status, runnable repair count, diagnostic refresh count, top
+repair, top repair kind, and repair next command. When approvals are pending, it
+prints the top approval kind, reason, source, required user decision, authority,
+fingerprint, and record/apply commands. When `role_task_queue.yaml`
+exists, it also prints role queue status, pending/completed/blocked counts, top
+pending specialist task, top blocked specialist task, top packet paths, blocked
+task closure command, and the next role-result command template. When
+`decision_quality.yaml` exists, it
+also prints the selected strategic action, confidence, runtime authority,
+executable next action, can-execute flag, runtime-authorized strategic route
+behind any safe `execute-next` wrapper, and blocked-by reason.
 
 Only run the binding action when the heartbeat and trace grade do not indicate
 `stop_requested`, a true blocker, a production-promotion gate, or an unresolved
@@ -219,29 +265,65 @@ The final report should include the latest decision packet plus trace grade,
 flight dashboard, operating dashboard, mission score, strategy capital
 dashboard, decision quality, replay, eval suite, guardrail audit, preflight gate, dispatch
 receipt, blocker stack, operating incident register, repair plan, action board,
-operator brief, artifact coherence, resumption brief,
+repair apply, operator brief, artifact coherence, resumption brief,
 approval queue, executive KPIs, capability backlog, fresh/withheld validation
-contract, role dispatch, promotion proposal, and evidence-debt links/status. It
-is a handoff report, not approval to change production behavior.
+contract, role dispatch, role result validation, promotion proposal, and
+evidence-debt links/status. It is a handoff report, not approval to change
+production behavior. Its role snapshot includes top blocked role review status,
+accepted result path, recommended evidence action, and finding so final handoff
+does not lose accepted blocked specialist context. The report reuses freshly generated trust artifacts inside
+one refresh pass where possible so the handoff is faster without weakening
+authority checks. Reused trust artifacts must match the active run/lab ids, and
+operator surfaces still recheck live stop/manual-gate state before exposing any
+bounded action.
 
 For a fresh session or noisy-thread handoff, run `ceo resumption-brief` before
 any action. It writes `resumption_brief.yaml` / `.md` and answers whether the
 run is stopped, blocked by preflight, diagnostic-only, or safe for one bound
 `execute-next --apply` action. It synthesizes existing trust artifacts; it does
-not authorize product language or replace preflight.
+not authorize product language or replace preflight. When it is safe for one
+bound action, it records an independently derived `authorized_strategic_route`
+and `authorized_route_source` from the current action contract or
+strategy-capital dashboard, so downstream surfaces can prove what
+`execute-next` is expected to run.
 
 If you are unsure which run should be inspected first, run `ceo run-index`
 before choosing a run id. It writes `run_index.yaml` / `.md` at the CEO report
 root and lists recent runs by stopped, blocked, diagnostic, actionable, or
 missing-resumption status plus dispatch-receipt status, dispatch reason, and
 top-blocker, incident-count, repair-plan, and top-repair summaries when
-available, plus operator-brief status/summary and the safest next command. It is diagnostic only; it does not
+available, plus repair-apply status/closure, role-result-validation status,
+role completed/blocked counts, top blocked role task and closure command,
+operator-brief status/summary, and the safest next command. It is diagnostic only; it does not
 clear stops, generate approvals, or execute run actions.
 
 `ceo artifact-coherence` writes `artifact_coherence.yaml` / `.md` and checks
 whether trust artifacts belong to the same run/lab ids and were generated after
-the latest binding action. If the resumption brief would otherwise say safe but
-coherence fails, the brief downgrades to `diagnostic_stale_artifacts`.
+the latest binding action. It also checks semantic trust alignment: the current
+action contract must match the latest binding action, and that binding action
+must carry an immutable `dispatch_receipts/` snapshot path/hash that still
+matches the receipt file. If the receipt fingerprinted trust artifacts that
+existed at dispatch time, authority artifacts must still match the receipt's
+recorded SHA-256 values. Mutable diagnostics such as trace grade, replay, eval
+suite, guardrail audit, and approval queue/status can refresh during later
+preflights; their fingerprint drift is visible in coherence but is not a hard
+dispatch blocker by itself. It also tracks handoff diagnostics such as
+`approval_queue.yaml`, `approval_status.yaml`, `role_task_queue.yaml`,
+`role_dispatch.yaml`, `role_result_validation.yaml`, `repair_apply.yaml`,
+`action_board.yaml`, `decision_quality.yaml`, and `operator_brief.yaml`;
+missing or stale versions of these are advisory because they can mislead a
+fresh session, but they are not direct dispatch authority.
+It also checks semantic agreement between action-board, decision-quality, and
+operator-brief. For example, when the action board says `manual_gate_required`,
+decision-quality must show a blocked effective runtime action and
+operator-brief must say `waiting_on_manual_gate`; the action-board primary
+action also must not remain marked `can_execute_now: true`. These semantic
+mismatches are advisory, but they are high-signal handoff problems.
+Legacy actions recorded before dispatch receipts or transition policy evidence
+can produce `pass_with_advisory_issues`: the issues remain visible, but
+`hard_issue_count: 0` means they should not block handoff by themselves. If the
+resumption brief would otherwise say safe but hard coherence fails, the brief
+downgrades to `diagnostic_stale_artifacts`.
 
 `ceo dispatch-receipt` writes `dispatch_receipt.yaml` / `.md` and fingerprints
 the exact trust artifacts that would allow or block one `execute-next --apply`
@@ -256,8 +338,10 @@ changes.
 `ceo blocker-stack` writes `blocker_stack.yaml` / `.md` and orders the current
 run blockers by authority: stop requests, pending approvals, preflight blockers,
 dispatch blocks, replay gaps, eval failures, memory deltas, and evidence debt.
-It is a diagnostic synthesis only; it does not clear blockers or execute
-actions.
+If a live stop request exists, the stack's top-level next command routes to
+`ceo approval-queue` even when reused handoff artifacts still contain a stale
+safe `execute-next` command. It is a diagnostic synthesis only; it does not
+clear blockers or execute actions.
 
 `ceo incident-register` writes `operating_incident_register.yaml` / `.md` and
 turns blocked dispatches, repeated preflight blockers, replay gaps, eval
@@ -267,14 +351,34 @@ only; it is not another gate.
 
 `ceo repair-plan` writes `repair_plan.yaml` / `.md` and ranks the current
 blocker-stack and incident-register repairs into one operating backlog with the
-top repair, exact next command, closure condition, and whether a manual gate is
-required. Each repair item declares a command kind: `runnable_cli`,
+top repair, governed next command, closure condition, and whether a manual gate
+is required. Each repair item declares a command kind: `runnable_cli`,
 `diagnostic_refresh`, `manual_gate`, or `implementation_required`. This prevents
 symbolic owner labels such as `repair_failing_eval_suite_case` from being
 misread as commands Codex can run. Diagnostic refreshes are safe to run but are
 counted separately from runnable repairs because they refresh evidence rather
-than close the repair by themselves. It is diagnostic-only; it does not approve
-gates or execute repairs.
+than close the repair by themselves. Implementation-required items include a
+structured playbook with target files, target functions, focused tests, and
+acceptance criteria; the playbook is a coding contract, not an executable
+command. It is diagnostic-only; it does not approve gates or execute repairs.
+For executable repair items, `next_command` points to `ceo repair-apply
+--repair-key <repair_key> --apply`, not the lower-level owner command.
+
+`ceo repair-apply --repair-key <repair_key> --apply` writes
+`repair_apply.yaml` / `.md` plus `repair_apply_ledger.jsonl` as the governed
+executor for one repair-plan item. It refreshes the repair plan before acting,
+finds the exact repair key, refuses manual gates and implementation-required
+repairs, executes only allowlisted internal CEO commands, and runs executable
+repairs through bound CEO action context rather than raw shell text. It then
+refreshes the repair plan again, writes immutable before/after repair-plan
+snapshots under `repair_apply_plans/`, appends the attempt and snapshot hashes
+to the repair-apply ledger, and records whether the repair actually closed.
+Diagnostic refreshes may execute, but they do not count as closed unless the
+after-plan clears or changes the repair key. If the same repair key remains but
+reclassifies into a manual gate or implementation-required item, `repair-apply` records
+`repair_reclassified_not_closed` instead of pretending the repair closed. It
+never runs shell text from YAML, clears approvals, promotes product behavior,
+changes formulas, or authorizes product language.
 
 `ceo action-board` writes `action_board.yaml` / `.md` as the operator-facing CEO
 cockpit for the current run. It refreshes resumption, repair-plan, dispatch
@@ -284,25 +388,57 @@ and blocked actions. It is diagnostic-only: it does not execute the primary
 action, clear manual gates, or authorize production behavior changes. A fresh
 session should read it when it needs one plain next-action surface instead of
 manually reconciling multiple YAML files.
+When any manual gate exists, the board must not expose a runnable action under
+`runnable_repairs`. Otherwise-runnable dispatch or repair items are demoted to
+blocked actions with `blocked_by_runtime_authority: manual_gate_required`, so a
+fresh session cannot accidentally treat a lower-priority queue item as safe.
 
 `ceo decision-quality` writes `decision_quality.yaml` / `.md` and explains the
 current executive routing choice. It records the selected action, runner-up,
 confidence, expected artifact, stop condition, and scored alternatives with
-rejection reasons. It is diagnostic-only and does not approve execution.
+rejection reasons. It also refreshes `ceo action-board` and records runtime
+authority fields first: effective runtime action, command kind, can-execute
+flag, runtime-blocked flag, runtime block reason, authority status, executable
+next action/command, and what blocks the selected strategic route when manual
+gates, diagnostic refreshes, implementation repairs, or different bounded
+actions outrank it. If the selected strategic route is not executable now,
+`selected_strategic_route_advisory` repeats it explicitly as advisory only.
+When the action board exposes a safe bounded `execute-next` wrapper, it copies
+the independently derived
+`authorized_strategic_route` from the resumption brief. Decision quality only
+marks the selected action executable when it matches that route; it does not
+self-authorize a wrapper by assuming `execute-next` will run the selected
+route. It is diagnostic-only and does not approve execution.
+If the action board status is `manual_gate_required`, decision quality must
+force `effective_runtime_can_execute_now: false` even when a stale primary
+action still carries `can_execute_now: true`; manual-gate board status outranks
+all wrapper route matching.
 
 `ceo operator-step --apply` writes `operator_step.yaml` / `.md` as one audited
 operator transaction. It refreshes the action board, executes exactly one
 internal bounded `execute-next` dispatch only when the board marks that dispatch
-safe, refreshes the action board again, and records before/after status. It
-refuses manual gates, diagnostic refreshes, implementation repairs, unsupported
-command kinds, and arbitrary shell commands from YAML. It is the closest thing
-to a "CEO do the next safe thing" command, but it still cannot approve gates,
-promote product behavior, change formulas, or authorize product language.
+safe, refreshes the action board again, and records before/after status plus
+the executed action's `meaningful_progress` flag. It also snapshots the
+before/after action boards under `operator_step_boards/` and records their
+hashes, so the audit trail can show which board authorized the one attempted
+dispatch. Each step also appends `operator_step_ledger.jsonl`; `ceo replay`
+validates those snapshot paths and hashes. Manual-gate,
+capability-gap-without-progress, and no-progress action results get distinct
+operator-step statuses instead of being counted as useful execution. It refuses
+manual gates, diagnostic refreshes, implementation repairs, unsupported command
+kinds, and arbitrary shell commands from YAML. It is the closest thing to a "CEO
+do the next safe thing" command, but it still cannot approve gates, promote
+product behavior, change formulas, or authorize product language.
 
 `ceo operator-brief` writes `operator_brief.yaml` / `.md` as the plain-English
-CEO handoff card: current situation, primary action, recommended next command,
-why, refused actions, and evidence refs. It summarizes status, action-board,
-decision-quality, and the latest operator-step without approving execution.
+CEO handoff card: current situation, trace health, primary action, recommended next command,
+approval work status, user-confirmed approval record/apply commands, specialist
+work status, completed/blocked role counts, top specialist packet, top blocked
+role packet, blocked-role closure command, next role-result command, why,
+refused actions, and evidence refs.
+It summarizes status, action-board,
+decision-quality, approval queue, role queue, and the latest operator-step
+without approving execution.
 
 Do not bypass `ceo execute-next` during heartbeat mode. Do not manually run
 `ceo run-block`, `lab-ops run`, or `lab-loop run-supervised` unless
@@ -327,7 +463,7 @@ PYTHONPATH=src python3 -m riskflow ceo heartbeat-journal \
 ```
 
 `heartbeat-tick` does not sleep or loop. It inspects the required CEO artifacts,
-refuses stop requests, true blockers, independent unsafe flight state, pending
+refuses stop requests, true blockers, flight-dashboard-local process-safety blockers, pending
 approvals, failed guardrails, unresolved memory deltas, replay/eval gaps, and
 elapsed heartbeat-plan time budgets, then runs at most one `execute-next` action
 and appends `heartbeat_journal.jsonl`. The enforced preflight gate now carries
@@ -416,15 +552,32 @@ were a passing validation result.
 
 `ceo approval-queue` is the red-authority holding pen. It records promotion
 approval, stopped-run resume, and clear-stop decisions as pending user approval
-items. `ceo approval-record --approval-id <id> --decision approved|rejected
+items. `ceo approval-record --approval-id <id> --decision <approved|rejected>
 --user-confirmed` appends an immutable decision ledger row only; it does not
 apply product changes, clear stop files, or mutate production formulas.
+The queue and status artifacts also surface the top pending approval id plus
+exact `approval-record` and `approval-apply` command templates so a fresh
+session can show the explicit user-confirmed path without inventing an approval
+decision.
+`approval-record` only accepts a currently pending approval id and stores the
+approval kind, source artifact, and approval-item fingerprint in the decision
+ledger. `approval-apply` rebuilds the approval queue and requires the recorded
+fingerprint to match the current approval item before honoring the ledger row,
+so stale approval records cannot clear newer stop requests.
 
 `ceo executive-kpis` is the compact CEO scoreboard. It summarizes open
 approvals, evidence debt, candidate count, capability backlog, trace verdict,
-loop/no-progress counts, validation threshold status, top blocker, operating
+score, recommended next action, issues, manual-data flag, loop/no-progress
+counts, validation threshold status, top blocker, repair lane, role-queue
+readiness, top blocked specialist review/finding/next action, operating
 incident count, and product-language safety. Use it to decide whether the
-operating system is improving or just creating artifacts.
+operating system is improving or just creating artifacts. If approvals, repair
+lanes, and trace health are clear but role work is pending or blocked, the KPI
+next action follows the role queue's closure or evidence action. If the
+scoreboard is clear, the KPI next action is
+`defer_to_runtime_authority_surface`, which means the operator must check
+status/resumption/action-board/preflight instead of treating the KPI card as
+permission to dispatch.
 
 `ceo role-queue` turns evidence debts, pending approvals, and capability backlog
 items into specialist role tasks for research director, validation referee,
@@ -434,98 +587,218 @@ under `role_dispatch_packets/` for each pending task. Each packet includes the
 exact specialist question, source artifacts, review-only authority boundaries,
 and expected `riskflow_ceo_specialist_result_v0` schema.
 `ceo role-result --task-id <id> --status complete|blocked` records the result in
-`role_task_ledger.jsonl`. Rebuilding `ceo role-queue` consumes that ledger and
-marks tasks complete or blocked so specialist work can close the loop. This
-coordinates specialist work only; it does not validate statistics or apply
-production changes.
+`role_task_ledger.jsonl` only after validation. Approval/manual-gate tasks carry
+`result_resolution_mode: manual_gate_blocked_record`, `approval_authority:
+user_only`, the approval-record command as their closure command, and a separate
+`--status blocked` result command with no specialist artifact. They cannot be
+completed by a specialist YAML artifact. Evidence/capability
+tasks carry `result_resolution_mode: specialist_result_required`; completed
+non-manual tasks must provide a readable `riskflow_ceo_specialist_result_v0`
+YAML artifact whose task/role ids match, whose evidence refs/finding/next action
+are present, and whose authority fields keep `product_language_allowed: false`,
+`production_effect: none`, and `promotion_authority: none`. Failed validation
+writes `role_result_validation.yaml` and does not append the ledger, so an
+invalid specialist note cannot close the queue. Blocked tasks may be recorded
+without an artifact, but they remain blocked work. Accepted completed results
+record the resolved artifact path and SHA-256 in `role_task_ledger.jsonl`.
+Rebuilding `ceo role-queue` rechecks that artifact; if it is missing, lacks a
+recorded hash, or no longer matches the accepted hash, the task becomes blocked
+with `validation_status: provenance_drift` instead of remaining complete. The
+queue also records pending manual and pending autonomous counts plus completed
+and blocked counts, the top pending task/role/owner command, expected top packet
+path, role-dispatch command, result-resolution mode, closure command, and next
+role-result command template. It also records the top autonomous pending task,
+packet, and result command so review-only specialist work can be routed while a
+manual gate remains blocked. Top blocked task, role, packet, result mode,
+validation status, closure command, review status, accepted result path,
+finding, and next action are first-class fields, so a fresh session can see
+whether role-readiness still fails because a result is missing, provenance
+drifted, or an accepted blocked specialist finding requires new evidence.
+Accepted `--status blocked` specialist results remain blocked work; they
+explain the evidence gap rather than close the queue. Older queues without the
+closure field are summarized by synthesizing it from the task id and result
+mode. `ceo role-dispatch` also marks the top packet directly. If only manual role tasks
+remain pending, role-queue next action points to user approval or a manual-gate
+blocked record instead of autonomous specialist assignment. Pending,
+blocked, or provenance-drifted tasks mean the role lane is not closed for
+9.9-readiness, even when a role-result ledger exists. This coordinates
+specialist work only; it does not validate statistics or apply production
+changes. If no role work remains, role-queue defers to
+`defer_to_runtime_authority_surface` rather than claiming dispatch authority.
+
+`ceo org-progress-score` writes `org_progress_score.yaml` / `.md` as an
+agent-employee progress diagnostic. It flags pending work, blocked work,
+accepted completions without merge receipts, and completed work without decision
+deltas. It is diagnostic only and has
+`dispatch_authority: not_granted_by_org_progress_score`.
 
 Run-generated promotion proposals now require evidenceful specialist reviews:
 `validation_referee` plus either `product_translator` or `risk_officer`.
-Completed role tasks must point to structured YAML review artifacts with a
-passing/approved decision, matching role/task metadata when present,
-`production_effect: none`, and no `product_language_allowed: true`. Missing,
-unreadable, mismatched, rejected, or unsafe review artifacts are reported as
+Completed role tasks must point to structured YAML review artifacts with an
+explicit passing/approved review status or decision, matching role/task metadata
+when present, `production_effect: none`, and no `product_language_allowed:
+true`. A task-level specialist `status: complete` only means the review task was
+closed; it is not promotion approval by itself. Missing, unreadable,
+mismatched, rejected, non-approving, or unsafe review artifacts are reported as
 `completed_specialist_reviews` evidence debt and block
-`ready_for_user_approval`. If the specialist gate is omitted entirely, the
+`ready_for_user_approval`. If visual-review evidence is missing, record the
+product-translator task as blocked or as a non-approving review; do not let it
+authorize product language. If the specialist gate is omitted entirely, the
 proposal builder treats it as not evaluated and blocks by default.
 
 `ceo replay` reconstructs a run from append-only ledgers and key artifact
-fingerprints, including action, heartbeat, approval, role, preflight, and
+fingerprints, including action, heartbeat, approval, repair-apply, role, preflight, and
 guardrail artifacts. It also checks adjacent action transitions against the
 previous action's `next_allowed_actions`, so illegal state-machine jumps become
-visible. If `ceo_action_ledger.jsonl` is missing, replay may use
+visible. Legacy no-snapshot rows that match known older transition policy are
+reported as `legacy_policy_gap` instead of unsafe current transitions; current
+receipt-backed or policy-versioned rows remain strict. Repair-apply ledger rows
+must include immutable before/after repair-plan snapshot refs and hashes.
+Old no-action manual-gate repair-apply rows that predate snapshot support are
+reported as `legacy_snapshot_gap`, not as current replay failures. If
+`ceo_action_ledger.jsonl` is missing, replay may use
 `binding_action_result.yaml` for diagnosis, but that fallback is a replay gap
 and is not considered fully replayable.
 `ceo eval-suite` grades whether the CEO run is replayable,
 state-machine-consistent, contract-consistent, approval-aware, production-safe,
-dispatch-receipt backed, validation-gated, role-closure aware, evidence-debt
-visible, mission-scored, and strategy-capital aware. This is the first objective
-9.9-readiness harness for CEO mode. Hard failures can block dispatch through
-preflight; advisory readiness gaps, such as a missing strategy-capital
-dashboard, lower 9.9 readiness without becoming a red dispatch blocker by
-themselves. Dispatch receipt cases check that the latest binding action has a
-matching receipt path/hash and that the receipt fingerprints the trust artifacts
-used for dispatch.
+guardrail-audit clean, hard-artifact-coherence clean, dispatch-receipt backed,
+validation-gated, role-closure aware, evidence-debt visible, mission-scored, and
+strategy-capital aware. This is the first objective 9.9-readiness harness for
+CEO mode. Hard failures can block dispatch through preflight. A failing
+guardrail audit or a hard artifact-coherence issue now fails 9.9 readiness
+directly, not only through preflight. Missing guardrail/coherence payloads do
+not default to green. Eval-suite refreshes mission score, guardrail audit, and
+artifact coherence before scoring; mutable diagnostic fingerprint drift from
+trace/replay/eval/guardrail/mission/coherence remains visible but advisory.
+Pending role tasks and invalid completed role results now fail the role-closure
+case so the suite cannot claim readiness while specialist work is still waiting.
+Advisory readiness gaps, such as a
+missing strategy-capital dashboard, lower 9.9 readiness without becoming a red
+dispatch blocker by themselves. Dispatch receipt cases check that the latest
+binding action has a matching receipt path/hash and that the receipt
+fingerprints required dispatch trust artifacts. `memory_delta` is fingerprinted
+when present, but preflight enforces hard memory deltas directly and receipt
+coverage does not require a memory-delta artifact to exist before first
+dispatch.
+Before scoring role closure, `ceo eval-suite` refreshes `ceo role-queue` so
+accepted specialist artifacts are re-hashed and any post-acceptance drift
+becomes blocked `provenance_drift` work.
+The role-closure eval evidence includes the top blocked task, role, accepted
+blocked review status, recommended evidence action, and finding, so a fresh
+session can see why the queue is still open without opening the specialist
+artifact first.
+Eval-suite also scores live runtime authority directly. A stop request, pending
+approval, unsafe preflight, manual-gate action board, waiting operator brief, or
+blocked decision-quality runtime authority fails the critical
+`runtime_authority_manual_gates_clear` case even when stale diagnostic artifacts
+look safe.
+For legacy latest actions with no dispatch receipt or transition-policy
+evidence, eval-suite does not hard-fail just because current diagnostic
+`action_contract.yaml` or `dispatch_receipt.yaml` points at a later decision.
+Receipt-backed or policy-versioned current actions remain strict.
 
 `ceo eval-fixtures` runs deterministic policy fixtures for known transition
 rules, such as champion/challenger routing to fresh/control validation instead
 of generic research and approval waits routing only to approval apply. Fixtures
-test the CEO operating policy, not market evidence.
+test the CEO operating policy, not market evidence. Normal run ids always run
+the fixture suite; only internal fixture-created subruns can skip nested
+fixtures through an explicit non-CLI option, so run naming cannot bypass the
+policy regression checks. A skipped or zero-case fixture result fails
+`policy_eval_fixtures_pass`; it may be useful for recursion control, but it
+cannot count as 9.9 fixture coverage.
 
 `ceo portfolio-allocator` scores CEO operating lanes: approval governance,
 validation authority, candidate product translation, evidence debt, research
 infrastructure, specialist review, trace reliability, and memory handoff. It
 selects the highest-value bottleneck for attention. This is operating guidance
-only; it does not validate product evidence or mutate production behavior.
+only; it does not validate product evidence or mutate production behavior. Its
+actions are labeled `portfolio_attention_only`, and
+`dispatch_authority: not_granted_by_portfolio_allocator` means status,
+resumption, action-board, preflight, and dispatch-receipt artifacts still own
+runtime authority.
 
 `ceo mission-score` scores Riskflow's coverage across bullish permission,
 warning/blocker, invalidation, reset quality, gradient interpretation, path
 management, cross-asset/regime usefulness, and archive/do-not-repeat memory.
 It converts scattered candidates and evidence debt into a plain mission score,
 lowest mission dimension, and next required evidence. It is diagnostic only and
-does not authorize product language.
+does not authorize product language. Its actions are labeled
+`mission_strategy_only`, with
+`dispatch_authority: not_granted_by_mission_score`.
 
 `ceo strategy-capital-dashboard` allocates 100 `ceo_attention_points` across
 approval/safety, validation authority, candidate translation, warning research,
 bullish permission research, reset/gradient/path research, cross-asset regime
 validation, and archive memory. The points are CEO attention, not trading or
 production capital. Approval, stop, failed preflight, failed trace, and
-promotion gates outrank research allocation.
+promotion gates outrank research allocation. Non-safety buckets may use
+`defer_to_runtime_authority_surface`; that is an attention placeholder, not a
+runtime permission.
 
 `ceo resumption-brief` is the one-page cockpit handoff. It inspects preflight,
 replay, eval-suite, mission score, strategy capital, and the latest decision
-packet to produce a resume status and exact next command. If preflight is
+packet to produce a resume status and exact next command. It echoes preflight
+trace source status: verdict, score, recommended next action, issues, and
+manual-data flag. If preflight is
 blocked or a stop request exists, the next command must not be
 `execute-next --apply`.
 
 `ceo artifact-coherence` is the same-cockpit, same-flight check. It catches
-missing, stale, or mismatched trust artifacts so a fresh session does not resume
-from green lights that belong to an older action.
+missing, stale, mismatched, or hard receipt-fingerprint-drifted trust artifacts
+so a fresh session does not resume from green lights that belong to an older
+action. Mutable diagnostic refresh drift remains visible as evidence, but does
+not automatically block dispatch. It also records a live `stop.request` plus
+stale safe handoff artifacts as advisory `live_stop_runtime_authority_mismatch`
+under `handoff_semantics`.
 
 `ceo dispatch-receipt` is the dispatch audit trail. It answers: these exact
 artifact hashes, this action contract, this preflight result, and this approval
 state are why the CEO action was allowed or blocked. It does not approve
 production behavior.
+Binding action writers running under bound dispatch or guarded-direct context
+must attach a matching immutable receipt snapshot. If no matching receipt exists,
+they create an action contract when needed, require a passing preflight gate, and
+write a fresh receipt before appending the action ledger. Blocked/no-op results
+can write a blocked receipt from a failed preflight so refusals remain auditable;
+unsafe non-blocked actions are refused.
 
 `ceo blocker-stack` is the one-page "why can't the CEO act?" answer. It orders
 competing blockers by authority and gives the safest next command from the
-current resumption brief.
+current resumption brief, except that a live stop request always forces the
+next command to `ceo approval-queue`.
 
 `ceo incident-register` is the "what went wrong and how do we stop repeating
 it?" register. It groups recurring operating failures by stable incident key and
 records evidence paths/hashes plus closure conditions.
 
 `ceo executive-kpis` includes approval count, evidence debt, trace health,
-validation status, top blocker, operating incident count, and repair-plan
-status/top repair/top repair kind so the CEO scoreboard points at the current
-operating repair lane without overstating autonomy.
+validation status, top blocker, operating incident count, repair-plan
+status/top repair/top repair kind, role readiness, and top blocked specialist
+review/finding/next action so the CEO scoreboard points at the current operating
+repair or role-evidence lane without overstating autonomy. Failed, warning, or
+manual-data-required trace health is itself an attention condition; if
+approvals, repairs, and trace health are clear but roles are pending or blocked,
+the KPI next action follows the role queue's closure or evidence action.
 
 `ceo run-index` is the fleet board for CEO runs. It scans `reports/ceo_runs`,
 summarizes each run's resumption/preflight state, records mission and strategy
 summary fields when present, records the latest dispatch-receipt status/reason,
-top blocker, operating incident count, repair-plan status, and top repair, and
-top repair kind, and points to the next diagnostic or governed command. Use it
-before resuming from a long/noisy handoff when multiple run ids exist.
+trace-grade verdict/score/recommended next action/manual-data flag/issues,
+top blocker, operating incident count, repair-plan status, top repair, top
+repair kind, repair-apply status/closure, replay status, operator-step replay
+status/count, eval-suite score/readiness blockers, artifact-coherence
+status/issue count/top issue/top issue severity/top issue types, approval
+status/top approval record-apply commands, and role-result-validation status,
+role-queue status, pending role counts, top pending role task, top blocked role
+task/closure/review status/result/finding/next action, synthesized effective operator status, and
+manual-gate-active state. It downgrades cached
+"safe" runs to blocked when approval, dispatch, replay, eval, hard
+artifact-coherence, action-board, operator-brief, or decision-quality runtime
+authority disagrees. Read effective operator status before trusting dispatch
+safety. Live stop requests override stale safe artifact fields in the run-index
+row: dispatch is shown blocked, operator/decision authority is shown as
+`manual_gate_required`, and the next command routes to `ceo approval-queue`. Use it before
+resuming from a long/noisy handoff when multiple run ids exist.
 
 `ceo memory-delta` turns the advisory knowledge-graph delta into a governed
 handoff artifact. Without `--apply`, it writes `memory_delta.yaml` / `.md` only.
@@ -533,10 +806,14 @@ With `--apply`, it writes one curated Obsidian map note when a durable memory
 delta is required. The note is routing memory, not runtime authority or product
 proof.
 
-`ceo guardrail-audit` scans CEO YAML artifacts for accidental non-`none`
-production effects or product-language permission. `ceo preflight-gate` unifies
-trace, approval, replay, eval, guardrail, memory, and heartbeat-budget status
-into one dispatch gate. Direct `ceo execute-next` and `heartbeat-tick` both
+`ceo guardrail-audit` scans CEO YAML artifacts, including nested trust snapshots
+under `dispatch_receipts/` and `operator_step_boards/`, for accidental
+non-`none` production effects or product-language permission. `ceo preflight-gate` unifies
+trace, approval, replay, eval, guardrail, artifact-coherence, memory, and
+heartbeat-budget status into one dispatch gate. Its source status and CLI output
+include trace verdict, score, recommended next action, issues, and manual-data
+flag so blocked preflight can explain the trace-level reason without opening raw
+YAML. Direct `ceo execute-next` and `heartbeat-tick` both
 consume this gate before running a bound action. Trace-failure repair decisions
 may proceed only when the trace failure is the gate's sole blocker and the
 chosen decision is an explicit repair/intervention route such as self-audit
@@ -597,6 +874,35 @@ reports/ceo_runs/<run_id>/portfolio_allocator.yaml
 reports/ceo_runs/<run_id>/memory_delta.yaml
 reports/ceo_runs/<run_id>/guardrail_audit.yaml
 reports/ceo_runs/<run_id>/preflight_gate.yaml
+reports/ceo_runs/<run_id>/dispatch_receipt.yaml
+reports/ceo_runs/<run_id>/dispatch_receipts/*.yaml
+reports/ceo_runs/<run_id>/blocker_stack.yaml
+reports/ceo_runs/<run_id>/operating_incident_register.yaml
+reports/ceo_runs/<run_id>/repair_plan.yaml
+reports/ceo_runs/<run_id>/repair_apply.yaml
+reports/ceo_runs/<run_id>/repair_apply_ledger.jsonl
+reports/ceo_runs/<run_id>/action_board.yaml
+reports/ceo_runs/<run_id>/operator_step.yaml
+reports/ceo_runs/<run_id>/operator_step_ledger.jsonl
+reports/ceo_runs/<run_id>/operator_step_boards/*.yaml
+reports/ceo_runs/<run_id>/operator_brief.yaml
+reports/ceo_runs/<run_id>/decision_quality.yaml
+reports/ceo_runs/<run_id>/artifact_coherence.yaml
+reports/ceo_runs/<run_id>/resumption_brief.yaml
+reports/ceo_runs/run_index.yaml
+reports/ceo_runs/<run_id>/approval_queue.yaml
+reports/ceo_runs/<run_id>/approval_status.yaml
+reports/ceo_runs/<run_id>/approval_decision_ledger.jsonl
+reports/ceo_runs/<run_id>/approval_apply.yaml
+reports/ceo_runs/<run_id>/approval_apply_ledger.jsonl
+reports/ceo_runs/<run_id>/executive_kpis.yaml
+reports/ceo_runs/<run_id>/role_registry.yaml
+reports/ceo_runs/<run_id>/role_task_queue.yaml
+reports/ceo_runs/<run_id>/role_dispatch.yaml
+reports/ceo_runs/<run_id>/role_result_validation.yaml
+reports/ceo_runs/<run_id>/role_task_ledger.jsonl
+reports/ceo_runs/<run_id>/mission_score.yaml
+reports/ceo_runs/<run_id>/strategy_capital_dashboard.yaml
 reports/ceo_runs/<run_id>/promotion_proposal.yaml
 reports/ceo_runs/<run_id>/promotion_proposal.md
 reports/ceo_runs/<run_id>/capability_backlog.yaml
@@ -616,6 +922,17 @@ reports/ceo_runs/<run_id>/frozen_candidate_validation_plan.md
 reports/ceo_runs/<run_id>/risk_register.yaml
 reports/ceo_runs/<run_id>/knowledge_graph_delta.yaml
 ```
+
+`ceo_flight_dashboard.yaml`, `ceo_operating_dashboard.yaml`, and
+`strategy_capital_dashboard.yaml` include scope/authority fields beside
+`safe_to_continue`. Treat a true value as "this diagnostic surface did not find
+its own blocker," not as permission to run `execute-next`.
+`portfolio_allocator.yaml`, `mission_score.yaml`, and
+`capability_backlog.yaml` are attention, mission-strategy, and
+research-infrastructure surfaces, not dispatch authority. When an advisory lane
+or empty backlog has no concrete work, it uses
+`defer_to_runtime_authority_surface`; check status, resumption brief,
+action-board, and preflight before any bound CEO action.
 
 Lab artifacts:
 
@@ -648,7 +965,8 @@ Codex may do these without asking:
 - compile frozen validation specs from approved shadow candidates and safe data
   preflight;
 - write CEO operating dashboards that summarize candidate, capability, data,
-  memory, trace, and risk portfolios;
+  memory, trace, and risk portfolios, including trace verdict, score,
+  recommended next action, issues, loop-meltdown state, and manual-data flag;
 - write guarded promotion proposals for user review, without applying product
   changes;
 - write standalone capability backlogs for research-infrastructure gaps;
@@ -828,6 +1146,16 @@ If `trace_grade.yaml` reports `loop_meltdown.strategy_change_required: true`,
 the next wake must follow `recommended_next_action`. In particular, repeated
 `manual_gate` status means stop for manual data import or curation; do not rerun
 fresh-data preflight or generic research until CSV state changes.
+
+A single manual data-import gate also blocks dispatch immediately. If the latest
+action has `status: manual_gate`, the decision is
+`import_or_curate_fresh_ohlcv_data`, or the next action names
+`import_or_curate_fresh_ohlcv_data`, trace grade should fail with
+`manual_data_import_required` and recommend `stop_for_manual_data_import`.
+Preflight, resumption, action-board, and decision-quality must not convert that
+state into a safe `execute-next` wrapper. `execute-next` itself also refuses
+`import_or_curate_fresh_ohlcv_data` by writing a blocked dispatch receipt and a
+`manual_gate` binding result, even if an upstream diagnostic is stale.
 
 Use `ceo trace-grade` when judging whether a heartbeat actually made progress.
 It scores artifact completeness, meaningful progress, repeated decisions,

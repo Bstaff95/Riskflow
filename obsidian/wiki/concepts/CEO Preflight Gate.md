@@ -31,6 +31,7 @@ It writes:
 - [[CEO Replay]]
 - [[CEO Eval Suite]]
 - [[CEO Guardrail Audit]]
+- [[CEO Artifact Coherence]]
 - [[CEO Memory Delta]]
 - [[Heartbeat Persistence]]
 
@@ -50,8 +51,15 @@ executors do not bypass a failed trace gate.
 
 Blockers carry category metadata: runtime authority, approval authority, trace
 reliability, replay integrity, eval readiness, product guardrail, memory
-handoff, or heartbeat budget. Use the category to decide whether the next move
-is user approval, artifact repair, memory curation, data/import work, or stop.
+handoff, artifact coherence, or heartbeat budget. Use the category to decide
+whether the next move is user approval, artifact repair, memory curation,
+data/import work, or stop. Hard [[CEO Artifact Coherence]] failures are
+preflight blockers, not only resumption-brief downgrades; mutable diagnostic
+refresh drift is visible but not hard-blocking by itself.
+
+Source status includes trace verdict, score, recommended next action, issues,
+and manual data-import requirement. That means a blocked preflight can explain
+the trace-level reason without making the operator open raw `trace_grade.yaml`.
 
 Direct CLI validation, evidence, and authority commands are now covered by the
 gate, including promotion proposal and evidence-debt staging. In-process action
@@ -70,6 +78,7 @@ approval/runtime blockers the recorded approval is meant to resolve.
 Related:
 
 - [[True CEO Autonomy]]
+- [[Trace Grading For Riskflow]]
 - [[CEO Eval Suite]]
 - [[CEO Guardrail Audit]]
 - [[Heartbeat Persistence]]

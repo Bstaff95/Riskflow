@@ -6,6 +6,9 @@ Riskflow's cathedral-scale goal is to become a probabilistic capital-flow resear
 
 The purpose of this guide is to keep the long-term destination visible while preventing premature overbuilding.
 
+For the business operating thesis, first customer, wedge, and forbidden product
+claims, see `docs/RISKFLOW_AS_BUSINESS.md`.
+
 ## North Star
 
 Riskflow should eventually answer:

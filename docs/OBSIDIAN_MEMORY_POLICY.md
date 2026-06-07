@@ -71,6 +71,12 @@ Allowed durable note types:
 - `evidence_summary`: compact reviewed result pointing back to exact local CSV/YAML/report evidence
 - `ceo_session_map`: curated CEO/agentic session memory that records run id, runtime state, source artifacts, next allowed action, reopen conditions, and production effect
 - `ceo_run_registry`: compact routing note for which CEO runs are active, stopped, smoke-only, or do-not-resume
+- `ceo_business_strategy`: curated business thesis, customer segment, product wedge, forbidden claims, and evidence requirements
+- `ceo_board_report`: concise board-style synthesis of progress, falsifications, customer value, risks, asks, and next decision
+- `customer_discovery`: curated user-learning note with workflow pain, exact language, alternatives, objections, WTP signal, and changed assumption
+- `business_assumption_register`: compact assumption table with status, evidence, next test, and kill condition
+- `pricing_packaging`: package hypothesis, value metric, proof required before charging, and billing/productization guardrails
+- `gtm_experiment`: lightweight go-to-market experiment hypothesis, audience, ask, success signal, failure signal, and approval requirement
 
 Generated graph tables, compiled queues, and generated grammar grids remain outside the curated vault unless a human or Codex intentionally promotes a concise summary.
 

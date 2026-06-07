@@ -29,8 +29,21 @@ It refreshes [[CEO Action Board]], reads the primary action, and executes exactl
 one internal bounded `execute-next` dispatch only when the board says bounded
 dispatch is safe.
 
+It does not execute repair-plan items. Use [[CEO Repair Apply]] for one exact,
+allowlisted repair key.
+
 After the attempt or refusal, it refreshes [[CEO Action Board]] again and records
-before/after status.
+before/after status plus the executed action's `meaningful_progress` flag.
+It also writes immutable before/after action-board snapshots under
+`operator_step_boards/` and records their SHA-256 hashes in
+`operator_step.yaml`. Each step appends `operator_step_ledger.jsonl`, and
+[[CEO Replay]] checks that the ledger's board snapshot paths and hashes are
+still valid.
+
+Manual-gate results, capability gaps without progress, and explicit no-progress
+results are not counted as useful execution. They receive distinct
+operator-step statuses so the next session can tell the difference between
+"work was done" and "the bounded dispatch hit a wall."
 
 ## Refusals
 
@@ -54,4 +67,5 @@ Related:
 - [[CEO Dispatch Receipt]]
 - [[CEO Preflight Gate]]
 - [[CEO Repair Plan]]
+- [[CEO Repair Apply]]
 - [[True CEO Autonomy]]

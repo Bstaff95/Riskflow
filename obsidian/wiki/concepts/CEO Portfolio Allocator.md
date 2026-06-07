@@ -2,7 +2,7 @@
 rf_type: concept
 concept_id: ceo_portfolio_allocator
 status: active
-updated_at: 2026-06-06
+updated_at: 2026-06-07
 production_effect: none
 future_action_changed: Use portfolio-allocator to choose the highest-value CEO operating lane before extended autonomy.
 not_product_proof: true
@@ -41,6 +41,19 @@ It writes:
 The allocator chooses operating attention. It does not validate a signal,
 approve product language, mutate production behavior, or replace [[CEO Eval
 Suite]].
+
+Current artifacts label this boundary directly:
+
+- top-level `action_scope: portfolio_attention_only`
+- lane-level `action_scope: portfolio_attention_only`
+- `dispatch_authority: not_granted_by_portfolio_allocator`
+- `runtime_authority_note` points dispatch decisions back to status, approvals,
+  action board, resumption brief, preflight gate, and dispatch receipt
+
+When an advisory lane has no concrete work, its `next_action` is
+`defer_to_runtime_authority_surface`. That points the operator back to [[CEO
+Action Board]], [[CEO Resumption Brief]], [[CEO Preflight Gate]], and [[CEO Run
+Index]]; it is not permission to dispatch.
 
 For mission-level coverage and cross-lane attention points, use [[CEO Mission
 Score]] and [[CEO Strategy Capital Dashboard]].

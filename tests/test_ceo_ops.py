@@ -53,6 +53,7 @@ from riskflow.ceo_ops import (
     run_ceo_heartbeat_tick,
     run_ceo_memory_delta,
     run_ceo_mission_score,
+    run_ceo_org_progress_score,
     run_ceo_operating_dashboard,
     run_ceo_operating_incident_register,
     run_ceo_operator_brief,
@@ -62,6 +63,7 @@ from riskflow.ceo_ops import (
     run_ceo_portfolio_allocator,
     run_ceo_preflight_gate,
     run_ceo_promotion_proposal,
+    run_ceo_repair_apply,
     run_ceo_repair_plan,
     run_ceo_report,
     run_ceo_replay,
@@ -154,6 +156,21 @@ def _write_action_result_fixture(root: Path, payload: dict[str, object]) -> None
         "mission_score",
         "strategy_capital_dashboard",
     ]
+    action_contract = {
+        "model": "riskflow_ceo_action_contract_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "run_id": run_id,
+        "lab_run_id": lab_run_id,
+        "decision": enriched.get("decision", ""),
+        "allowed_command": "test_fixture",
+        "allowed_scope": "test fixture action contract",
+        "input_artifacts": [],
+        "expected_artifacts": ["binding_action_result.yaml"],
+        "stop_conditions": [],
+        "forbidden_changes": [],
+        "production_effect": "none",
+    }
+    (root / "action_contract.yaml").write_text(yaml.safe_dump(action_contract), encoding="utf-8")
     receipt = {
         "model": "riskflow_ceo_dispatch_receipt_v0",
         "generated_at": "2026-06-06T00:00:00+00:00",
@@ -165,7 +182,11 @@ def _write_action_result_fixture(root: Path, payload: dict[str, object]) -> None
         "safe_to_dispatch": enriched.get("status") != "blocked",
         "reason": "test fixture dispatch receipt",
         "trust_artifact_fingerprints": {
-            name: {"path": str(root / f"{name}.yaml"), "exists": False, "sha256": ""}
+            name: {
+                "path": str(root / f"{name}.yaml"),
+                "exists": (root / f"{name}.yaml").exists(),
+                "sha256": _sha256(root / f"{name}.yaml") if (root / f"{name}.yaml").exists() else "",
+            }
             for name in trust_names
         },
         "product_language_allowed": False,
@@ -183,6 +204,21 @@ def _write_action_result_fixture(root: Path, payload: dict[str, object]) -> None
     enriched["dispatch_receipt"] = {"path": str(snapshot_path), "sha256": _sha256(snapshot_path)}
     (root / "binding_action_result.yaml").write_text(yaml.safe_dump(enriched), encoding="utf-8")
     (root / "ceo_action_ledger.jsonl").write_text(json.dumps(enriched, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "memory_delta.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_memory_delta_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": run_id,
+                "lab_run_id": lab_run_id,
+                "status": "no_memory_delta_required",
+                "memory_delta_required": False,
+                "note_applied": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -1637,6 +1673,47 @@ def test_ceo_cli_guarded_direct_command_passes_context_after_preflight(
     assert status == 0
 
 
+def test_ceo_cli_artifact_coherence_advisory_status_exits_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    artifact_path = root / "artifact_coherence.yaml"
+    report_path = root / "artifact_coherence.md"
+    artifact_path.write_text("status: pass_with_advisory_issues\n", encoding="utf-8")
+    report_path.write_text("# advisory\n", encoding="utf-8")
+
+    def fake_artifact_coherence(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "coherence": {
+                "status": "pass_with_advisory_issues",
+                "issue_count": 2,
+                "hard_issue_count": 0,
+                "advisory_issue_count": 2,
+                "production_effect": "none",
+            },
+            "paths": {"artifact_coherence": artifact_path, "artifact_coherence_report": report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_artifact_coherence", fake_artifact_coherence)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="artifact-coherence",
+            run_id="ceo_test",
+            lab_run_id="ceo_test_lab",
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+            apply=False,
+        )
+    )
+
+    assert status == 0
+
+
 def test_ceo_cli_fresh_data_preflight_passes_guarded_context_after_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2431,7 +2508,13 @@ def test_ceo_promotion_proposal_ready_still_requires_user_approval() -> None:
         champion_results={"results": [{"belief_id": "candidate_a", "decision": "shadow_challenger_promising_needs_fresh_validation"}]},
         visual_queue={"items": [{"belief_id": "candidate_a", "review_status": "ready_for_visual_review"}]},
         fresh_data_preflight={"safe_to_run_fresh_validation": True},
-        trace_grade={"verdict": "pass"},
+        trace_grade={
+            "verdict": "pass",
+            "score": 91,
+            "recommended_next_action": "continue_with_one_bound_ceo_action",
+            "issues": [],
+            "criteria": {"manual_data_import_required": False},
+        },
         specialist_review_gate={
             "status": "passed",
             "passed": True,
@@ -2463,7 +2546,13 @@ def test_ceo_promotion_proposal_builder_blocks_without_specialist_gate() -> None
         champion_results={"results": [{"belief_id": "candidate_a", "decision": "shadow_challenger_promising_needs_fresh_validation"}]},
         visual_queue={"items": [{"belief_id": "candidate_a", "review_status": "ready_for_visual_review"}]},
         fresh_data_preflight={"safe_to_run_fresh_validation": True},
-        trace_grade={"verdict": "pass"},
+        trace_grade={
+            "verdict": "pass",
+            "score": 91,
+            "recommended_next_action": "continue_with_one_bound_ceo_action",
+            "issues": [],
+            "criteria": {"manual_data_import_required": False},
+        },
     )
 
     assert proposal["status"] == "blocked_missing_promotion_evidence"
@@ -2659,6 +2748,77 @@ def test_ceo_promotion_proposal_accepts_structured_specialist_reviews(tmp_path: 
     assert proposal["production_effect"] == "none"
 
 
+def test_ceo_promotion_proposal_does_not_treat_complete_review_closure_as_approval(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_promotion_ready_inputs(root)
+    (root / "validation_review.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "role_id": "validation_referee",
+                "task_id": "validation_task",
+                "review_status": "passed",
+                "decision": "approved",
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "product_review.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "role_id": "product_translator",
+                "task_id": "product_task",
+                "status": "complete",
+                "finding": "Visual-review evidence is missing, so product language is not allowed.",
+                "evidence_refs": ["champion_challenger_visual_review_queue.yaml"],
+                "recommended_next_action": "complete_champion_challenger_visual_review",
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "tasks": [
+                    {
+                        "task_id": "validation_task",
+                        "role_id": "validation_referee",
+                        "status": "complete",
+                        "result_path": "validation_review.yaml",
+                    },
+                    {
+                        "task_id": "product_task",
+                        "role_id": "product_translator",
+                        "status": "complete",
+                        "result_path": "product_review.yaml",
+                    },
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_promotion_proposal(_authorized(options, "promotion-proposal"))
+
+    proposal = result["proposal"]
+    gate = proposal["specialist_review_gate"]
+    product_result = next(item for item in gate["review_results"] if item["role_id"] == "product_translator")
+    assert proposal["status"] == "blocked_missing_promotion_evidence"
+    assert "completed_specialist_reviews" in proposal["missing_evidence"]
+    assert gate["status"] == "missing_specialist_reviews"
+    assert gate["missing_roles"] == ["product_translator_or_risk_officer"]
+    assert product_result["status"] == "rejected"
+    assert "review_not_approving" in product_result["issues"]
+
+
 def test_ceo_promotion_proposal_reads_fresh_withheld_execution_without_promoting() -> None:
     proposal = build_ceo_promotion_proposal(
         ceo_run_id="ceo_test",
@@ -2683,7 +2843,13 @@ def test_ceo_promotion_proposal_reads_fresh_withheld_execution_without_promoting
         champion_results={"results": [{"belief_id": "candidate_a", "decision": "shadow_challenger_promising_needs_fresh_validation"}]},
         visual_queue={"items": [{"belief_id": "candidate_a", "review_status": "ready_for_visual_review"}]},
         fresh_data_preflight={"safe_to_run_fresh_validation": True},
-        trace_grade={"verdict": "pass"},
+        trace_grade={
+            "verdict": "pass",
+            "score": 91,
+            "recommended_next_action": "continue_with_one_bound_ceo_action",
+            "issues": [],
+            "criteria": {"manual_data_import_required": False},
+        },
     )
 
     assert proposal["validation_completed"] is True
@@ -2748,11 +2914,26 @@ def test_ceo_approval_queue_tracks_ready_promotion_proposal(tmp_path: Path) -> N
     assert queue["pending_count"] == 1
     assert queue["pending_items"][0]["approval_id"] == "promotion_proposal"
     assert queue["pending_items"][0]["authority"] == "red"
+    assert queue["top_pending_approval_id"] == "promotion_proposal"
+    assert queue["top_pending_approval_record_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id promotion_proposal --decision <approved|rejected> --user-confirmed"
+    )
+    assert queue["top_pending_approval_apply_command"].endswith(
+        "approval-apply --run-id ceo_test --approval-id promotion_proposal --user-confirmed --apply"
+    )
+    assert queue["pending_items"][0]["approval_authority"] == "user_only"
     assert queue["product_language_allowed"] is False
     assert queue["production_effect"] == "none"
     assert result["paths"]["queue"].exists()
     assert result["paths"]["queue_report"].exists()
     assert result["paths"]["approval_status"].exists()
+    report = result["paths"]["queue_report"].read_text(encoding="utf-8")
+    assert "approval authority: user_only" in report
+    assert "reason: promotion proposal is ready for user review" in report
+    assert "required user decision: approve_or_reject_promotion_after_review" in report
+    assert "fingerprint:" in report
+    assert "apply command: `PYTHONPATH=src python3 -m riskflow ceo approval-apply --run-id ceo_test --approval-id promotion_proposal --user-confirmed --apply`" in report
+    assert "closure steps: User decides approved or rejected." in report
 
 
 def test_ceo_approval_record_appends_ledger_and_updates_queue(tmp_path: Path) -> None:
@@ -2788,12 +2969,54 @@ def test_ceo_approval_record_appends_ledger_and_updates_queue(tmp_path: Path) ->
     ledger_entry = json.loads(ledger_lines[0])
     assert ledger_entry["approval_id"] == "promotion_proposal"
     assert ledger_entry["user_confirmed"] is True
+    assert ledger_entry["source_artifact"] == "promotion_proposal.yaml"
+    assert ledger_entry["approval_item_fingerprint"]
+
+
+def test_ceo_approval_record_rejects_unknown_or_not_pending_approval_id(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "promotion_proposal.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_promotion_proposal_v0",
+                "status": "blocked_missing_evidence",
+                "approval_required": False,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="not currently pending"):
+        run_ceo_approval_record(
+            options,
+            approval_id="promotion_proposal",
+            decision="approved",
+            user_confirmed=True,
+        )
+
+    assert not (root / "approval_decision_ledger.jsonl").exists()
 
 
 def test_ceo_approval_apply_requires_recorded_approval_and_stays_shadow_only(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
     root.mkdir(parents=True, exist_ok=True)
+    (root / "promotion_proposal.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_promotion_proposal_v0",
+                "status": "ready_for_user_approval",
+                "approval_required": True,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     run_ceo_approval_record(
         options,
         approval_id="promotion_proposal",
@@ -2810,6 +3033,8 @@ def test_ceo_approval_apply_requires_recorded_approval_and_stays_shadow_only(tmp
     approval_apply = result["approval_apply"]
     assert approval_apply["status"] == "promotion_approval_closed_shadow_only"
     assert approval_apply["action_taken"] == "promotion_approval_closure_recorded"
+    assert approval_apply["approval_item_current"] is True
+    assert approval_apply["recorded_approval_item_fingerprint"] == approval_apply["current_approval_item_fingerprint"]
     assert approval_apply["production_effect"] == "none"
     assert "No production formula" in approval_apply["audit"][1]
     assert result["paths"]["approval_apply"].exists()
@@ -2846,6 +3071,42 @@ def test_ceo_approval_apply_clears_stop_only_after_second_explicit_apply(tmp_pat
     assert not lab_stop.exists()
 
 
+def test_ceo_approval_apply_rejects_stale_clear_stop_approval_recorded_before_stop_request(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    ledger_path = root / "approval_decision_ledger.jsonl"
+    stale_entry = {
+        "model": "riskflow_ceo_approval_decision_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "approval_id": "clear_stop_request",
+        "decision": "approved",
+        "user_confirmed": True,
+        "approval_kind": "resume_stopped_run",
+        "source_artifact": "stop_request.yaml",
+        "approval_item_fingerprint": "stale-fingerprint",
+        "production_effect": "none",
+    }
+    ledger_path.write_text(json.dumps(stale_entry, sort_keys=True) + "\n", encoding="utf-8")
+    run_ceo_stop(options, reason="new_stop_after_stale_approval")
+
+    result = run_ceo_approval_apply(
+        _authorized(options, "approval_apply"),
+        approval_id="clear_stop_request",
+        user_confirmed=True,
+    )
+
+    approval_apply = result["approval_apply"]
+    assert approval_apply["status"] == "blocked_stale_approval_record"
+    assert approval_apply["approval_item_current"] is True
+    assert approval_apply["recorded_approval_item_fingerprint"] == "stale-fingerprint"
+    assert approval_apply["current_approval_item_fingerprint"] != "stale-fingerprint"
+    assert ceo_ops.ceo_stop_path(options, "ceo_test").exists()
+    assert ceo_ops.lab_stop_path(options, "ceo_test_lab").exists()
+
+
 def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
@@ -2880,6 +3141,9 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
                 "model": "riskflow_ceo_trace_grade_v0",
                 "verdict": "pass",
                 "score": 92,
+                "recommended_next_action": "continue_with_one_bound_ceo_action",
+                "issues": [],
+                "criteria": {"manual_data_import_required": False},
                 "loop_meltdown": {"fingerprint_repeat_count": 0, "manual_gate_repeat_count": 0},
                 "production_effect": "none",
             }
@@ -2905,6 +3169,55 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
                 "top_repair": "blocker:pending_user_approval",
                 "top_repair_kind": "manual_gate",
                 "next_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "repair_apply.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "status": "blocked_manual_gate",
+                "repair_key": "blocker:pending_user_approval",
+                "action_executed": False,
+                "repair_closed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "kind": "resume_stopped_run",
+                        "reason": "stop request awaits user approval",
+                        "source_artifact": "stop.request",
+                        "required_user_decision": "approve_or_reject_resume_or_clear_stop",
+                        "approval_authority": "user_only",
+                        "approval_item_fingerprint": "stop-fingerprint",
+                    }
+                ],
+                "top_pending_approval_id": "clear_stop_request",
+                "top_pending_approval_record_command": "PYTHONPATH=src python3 -m riskflow ceo approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed",
+                "top_pending_approval_apply_command": "PYTHONPATH=src python3 -m riskflow ceo approval-apply --run-id ceo_test --approval-id clear_stop_request --user-confirmed --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_status.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_status_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
                 "production_effect": "none",
             }
         ),
@@ -2937,6 +3250,69 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "status": "decision_quality_written",
+                "selected_action": "run_frozen_candidate_validation",
+                "confidence": "low",
+                "runtime_authority_status": "manual_gate_required",
+                "executable_next_action": "blocker:pending_user_approval",
+                "executable_next_command_kind": "manual_gate",
+                "runtime_authorized_strategic_route": "",
+                "executable_can_execute_now": False,
+                "selected_action_is_executable_now": False,
+                "selected_action_blocked_by": "manual_gate_required:blocker:pending_user_approval",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "role_result_validation.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_result_v0",
+                "status": "rejected",
+                "task_id": "debt_candidate_a",
+                "issues": ["missing_result_path"],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "status": "pending_role_tasks",
+                "pending_task_count": 4,
+                "pending_manual_task_count": 1,
+                "pending_autonomous_task_count": 3,
+                "completed_task_count": 8,
+                "blocked_task_count": 2,
+                "top_pending_task_id": "approval_clear_stop_request",
+                "top_pending_role_id": "risk_officer",
+                "top_pending_packet_path": "reports/ceo_runs/ceo_test/role_dispatch_packets/approval_clear_stop_request.md",
+                "top_pending_result_resolution_mode": "manual_gate_blocked_record",
+                "top_pending_requires_manual_gate": True,
+                "top_pending_closure_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+                "top_blocked_role_id": "product_translator",
+                "top_blocked_packet_path": "reports/ceo_runs/ceo_test/role_dispatch_packets/debt_candidate_a_visual_review_evidence.md",
+                "top_blocked_result_resolution_mode": "specialist_result_required",
+                "top_blocked_validation_status": "accepted",
+                "top_blocked_closure_command": "PYTHONPATH=src python3 -m riskflow ceo role-result --run-id ceo_test --task-id debt_candidate_a_visual_review_evidence --status complete --result-path <path-to-specialist-result.yaml>",
+                "top_blocked_review_status": "accepted_blocked_result",
+                "top_blocked_result_path": "reports/ceo_runs/ceo_test/specialist_results/debt_candidate_a_visual_review_evidence.yaml",
+                "top_blocked_next_action": "complete_champion_challenger_visual_review",
+                "top_blocked_finding": "Visual review evidence is missing.",
+                "next_role_result_command": "PYTHONPATH=src python3 -m riskflow ceo role-result --run-id ceo_test --task-id approval_clear_stop_request --status blocked",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = run_ceo_executive_kpis(options)
 
@@ -2945,22 +3321,141 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
     assert kpis["kpis"]["open_approval_count"] == 1
     assert kpis["kpis"]["evidence_debt_count"] == 2
     assert kpis["kpis"]["trace_verdict"] == "pass"
+    assert kpis["kpis"]["trace_recommended_next_action"] == "continue_with_one_bound_ceo_action"
+    assert kpis["kpis"]["trace_issues"] == []
+    assert kpis["kpis"]["trace_manual_data_import_required"] is False
     assert kpis["kpis"]["top_blocker"] == "pending_user_approval"
     assert kpis["kpis"]["operating_incident_count"] == 4
     assert kpis["kpis"]["repair_plan_status"] == "manual_gate_first"
     assert kpis["kpis"]["top_repair"] == "blocker:pending_user_approval"
     assert kpis["kpis"]["top_repair_kind"] == "manual_gate"
     assert kpis["kpis"]["repair_next_command"].endswith("approval-queue --run-id ceo_test")
+    assert kpis["kpis"]["role_queue_status"] == "pending_role_tasks"
+    assert kpis["kpis"]["role_pending_count"] == 4
+    assert kpis["kpis"]["role_pending_manual_count"] == 1
+    assert kpis["kpis"]["role_pending_autonomous_count"] == 3
+    assert kpis["kpis"]["role_completed_count"] == 8
+    assert kpis["kpis"]["role_blocked_count"] == 2
+    assert kpis["kpis"]["role_top_pending_task"] == "approval_clear_stop_request"
+    assert kpis["kpis"]["role_top_blocked_task"] == "debt_candidate_a_visual_review_evidence"
+    assert kpis["kpis"]["role_top_blocked_role"] == "product_translator"
+    assert kpis["kpis"]["role_top_blocked_review_status"] == "accepted_blocked_result"
+    assert kpis["kpis"]["role_top_blocked_next_action"] == "complete_champion_challenger_visual_review"
+    assert kpis["kpis"]["role_top_blocked_finding"] == "Visual review evidence is missing."
+    assert kpis["kpis"]["role_next_action"].endswith("approval-queue --run-id ceo_test")
+    assert kpis["next_action_scope"] == "executive_health_diagnostic_only"
+    assert kpis["dispatch_authority"] == "not_granted_by_executive_kpis"
+    assert "ceo status" in kpis["runtime_authority_note"]
     assert kpis["product_language_allowed"] is False
     assert kpis["production_effect"] == "none"
+    assert kpis["promotion_authority"] == "none"
     assert result["paths"]["executive_kpis"].exists()
     assert result["paths"]["executive_kpis_report"].exists()
+    report = result["paths"]["executive_kpis_report"].read_text(encoding="utf-8")
+    assert "Attention next action:" in report
+    assert "Next action scope: executive_health_diagnostic_only" in report
+    assert "Dispatch authority: not_granted_by_executive_kpis" in report
+    assert "trace_recommended_next_action: continue_with_one_bound_ceo_action" in report
+    assert "trace_manual_data_import_required: False" in report
+    assert "role_top_blocked_review_status: accepted_blocked_result" in report
+    assert "role_top_blocked_finding: Visual review evidence is missing." in report
+
+
+def test_ceo_executive_kpis_trace_failure_requires_attention_without_other_blockers() -> None:
+    kpis = ceo_ops.build_ceo_executive_kpis(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        candidate_portfolio=[],
+        capability_backlog=[],
+        trace_grade={
+            "verdict": "fail",
+            "score": 55,
+            "recommended_next_action": "stop_for_manual_data_import",
+            "issues": ["manual_data_import_required"],
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        promotion_proposal={"status": "", "production_effect": "none"},
+        blocker_stack={"top_blocker": "", "production_effect": "none"},
+        incident_register={"incident_count": 0, "production_effect": "none"},
+        repair_plan={"status": "", "top_repair": "", "next_command": "", "production_effect": "none"},
+    )
+
+    assert kpis["status"] == "attention_required"
+    assert kpis["next_action"] == "stop_for_manual_data_import"
+    assert kpis["kpis"]["trace_manual_data_import_required"] is True
+
+
+def test_ceo_executive_kpis_role_queue_requires_attention_without_other_blockers() -> None:
+    kpis = ceo_ops.build_ceo_executive_kpis(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        candidate_portfolio=[],
+        capability_backlog=[],
+        trace_grade={
+            "verdict": "pass",
+            "score": 94,
+            "recommended_next_action": "continue_with_one_bound_ceo_action",
+            "issues": [],
+            "criteria": {"manual_data_import_required": False},
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        promotion_proposal={"status": "", "production_effect": "none"},
+        blocker_stack={"top_blocker": "", "production_effect": "none"},
+        incident_register={"incident_count": 0, "production_effect": "none"},
+        repair_plan={"status": "", "top_repair": "", "next_command": "", "production_effect": "none"},
+        role_queue={
+            "status": "blocked_role_tasks",
+            "pending_task_count": 0,
+            "pending_manual_task_count": 0,
+            "pending_autonomous_task_count": 0,
+            "completed_task_count": 9,
+            "blocked_task_count": 1,
+            "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+            "top_blocked_role_id": "product_translator",
+            "top_blocked_review_status": "accepted_blocked_result",
+            "top_blocked_next_action": "complete_champion_challenger_visual_review",
+            "top_blocked_finding": "Visual review evidence is missing.",
+            "production_effect": "none",
+        },
+    )
+
+    assert kpis["status"] == "attention_required"
+    assert kpis["next_action"] == "complete_champion_challenger_visual_review"
+    assert kpis["kpis"]["role_queue_status"] == "blocked_role_tasks"
+    assert kpis["kpis"]["role_blocked_count"] == 1
+    assert kpis["kpis"]["role_top_blocked_review_status"] == "accepted_blocked_result"
+    assert kpis["kpis"]["role_top_blocked_finding"] == "Visual review evidence is missing."
 
 
 def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
     root.mkdir(parents=True, exist_ok=True)
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "status": "decision_quality_written",
+                "selected_action": "run_frozen_candidate_validation",
+                "confidence": "low",
+                "runtime_authority_status": "manual_gate_required",
+                "executable_next_action": "blocker:pending_user_approval",
+                "executable_next_command_kind": "manual_gate",
+                "runtime_authorized_strategic_route": "",
+                "executable_can_execute_now": False,
+                "selected_action_is_executable_now": False,
+                "selected_action_blocked_by": "manual_gate_required:blocker:pending_user_approval",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "blocker_stack.yaml").write_text(
         yaml.safe_dump(
             {
@@ -2995,6 +3490,62 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
+    (root / "trace_grade.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_trace_grade_v0",
+                "verdict": "fail",
+                "score": 42,
+                "recommended_next_action": "stop_for_manual_data_import",
+                "issues": ["manual_data_import_required"],
+                "criteria": {"manual_data_import_required": True},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "ceo_replay.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_replay_v0",
+                "status": "replay_gaps",
+                "issues": ["missing_action_ledger_entries"],
+                "dispatch_receipt_status": "fail",
+                "operator_step_status": "fail",
+                "operator_step_count": 2,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "ceo_eval_suite.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_eval_suite_v0",
+                "status": "fail",
+                "score": 71,
+                "nine_nine_readiness": {
+                    "status": "blocked_before_extended_autonomy",
+                    "blocking_case_ids": ["replayable_action_timeline", "operator_step_replayable"],
+                    "advisory_case_ids": ["strategy_capital_allocates_attention"],
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_artifact_coherence_v0",
+                "status": "fail",
+                "issue_count": 1,
+                "issues": [{"artifact": "dispatch_receipt", "issues": ["missing_action_dispatch_receipt_ref"]}],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "resumption_brief.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3017,6 +3568,55 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
                 "top_repair": "blocker:pending_user_approval",
                 "top_repair_kind": "manual_gate",
                 "next_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "repair_apply.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "status": "blocked_manual_gate",
+                "repair_key": "blocker:pending_user_approval",
+                "action_executed": False,
+                "repair_closed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "kind": "resume_stopped_run",
+                        "reason": "stop request awaits user approval",
+                        "source_artifact": "stop.request",
+                        "required_user_decision": "approve_or_reject_resume_or_clear_stop",
+                        "approval_authority": "user_only",
+                        "approval_item_fingerprint": "stop-fingerprint",
+                    }
+                ],
+                "top_pending_approval_id": "clear_stop_request",
+                "top_pending_approval_record_command": "PYTHONPATH=src python3 -m riskflow ceo approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed",
+                "top_pending_approval_apply_command": "PYTHONPATH=src python3 -m riskflow ceo approval-apply --run-id ceo_test --approval-id clear_stop_request --user-confirmed --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_status.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_status_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
                 "production_effect": "none",
             }
         ),
@@ -3049,6 +3649,50 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
+    (root / "role_result_validation.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_result_v0",
+                "status": "rejected",
+                "task_id": "debt_candidate_a",
+                "issues": ["missing_result_path"],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "status": "pending_role_tasks",
+                "pending_task_count": 4,
+                "pending_manual_task_count": 1,
+                "pending_autonomous_task_count": 3,
+                "completed_task_count": 8,
+                "blocked_task_count": 2,
+                "top_pending_task_id": "approval_clear_stop_request",
+                "top_pending_role_id": "risk_officer",
+                "top_pending_packet_path": "reports/ceo_runs/ceo_test/role_dispatch_packets/approval_clear_stop_request.md",
+                "top_pending_result_resolution_mode": "manual_gate_blocked_record",
+                "top_pending_requires_manual_gate": True,
+                "top_pending_closure_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+                "top_blocked_role_id": "product_translator",
+                "top_blocked_packet_path": "reports/ceo_runs/ceo_test/role_dispatch_packets/debt_candidate_a_visual_review_evidence.md",
+                "top_blocked_result_resolution_mode": "specialist_result_required",
+                "top_blocked_validation_status": "accepted",
+                "top_blocked_closure_command": "PYTHONPATH=src python3 -m riskflow ceo role-result --run-id ceo_test --task-id debt_candidate_a_visual_review_evidence --status complete --result-path <path-to-specialist-result.yaml>",
+                "top_blocked_review_status": "accepted_blocked_result",
+                "top_blocked_result_path": "reports/ceo_runs/ceo_test/specialist_results/debt_candidate_a_visual_review_evidence.yaml",
+                "top_blocked_next_action": "complete_champion_challenger_visual_review",
+                "top_blocked_finding": "Visual review evidence is missing.",
+                "next_role_result_command": "PYTHONPATH=src python3 -m riskflow ceo role-result --run-id ceo_test --task-id approval_clear_stop_request --status blocked",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = run_ceo_status(options)
 
@@ -3058,6 +3702,30 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
     assert operating["operating_incident_count"] == 3
     assert operating["dispatch_receipt_status"] == "dispatch_blocked"
     assert operating["dispatch_safe_to_dispatch"] is False
+    assert operating["trace_grade_status"] == "fail"
+    assert operating["trace_grade_score"] == 42
+    assert operating["trace_grade_recommended_next_action"] == "stop_for_manual_data_import"
+    assert operating["trace_grade_issues"] == ["manual_data_import_required"]
+    assert operating["trace_grade_manual_data_import_required"] is True
+    assert operating["replay_status"] == "replay_gaps"
+    assert operating["replay_issue_count"] == 1
+    assert operating["replay_dispatch_receipt_status"] == "fail"
+    assert operating["operator_step_status"] == "fail"
+    assert operating["operator_step_count"] == 2
+    assert operating["eval_suite_status"] == "fail"
+    assert operating["eval_suite_score"] == 71
+    assert operating["nine_nine_readiness"] == "blocked_before_extended_autonomy"
+    assert operating["nine_nine_blocking_case_count"] == 2
+    assert operating["nine_nine_advisory_case_count"] == 1
+    assert operating["artifact_coherence_status"] == "fail"
+    assert operating["artifact_coherence_issue_count"] == 1
+    assert operating["artifact_coherence_top_issue_artifact"] == "dispatch_receipt"
+    assert operating["artifact_coherence_top_issue_types"] == ["missing_action_dispatch_receipt_ref"]
+    assert operating["artifact_coherence_top_issue_severity"] == "unknown"
+    assert operating["effective_operator_status"] == "manual_gate_required"
+    assert operating["manual_gate_active"] is True
+    assert operating["effective_operator_runtime_blocked"] is True
+    assert operating["effective_operator_runtime_block_reason"] == "manual_gate_required:blocker:pending_user_approval"
     assert operating["resumption_status"] == "blocked_stop_requested"
     assert operating["resumption_next_command"].endswith("approval-queue --run-id ceo_test")
     assert operating["default_handoff_command"] == operating["resumption_next_command"]
@@ -3068,13 +3736,73 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
     assert operating["top_repair"] == "blocker:pending_user_approval"
     assert operating["top_repair_kind"] == "manual_gate"
     assert operating["repair_next_command"].endswith("approval-queue --run-id ceo_test")
+    assert operating["repair_apply_status"] == "blocked_manual_gate"
+    assert operating["repair_apply_key"] == "blocker:pending_user_approval"
+    assert operating["repair_apply_executed"] is False
+    assert operating["repair_apply_closed"] is False
+    assert operating["approval_queue_status"] == "pending_approvals"
+    assert operating["approval_pending_count"] == 1
+    assert operating["approval_top_pending_id"] == "clear_stop_request"
+    assert operating["approval_top_pending_kind"] == "resume_stopped_run"
+    assert operating["approval_top_pending_reason"] == "stop request awaits user approval"
+    assert operating["approval_top_pending_source"] == "stop.request"
+    assert operating["approval_top_pending_required_user_decision"] == "approve_or_reject_resume_or_clear_stop"
+    assert operating["approval_top_pending_authority"] == "user_only"
+    assert operating["approval_top_pending_fingerprint"] == "stop-fingerprint"
+    assert operating["approval_record_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed"
+    )
+    assert operating["approval_apply_command"].endswith(
+        "approval-apply --run-id ceo_test --approval-id clear_stop_request --user-confirmed --apply"
+    )
+    assert operating["approval_status"] == "pending_approvals"
     assert operating["action_board_status"] == "manual_gate_required"
     assert operating["action_board_primary_action"] == "blocker:pending_user_approval"
     assert operating["action_board_primary_kind"] == "manual_gate"
     assert operating["action_board_command"].endswith("approval-queue --run-id ceo_test")
+    assert operating["decision_quality_status"] == "decision_quality_written"
+    assert operating["decision_quality_selected_action"] == "run_frozen_candidate_validation"
+    assert operating["decision_quality_confidence"] == "low"
+    assert operating["decision_quality_runtime_authority"] == "manual_gate_required"
+    assert operating["decision_quality_executable_next_action"] == "blocker:pending_user_approval"
+    assert operating["decision_quality_executable_command_kind"] == "manual_gate"
+    assert operating["decision_quality_runtime_authorized_strategic_route"] == ""
+    assert operating["decision_quality_executable_can_execute_now"] is False
+    assert operating["decision_quality_selected_action_is_executable_now"] is False
+    assert operating["decision_quality_selected_action_blocked_by"] == "manual_gate_required:blocker:pending_user_approval"
     assert operating["operator_brief_status"] == "waiting_on_manual_gate"
     assert operating["operator_brief_summary"] == "CEO mode is stopped at a manual gate."
     assert operating["operator_brief_next_action"].endswith("approval-queue --run-id ceo_test")
+    assert operating["role_queue_status"] == "pending_role_tasks"
+    assert operating["role_pending_task_count"] == 4
+    assert operating["role_pending_manual_task_count"] == 1
+    assert operating["role_pending_autonomous_task_count"] == 3
+    assert operating["role_completed_task_count"] == 8
+    assert operating["role_blocked_task_count"] == 2
+    assert operating["role_top_pending_task_id"] == "approval_clear_stop_request"
+    assert operating["role_top_pending_role_id"] == "risk_officer"
+    assert operating["role_top_pending_packet_path"].endswith("approval_clear_stop_request.md")
+    assert operating["role_top_pending_result_resolution_mode"] == "manual_gate_blocked_record"
+    assert operating["role_top_pending_requires_manual_gate"] is True
+    assert operating["role_top_pending_closure_command"].endswith("approval-queue --run-id ceo_test")
+    assert operating["role_top_blocked_task_id"] == "debt_candidate_a_visual_review_evidence"
+    assert operating["role_top_blocked_role_id"] == "product_translator"
+    assert operating["role_top_blocked_packet_path"].endswith("debt_candidate_a_visual_review_evidence.md")
+    assert operating["role_top_blocked_result_resolution_mode"] == "specialist_result_required"
+    assert operating["role_top_blocked_validation_status"] == "accepted"
+    assert operating["role_top_blocked_closure_command"].endswith(
+        "role-result --run-id ceo_test --task-id debt_candidate_a_visual_review_evidence "
+        "--status complete --result-path <path-to-specialist-result.yaml>"
+    )
+    assert operating["role_top_blocked_review_status"] == "accepted_blocked_result"
+    assert operating["role_top_blocked_result_path"].endswith("debt_candidate_a_visual_review_evidence.yaml")
+    assert operating["role_top_blocked_next_action"] == "complete_champion_challenger_visual_review"
+    assert operating["role_top_blocked_finding"] == "Visual review evidence is missing."
+    assert "--task-id approval_clear_stop_request" in operating["role_next_result_command"]
+    assert "--status blocked" in operating["role_next_result_command"]
+    assert operating["role_result_validation_status"] == "rejected"
+    assert operating["role_result_validation_task"] == "debt_candidate_a"
+    assert operating["role_result_validation_issues"] == ["missing_result_path"]
     assert result["company_status"]["production_effect"] == "none"
     assert yaml.safe_load((root / "company_status.yaml").read_text(encoding="utf-8"))["operating_artifacts"] == operating
 
@@ -3092,7 +3820,120 @@ def test_ceo_status_defaults_to_resumption_brief_when_handoff_missing(tmp_path: 
     assert operating["default_handoff_command"] == "PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id ceo_test"
     assert operating["default_handoff_reason"] == "missing_resumption_brief"
     assert operating["action_board_status"] == "missing_action_board"
+    assert operating["decision_quality_status"] == "missing_decision_quality"
     assert operating["operator_brief_status"] == "missing_operator_brief"
+    assert operating["replay_status"] == "missing_replay"
+    assert operating["operator_step_status"] == "missing_operator_step"
+    assert operating["eval_suite_status"] == "missing_eval_suite"
+    assert operating["artifact_coherence_status"] == "missing_artifact_coherence"
+    assert operating["repair_apply_status"] == "missing_repair_apply"
+    assert operating["role_result_validation_status"] == "missing_role_result_validation"
+
+
+def test_ceo_status_live_stop_overrides_stale_safe_operating_artifacts(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    ceo_ops.ceo_stop_path(options, "ceo_test").write_text("user_requested\n", encoding="utf-8")
+    (root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_dispatch_receipt_v0",
+                "status": "dispatch_allowed",
+                "safe_to_dispatch": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --objective bullish-positive --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "bounded_action_available",
+                "primary_action": {
+                    "action_id": "resumption_brief_next_command",
+                    "command_kind": "bounded_dispatch",
+                    "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --objective bullish-positive --apply",
+                    "can_execute_now": True,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "status": "ready_for_bounded_action",
+                "recommended_next_action": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --objective bullish-positive --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "status": "decision_quality_written",
+                "runtime_authority_status": "bounded_action_available",
+                "effective_runtime_action": "resumption_brief_next_command",
+                "effective_runtime_can_execute_now": True,
+                "runtime_blocked": False,
+                "selected_action": "run_champion_challenger",
+                "selected_action_is_executable_now": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_status(options)
+
+    operating = result["company_status"]["operating_artifacts"]
+    assert result["company_status"]["stop_requested"] is True
+    assert operating["live_stop_requested"] is True
+    assert operating["runtime_authority_override"] == "stop_requested"
+    assert operating["dispatch_safe_to_dispatch"] is False
+    assert operating["effective_operator_status"] == "manual_gate_required"
+    assert operating["manual_gate_active"] is True
+    assert operating["effective_operator_runtime_blocked"] is True
+    assert operating["effective_operator_runtime_block_reason"] == "manual_gate_required:blocker:stop_requested"
+    assert operating["resumption_status"] == "blocked_stop_requested"
+    assert operating["resumption_next_command"].endswith("approval-queue --run-id ceo_test")
+    assert operating["default_handoff_command"].endswith("approval-queue --run-id ceo_test")
+    assert "execute-next" not in operating["default_handoff_command"]
+    assert operating["default_handoff_reason"] == "live_stop_requested"
+    assert operating["action_board_status"] == "manual_gate_required"
+    assert operating["action_board_primary_action"] == "blocker:stop_requested"
+    assert operating["action_board_primary_kind"] == "manual_gate"
+    assert operating["action_board_command"].endswith("approval-queue --run-id ceo_test")
+    assert operating["decision_quality_effective_runtime_action"] == "blocker:stop_requested"
+    assert operating["decision_quality_effective_runtime_command_kind"] == "manual_gate"
+    assert operating["decision_quality_effective_runtime_can_execute_now"] is False
+    assert operating["decision_quality_runtime_blocked"] is True
+    assert operating["decision_quality_runtime_block_reason"] == "manual_gate_required:blocker:stop_requested"
+    assert operating["decision_quality_runtime_authority"] == "manual_gate_required"
+    assert operating["decision_quality_executable_next_action"] == "blocker:stop_requested"
+    assert operating["decision_quality_executable_command_kind"] == "manual_gate"
+    assert operating["decision_quality_executable_can_execute_now"] is False
+    assert operating["decision_quality_selected_action_is_executable_now"] is False
+    assert operating["decision_quality_selected_action_blocked_by"] == "manual_gate_required:blocker:stop_requested"
+    assert operating["operator_brief_status"] == "waiting_on_manual_gate"
+    assert operating["operator_brief_next_action"].endswith("approval-queue --run-id ceo_test")
 
 
 def test_ceo_heartbeat_plan_writes_persistent_tick_contract(tmp_path: Path) -> None:
@@ -3336,16 +4177,251 @@ def test_ceo_role_queue_maps_debt_and_approval_to_specialist_roles(tmp_path: Pat
     assert roles_by_task["debt_candidate_a_passing_validation_result"] == "validation_referee"
     assert roles_by_task["debt_candidate_b_fresh_data_readiness"] == "data_steward"
     assert roles_by_task["approval_promotion_proposal"] == "risk_officer"
+    assert queue["pending_task_count"] == 3
+    assert queue["pending_manual_task_count"] == 1
+    assert queue["pending_autonomous_task_count"] == 2
+    assert queue["top_pending_task_id"] == "approval_promotion_proposal"
+    assert queue["top_pending_role_id"] == "risk_officer"
+    assert queue["top_pending_owner_command"] == "wait_for_user_approval"
+    assert queue["top_pending_packet_path"].endswith("role_dispatch_packets/approval_promotion_proposal.md")
+    assert queue["next_role_dispatch_command"].endswith("ceo role-dispatch --run-id ceo_test")
+    assert queue["top_pending_result_resolution_mode"] == "manual_gate_blocked_record"
+    assert queue["top_pending_requires_manual_gate"] is True
+    assert queue["top_pending_closure_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id promotion_proposal --decision <approved|rejected> --user-confirmed"
+    )
+    assert queue["top_autonomous_pending_task_id"] == "debt_candidate_a_passing_validation_result"
+    assert queue["top_autonomous_pending_role_id"] == "validation_referee"
+    assert queue["top_autonomous_pending_packet_path"].endswith("role_dispatch_packets/debt_candidate_a_passing_validation_result.md")
+    assert "--task-id debt_candidate_a_passing_validation_result" in queue["top_autonomous_next_role_result_command"]
+    assert "--status complete" in queue["top_autonomous_next_role_result_command"]
+    assert "--task-id approval_promotion_proposal" in queue["next_role_result_command"]
+    assert "--status blocked" in queue["next_role_result_command"]
+    assert "--result-path" not in queue["next_role_result_command"]
     assert queue["production_effect"] == "none"
     assert result["paths"]["role_registry"].exists()
     assert result["paths"]["role_task_queue"].exists()
     assert result["paths"]["role_task_queue_report"].exists()
 
 
+def test_ceo_org_progress_score_flags_open_and_unmerged_role_work() -> None:
+    scorecard = ceo_ops.build_ceo_org_progress_score(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        role_queue={
+            "task_count": 3,
+            "pending_task_count": 1,
+            "blocked_task_count": 1,
+            "completed_task_count": 1,
+            "pending_manual_task_count": 0,
+            "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+            "top_blocked_role_id": "product_translator",
+            "top_blocked_next_action": "complete_visual_review",
+            "top_blocked_finding": "visual evidence missing",
+        },
+        role_task_ledger_entries=[
+            {
+                "task_id": "debt_candidate_b_validation",
+                "status": "complete",
+                "validation_status": "accepted",
+                "result_recommended_next_action": "run_fresh_withheld_validation_executor",
+                "production_effect": "none",
+            }
+        ],
+        role_merge_receipts=[],
+    )
+
+    assert scorecard["model"] == "riskflow_ceo_org_progress_score_v0"
+    assert scorecard["status"] == "org_work_open"
+    assert scorecard["org_progress_score"] < 100
+    assert scorecard["completed_without_merge_count"] == 1
+    assert "pending_role_work" in scorecard["fake_progress_flags"]
+    assert "blocked_role_work" in scorecard["fake_progress_flags"]
+    assert "accepted_completion_without_merge_receipt" in scorecard["fake_progress_flags"]
+    assert scorecard["action_scope"] == "org_progress_diagnostic_only"
+    assert scorecard["dispatch_authority"] == "not_granted_by_org_progress_score"
+    assert scorecard["production_effect"] == "none"
+
+
+def test_ceo_org_progress_score_writes_artifacts(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "debt_count": 1,
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_visual_review_evidence",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "visual_review_evidence",
+                        "blocker_type": "visual_review_missing",
+                        "priority": 1,
+                        "evidence_required": "visual review evidence",
+                        "owner_command": "complete_visual_review",
+                        "blocking_artifact": "champion_challenger_visual_review_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "pending_count": 0, "pending_items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_org_progress_score(options)
+
+    scorecard = result["org_progress_score"]
+    assert scorecard["status"] == "org_work_open"
+    assert scorecard["pending_task_count"] == 1
+    assert scorecard["action_scope"] == "org_progress_diagnostic_only"
+    assert scorecard["dispatch_authority"] == "not_granted_by_org_progress_score"
+    assert result["paths"]["org_progress_score"].exists()
+    assert result["paths"]["org_progress_score_report"].exists()
+    report = result["paths"]["org_progress_score_report"].read_text(encoding="utf-8")
+    assert "Org progress score" in report
+    assert "Dispatch authority: not_granted_by_org_progress_score" in report
+
+
+def test_ceo_role_queue_routes_manual_only_pending_to_user_approval(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_evidence_debt_register_v0", "debts": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "reason": "stop.request exists",
+                        "source_artifact": "stop.request",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    queue = run_ceo_role_queue(options)["queue"]
+
+    assert queue["pending_task_count"] == 1
+    assert queue["pending_manual_task_count"] == 1
+    assert queue["pending_autonomous_task_count"] == 0
+    assert queue["top_pending_task_id"] == "approval_clear_stop_request"
+    assert queue["top_autonomous_pending_task_id"] == ""
+    assert queue["next_action"] == "wait_for_user_approval_or_record_manual_gate_blocked"
+
+
+def test_ceo_role_queue_top_blocked_prefers_specialist_work_over_recorded_manual_gate() -> None:
+    queue = ceo_ops.build_ceo_role_task_queue(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        evidence_debt_register={
+            "model": "riskflow_ceo_evidence_debt_register_v0",
+            "status": "open_evidence_debt",
+            "debt_count": 1,
+            "debts": [
+                {
+                    "debt_id": "candidate_a_visual_review_evidence",
+                    "candidate_id": "candidate_a",
+                    "debt_kind": "visual_review_evidence",
+                    "blocker_type": "missing_visual_review",
+                    "priority": 1,
+                    "evidence_required": "chart review",
+                    "owner_command": "collect_visual_review_evidence",
+                    "blocking_artifact": "champion_challenger_visual_review_queue.yaml",
+                }
+            ],
+            "production_effect": "none",
+        },
+        approval_queue={
+            "model": "riskflow_ceo_approval_queue_v0",
+            "pending_count": 1,
+            "pending_items": [
+                {
+                    "approval_id": "clear_stop_request",
+                    "reason": "stop.request exists",
+                    "source_artifact": "stop.request",
+                }
+            ],
+            "production_effect": "none",
+        },
+        capability_backlog={"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"},
+        role_results={
+            "approval_clear_stop_request": {
+                "status": "blocked",
+                "validation_status": "blocked_without_artifact",
+                "result_resolution_mode": "manual_gate_blocked_record",
+                "production_effect": "none",
+            },
+            "debt_candidate_a_visual_review_evidence": {
+                "status": "blocked",
+                "validation_status": "accepted",
+                "result_resolution_mode": "specialist_result_required",
+                "result_finding": "Chart evidence is still missing.",
+                "result_recommended_next_action": "collect_visual_review_evidence",
+                "production_effect": "none",
+            },
+        },
+    )
+
+    assert queue["blocked_task_count"] == 2
+    assert queue["top_blocked_task_id"] == "debt_candidate_a_visual_review_evidence"
+    assert queue["top_blocked_result_resolution_mode"] == "specialist_result_required"
+    assert queue["top_blocked_validation_status"] == "accepted"
+    assert queue["top_blocked_closure_command"].endswith(
+        "role-result --run-id ceo_test --task-id debt_candidate_a_visual_review_evidence "
+        "--status complete --result-path <path-to-specialist-result.yaml>"
+    )
+    assert queue["top_blocked_review_status"] == "accepted_blocked_result"
+    assert queue["top_blocked_finding"] == "Chart evidence is still missing."
+    assert queue["top_blocked_next_action"] == "collect_visual_review_evidence"
+
+
 def test_ceo_role_result_appends_ledger(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
     root.mkdir(parents=True, exist_ok=True)
+    review_path = tmp_path / "reports" / "review.yaml"
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "task_id": "debt_candidate_a_passing_validation_result",
+                "role_id": "validation_referee",
+                "status": "complete",
+                "finding": "Threshold evidence still needs review.",
+                "evidence_refs": ["fresh_withheld_validation_execution_result.yaml"],
+                "recommended_next_action": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "evidence_debt_register.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3382,20 +4458,441 @@ def test_ceo_role_result_appends_ledger(tmp_path: Path) -> None:
         options,
         task_id="debt_candidate_a_passing_validation_result",
         status="complete",
-        result_path="reports/review.md",
+        result_path="reports/review.yaml",
     )
 
     assert result["result"]["status"] == "complete"
+    assert result["result"]["validation_status"] == "accepted"
     assert result["result"]["production_effect"] == "none"
     lines = result["paths"]["role_task_ledger"].read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     entry = json.loads(lines[0])
     assert entry["task_id"] == "debt_candidate_a_passing_validation_result"
-    assert entry["result_path"] == "reports/review.md"
+    assert entry["result_path"] == "reports/review.yaml"
+    assert entry["resolved_result_path"].endswith("reports/review.yaml")
+    assert len(entry["result_sha256"]) == 64
+    assert entry["result_artifact_exists"] is True
+    assert entry["result_provenance_status"] == "pass"
+    assert entry["validation_status"] == "accepted"
     assert result["queue"]["completed_task_count"] == 1
     assert result["queue"]["pending_task_count"] == 0
     assert result["queue"]["tasks"][0]["status"] == "complete"
+    assert result["queue"]["tasks"][0]["result_provenance_status"] == "pass"
+    assert result["queue"]["tasks"][0]["current_result_sha256"] == entry["result_sha256"]
     assert result["paths"]["role_task_queue"].exists()
+    assert result["paths"]["role_result_validation"].exists()
+
+
+def test_ceo_role_result_blocked_specialist_finding_surfaces_in_queue(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    review_path = tmp_path / "reports" / "blocked_review.yaml"
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "task_id": "debt_candidate_a_visual_review_evidence",
+                "role_id": "product_translator",
+                "status": "blocked",
+                "finding": "Visual-review queue is missing chart labels.",
+                "evidence_refs": ["champion_challenger_visual_review_queue.yaml"],
+                "recommended_next_action": "complete_champion_challenger_visual_review",
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "debt_count": 1,
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_visual_review_evidence",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "visual_review_evidence",
+                        "blocker_type": "missing_visual_review",
+                        "priority": 1,
+                        "evidence_required": "chart review",
+                        "owner_command": "collect_visual_review_evidence",
+                        "blocking_artifact": "champion_challenger_visual_review_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "pending_count": 0, "pending_items": []}),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_role_result(
+        options,
+        task_id="debt_candidate_a_visual_review_evidence",
+        status="blocked",
+        result_path="reports/blocked_review.yaml",
+    )
+
+    queue = result["queue"]
+    assert result["result"]["status"] == "blocked"
+    assert result["result"]["validation_status"] == "accepted"
+    assert result["result"]["result_finding"] == "Visual-review queue is missing chart labels."
+    assert queue["blocked_task_count"] == 1
+    assert queue["top_blocked_review_status"] == "accepted_blocked_result"
+    assert queue["top_blocked_result_path"].endswith("reports/blocked_review.yaml")
+    assert queue["top_blocked_finding"] == "Visual-review queue is missing chart labels."
+    assert queue["top_blocked_next_action"] == "complete_champion_challenger_visual_review"
+    report = queue["top_blocked_task"]
+    assert report["result_recommended_next_action"] == "complete_champion_challenger_visual_review"
+
+
+def test_ceo_role_queue_blocks_result_provenance_drift(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    review_path = tmp_path / "reports" / "review.yaml"
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_payload = {
+        "model": "riskflow_ceo_specialist_result_v0",
+        "task_id": "debt_candidate_a_passing_validation_result",
+        "role_id": "validation_referee",
+        "status": "complete",
+        "finding": "Threshold evidence still needs review.",
+        "evidence_refs": ["fresh_withheld_validation_execution_result.yaml"],
+        "recommended_next_action": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+    review_path.write_text(yaml.safe_dump(review_payload), encoding="utf-8")
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "debt_count": 1,
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_passing_validation_result",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "passing_validation_result",
+                        "blocker_type": "fresh_withheld_thresholds_failed",
+                        "priority": 1,
+                        "evidence_required": "passing fresh/withheld thresholds",
+                        "owner_command": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+                        "blocking_artifact": "fresh_withheld_validation_execution_result.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "pending_count": 0, "pending_items": []}),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    run_ceo_role_result(
+        options,
+        task_id="debt_candidate_a_passing_validation_result",
+        status="complete",
+        result_path="reports/review.yaml",
+    )
+    review_payload["finding"] = "Changed after acceptance."
+    review_path.write_text(yaml.safe_dump(review_payload), encoding="utf-8")
+
+    result = run_ceo_role_queue(options)
+    queue = result["queue"]
+
+    assert queue["completed_task_count"] == 0
+    assert queue["blocked_task_count"] == 1
+    assert queue["status"] == "blocked_role_tasks"
+    assert queue["top_blocked_task_id"] == "debt_candidate_a_passing_validation_result"
+    assert queue["top_blocked_role_id"] == "validation_referee"
+    assert queue["top_blocked_packet_path"].endswith(
+        "role_dispatch_packets/debt_candidate_a_passing_validation_result.md"
+    )
+    assert queue["top_blocked_result_resolution_mode"] == "specialist_result_required"
+    assert queue["top_blocked_validation_status"] == "provenance_drift"
+    assert queue["top_blocked_closure_command"].endswith(
+        "role-result --run-id ceo_test --task-id debt_candidate_a_passing_validation_result "
+        "--status complete --result-path <path-to-specialist-result.yaml>"
+    )
+    report = result["paths"]["role_task_queue_report"].read_text(encoding="utf-8")
+    assert "Top blocked: debt_candidate_a_passing_validation_result" in report
+    assert "Top blocked role: validation_referee" in report
+    assert "Top blocked validation: provenance_drift" in report
+    assert "Top blocked closure command" in report
+    task = queue["tasks"][0]
+    assert task["status"] == "blocked"
+    assert task["recorded_status"] == "complete"
+    assert task["validation_status"] == "provenance_drift"
+    assert task["result_provenance_status"] == "drift"
+    assert "result_artifact_sha_mismatch" in task["validation_issues"]
+    stale_queue = {**queue, "completed_task_count": 1, "blocked_task_count": 0, "pending_task_count": 0}
+    (root / "role_task_queue.yaml").write_text(yaml.safe_dump(stale_queue), encoding="utf-8")
+
+    eval_result = run_ceo_eval_suite(options)
+    role_case = {item["case_id"]: item for item in eval_result["eval_suite"]["cases"]}["role_results_close_the_role_queue"]
+    refreshed_queue = yaml.safe_load((root / "role_task_queue.yaml").read_text(encoding="utf-8"))
+
+    assert role_case["status"] == "fail"
+    assert refreshed_queue["completed_task_count"] == 0
+    assert refreshed_queue["blocked_task_count"] == 1
+    assert refreshed_queue["tasks"][0]["validation_status"] == "provenance_drift"
+
+
+def test_ceo_role_result_rejects_complete_without_result_path(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_passing_validation_result",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "passing_validation_result",
+                        "blocker_type": "fresh_withheld_thresholds_failed",
+                        "priority": 1,
+                        "evidence_required": "passing fresh/withheld thresholds",
+                        "owner_command": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+                        "blocking_artifact": "fresh_withheld_validation_execution_result.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "pending_count": 0, "pending_items": []}),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing_result_path"):
+        run_ceo_role_result(
+            options,
+            task_id="debt_candidate_a_passing_validation_result",
+            status="complete",
+            result_path="",
+        )
+
+    assert not (root / "role_task_ledger.jsonl").exists()
+    validation = yaml.safe_load((root / "role_result_validation.yaml").read_text(encoding="utf-8"))
+    assert validation["status"] == "rejected"
+    assert "missing_result_path" in validation["issues"]
+
+
+def test_ceo_role_result_rejects_mismatched_role_and_product_language(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    review_path = tmp_path / "reports" / "unsafe_review.yaml"
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "task_id": "debt_candidate_a_passing_validation_result",
+                "role_id": "product_translator",
+                "status": "complete",
+                "finding": "Use this product claim.",
+                "evidence_refs": ["fresh_withheld_validation_execution_result.yaml"],
+                "recommended_next_action": "promote_candidate",
+                "product_language_allowed": True,
+                "production_effect": "none",
+                "promotion_authority": "approved",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_passing_validation_result",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "passing_validation_result",
+                        "blocker_type": "fresh_withheld_thresholds_failed",
+                        "priority": 1,
+                        "evidence_required": "passing fresh/withheld thresholds",
+                        "owner_command": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+                        "blocking_artifact": "fresh_withheld_validation_execution_result.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "pending_count": 0, "pending_items": []}),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="role_id_mismatch"):
+        run_ceo_role_result(
+            options,
+            task_id="debt_candidate_a_passing_validation_result",
+            status="complete",
+            result_path="reports/unsafe_review.yaml",
+        )
+
+    validation = yaml.safe_load((root / "role_result_validation.yaml").read_text(encoding="utf-8"))
+    assert "role_id_mismatch" in validation["issues"]
+    assert "product_language_not_explicitly_false" in validation["issues"]
+    assert "promotion_authority_not_none" in validation["issues"]
+    assert not (root / "role_task_ledger.jsonl").exists()
+
+
+def test_ceo_role_result_rejects_manual_gate_completion_artifact(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    review_path = tmp_path / "reports" / "manual_gate_review.yaml"
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "task_id": "approval_clear_stop_request",
+                "role_id": "risk_officer",
+                "status": "complete",
+                "finding": "Pretend the approval is complete.",
+                "evidence_refs": ["approval_queue.yaml"],
+                "recommended_next_action": "continue_without_user_approval",
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_evidence_debt_register_v0", "debts": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "reason": "stop request awaits user approval",
+                        "source_artifact": "approval_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="manual_gate_cannot_complete_as_specialist_result"):
+        run_ceo_role_result(
+            options,
+            task_id="approval_clear_stop_request",
+            status="complete",
+            result_path="reports/manual_gate_review.yaml",
+        )
+
+    validation = yaml.safe_load((root / "role_result_validation.yaml").read_text(encoding="utf-8"))
+    assert validation["status"] == "rejected"
+    assert validation["result_resolution_mode"] == "manual_gate_blocked_record"
+    assert validation["requires_manual_gate"] is True
+    assert validation["can_complete_with_specialist_artifact"] is False
+    assert "manual_gate_cannot_complete_as_specialist_result" in validation["issues"]
+    assert not (root / "role_task_ledger.jsonl").exists()
+
+
+def test_ceo_role_result_records_manual_gate_as_blocked_without_artifact(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_evidence_debt_register_v0", "debts": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "reason": "stop request awaits user approval",
+                        "source_artifact": "approval_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_role_result(
+        options,
+        task_id="approval_clear_stop_request",
+        status="blocked",
+    )
+
+    assert result["result"]["status"] == "blocked"
+    assert result["result"]["validation_status"] == "blocked_without_artifact"
+    assert result["result"]["result_resolution_mode"] == "manual_gate_blocked_record"
+    assert result["result"]["requires_manual_gate"] is True
+    assert result["queue"]["pending_task_count"] == 0
+    assert result["queue"]["blocked_task_count"] == 1
+    assert result["queue"]["tasks"][0]["status"] == "blocked"
+    validation = yaml.safe_load((root / "role_result_validation.yaml").read_text(encoding="utf-8"))
+    assert validation["status"] == "blocked_without_artifact"
+    lines = result["paths"]["role_task_ledger"].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["task_id"] == "approval_clear_stop_request"
+    assert entry["requires_manual_gate"] is True
 
 
 def test_ceo_role_dispatch_writes_specialist_packets(tmp_path: Path) -> None:
@@ -3440,8 +4937,18 @@ def test_ceo_role_dispatch_writes_specialist_packets(tmp_path: Path) -> None:
     assert dispatch["model"] == "riskflow_ceo_role_dispatch_v0"
     assert dispatch["status"] == "packets_written"
     assert dispatch["packet_count"] == 1
+    assert dispatch["top_task_id"] == "debt_candidate_a_passing_validation_result"
+    assert dispatch["top_role_id"] == "validation_referee"
+    assert dispatch["top_packet_path"].endswith("role_dispatch_packets/debt_candidate_a_passing_validation_result.md")
+    assert dispatch["top_result_resolution_mode"] == "specialist_result_required"
+    assert dispatch["top_requires_manual_gate"] is False
+    assert "--task-id debt_candidate_a_passing_validation_result" in dispatch["next_role_result_command"]
+    assert "--status complete" in dispatch["next_role_result_command"]
+    assert "--result-path" in dispatch["next_role_result_command"]
     packet = dispatch["packets"][0]
     assert packet["role_id"] == "validation_referee"
+    assert packet["result_resolution_mode"] == "specialist_result_required"
+    assert packet["can_complete_with_specialist_artifact"] is True
     assert packet["allowed_authority"] == "review_only"
     assert packet["product_language_allowed"] is False
     assert packet["production_effect"] == "none"
@@ -3449,10 +4956,127 @@ def test_ceo_role_dispatch_writes_specialist_packets(tmp_path: Path) -> None:
     assert packet_path.exists()
     packet_text = packet_path.read_text(encoding="utf-8")
     assert "Expected Result Schema" in packet_text
+    assert "product_language_allowed: false" in packet_text
     assert "production_effect: none" in packet_text
+    assert "promotion_authority: none" in packet_text
     assert "Do not approve manual gates" in packet_text
     assert result["paths"]["role_dispatch"].exists()
     assert result["paths"]["role_dispatch_report"].exists()
+
+
+def test_ceo_role_dispatch_manual_gate_uses_blocked_result_command(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_evidence_debt_register_v0", "debts": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "reason": "stop request needs user approval before continuing",
+                        "source_artifact": "approval_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_role_dispatch(options)
+
+    dispatch = result["role_dispatch"]
+    assert dispatch["top_task_id"] == "approval_clear_stop_request"
+    assert dispatch["top_role_id"] == "risk_officer"
+    assert dispatch["top_result_resolution_mode"] == "manual_gate_blocked_record"
+    assert dispatch["top_requires_manual_gate"] is True
+    assert dispatch["top_autonomous_task_id"] == ""
+    assert dispatch["top_closure_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed"
+    )
+    assert dispatch["next_role_result_command"].endswith(
+        "role-result --run-id ceo_test --task-id approval_clear_stop_request --status blocked"
+    )
+    assert "--result-path" not in dispatch["next_role_result_command"]
+    packet = dispatch["packets"][0]
+    assert packet["requires_manual_gate"] is True
+    assert packet["approval_authority"] == "user_only"
+    assert packet["can_complete_with_specialist_artifact"] is False
+    packet_text = Path(packet["packet_path"]).read_text(encoding="utf-8")
+    assert "record it as blocked" in packet_text
+    assert "Approval authority: user_only" in packet_text
+
+
+def test_ceo_role_dispatch_surfaces_top_autonomous_packet_behind_manual_gate(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "debts": [
+                    {
+                        "debt_id": "candidate_a_passing_validation_result",
+                        "candidate_id": "candidate_a",
+                        "debt_kind": "passing_validation_result",
+                        "blocker_type": "fresh_withheld_thresholds_failed",
+                        "priority": 1,
+                        "evidence_required": "passing fresh/withheld thresholds",
+                        "owner_command": "review_fresh_withheld_threshold_failures_or_archive_candidate",
+                        "blocking_artifact": "fresh_withheld_validation_execution_result.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "reason": "stop request needs user approval before continuing",
+                        "source_artifact": "approval_queue.yaml",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "capability_backlog.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_capability_backlog_v0", "items": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_role_dispatch(options)
+
+    dispatch = result["role_dispatch"]
+    assert dispatch["top_task_id"] == "approval_clear_stop_request"
+    assert dispatch["top_autonomous_task_id"] == "debt_candidate_a_passing_validation_result"
+    assert dispatch["top_autonomous_role_id"] == "validation_referee"
+    assert dispatch["top_autonomous_packet_path"].endswith("role_dispatch_packets/debt_candidate_a_passing_validation_result.md")
+    assert dispatch["top_autonomous_result_resolution_mode"] == "specialist_result_required"
+    assert "--task-id debt_candidate_a_passing_validation_result" in dispatch["top_autonomous_next_role_result_command"]
+    assert "--status complete" in dispatch["top_autonomous_next_role_result_command"]
 
 
 def test_ceo_role_dispatch_handles_empty_queue(tmp_path: Path) -> None:
@@ -3471,6 +5095,8 @@ def test_ceo_role_dispatch_handles_empty_queue(tmp_path: Path) -> None:
 
     assert dispatch["status"] == "no_pending_role_tasks"
     assert dispatch["packet_count"] == 0
+    assert dispatch["top_task_id"] == ""
+    assert dispatch["next_role_result_command"] == ""
     assert dispatch["production_effect"] == "none"
 
 
@@ -3498,6 +5124,172 @@ def test_ceo_replay_reconstructs_action_ledger_and_key_artifacts(tmp_path: Path)
     assert result["paths"]["replay_report"].exists()
 
 
+def test_ceo_replay_includes_repair_apply_ledger(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = root / "repair_apply_plans"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    before_snapshot = snapshot_dir / "repair_apply_before.yaml"
+    after_snapshot = snapshot_dir / "repair_apply_after.yaml"
+    before_snapshot.write_text(yaml.safe_dump({"status": "repairs_pending", "production_effect": "none"}), encoding="utf-8")
+    after_snapshot.write_text(yaml.safe_dump({"status": "no_repairs_required", "production_effect": "none"}), encoding="utf-8")
+    (root / "repair_apply_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "repair_closed",
+                "repair_key": "blocker:stale_artifacts",
+                "action_executed": True,
+                "repair_closed": True,
+                "paths": {
+                    "before_repair_plan_snapshot": str(before_snapshot),
+                    "after_repair_plan_snapshot": str(after_snapshot),
+                },
+                "before_repair_plan_snapshot_sha256": _sha256(before_snapshot),
+                "after_repair_plan_snapshot_sha256": _sha256(after_snapshot),
+                "production_effect": "none",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    replay = ceo_ops.build_ceo_replay(ceo_run_id="ceo_test", lab_run_id="ceo_test_lab", root=root)
+
+    assert replay["repair_apply_count"] == 1
+    assert replay["artifact_checks"]["repair_apply_ledger"]["exists"] is True
+    assert replay["timeline"][0]["kind"] == "repair_apply"
+    assert replay["timeline"][0]["repair_key"] == "blocker:stale_artifacts"
+    assert replay["repair_apply_status"] == "pass"
+    assert replay["repair_apply_checks"][0]["status"] == "pass"
+    assert "repair_apply_ledger_has_incomplete_or_unsafe_entries" not in replay["issues"]
+
+
+def test_ceo_replay_fails_repair_apply_with_missing_plan_snapshot(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    missing_before = root / "repair_apply_plans" / "missing_before.yaml"
+    missing_after = root / "repair_apply_plans" / "missing_after.yaml"
+    (root / "repair_apply_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "repair_closed",
+                "repair_key": "blocker:stale_artifacts",
+                "action_executed": True,
+                "repair_closed": True,
+                "paths": {
+                    "before_repair_plan_snapshot": str(missing_before),
+                    "after_repair_plan_snapshot": str(missing_after),
+                },
+                "before_repair_plan_snapshot_sha256": "missing",
+                "after_repair_plan_snapshot_sha256": "missing",
+                "production_effect": "none",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    replay = ceo_ops.build_ceo_replay(ceo_run_id="ceo_test", lab_run_id="ceo_test_lab", root=root)
+
+    assert replay["repair_apply_count"] == 1
+    assert replay["repair_apply_status"] == "fail"
+    assert replay["repair_apply_checks"][0]["status"] == "fail"
+    assert "missing_before_repair_plan_snapshot" in replay["repair_apply_checks"][0]["failures"]
+    assert "missing_before_repair_plan_snapshot" in replay["issues"]
+
+
+def test_ceo_replay_treats_legacy_no_action_repair_apply_snapshot_gap_as_advisory(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "repair_apply_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "blocked_manual_gate",
+                "repair_key": "blocker:stop_requested",
+                "action_attempted": False,
+                "action_executed": False,
+                "repair_closed": False,
+                "paths": {
+                    "before_repair_plan": str(root / "repair_plan.yaml"),
+                    "after_repair_plan": str(root / "repair_plan.yaml"),
+                },
+                "production_effect": "none",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    replay = ceo_ops.build_ceo_replay(ceo_run_id="ceo_test", lab_run_id="ceo_test_lab", root=root)
+
+    assert replay["repair_apply_status"] == "pass"
+    assert replay["repair_apply_checks"][0]["status"] == "legacy_snapshot_gap"
+    assert replay["repair_apply_checks"][0]["legacy_snapshot_gap"] is True
+    assert "missing_before_repair_plan_snapshot_ref" not in replay["issues"]
+    assert "missing_after_repair_plan_snapshot_ref" not in replay["issues"]
+
+
+def test_ceo_replay_fails_operator_step_with_missing_board_snapshot(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    present_snapshot = root / "operator_step_boards" / "present_after.yaml"
+    present_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    present_snapshot.write_text(yaml.safe_dump({"model": "riskflow_ceo_action_board_v0"}), encoding="utf-8")
+    missing_snapshot = root / "operator_step_boards" / "missing_before.yaml"
+    (root / "operator_step_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "model": "riskflow_ceo_operator_step_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "blocked_manual_gate",
+                "action_attempted": False,
+                "action_executed": False,
+                "before_action_board_snapshot_sha256": "missing-sha",
+                "after_action_board_snapshot_sha256": _sha256(present_snapshot),
+                "paths": {
+                    "before_action_board_snapshot": str(missing_snapshot),
+                    "after_action_board_snapshot": str(present_snapshot),
+                },
+                "production_effect": "none",
+                "product_language_allowed": False,
+                "promotion_authority": "none",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    replay = ceo_ops.build_ceo_replay(ceo_run_id="ceo_test", lab_run_id="ceo_test_lab", root=root)
+
+    assert replay["operator_step_count"] == 1
+    assert replay["operator_step_status"] == "fail"
+    assert replay["operator_step_checks"][0]["status"] == "fail"
+    assert "missing_before_action_board_snapshot" in replay["operator_step_checks"][0]["failures"]
+    assert "missing_before_action_board_snapshot" in replay["issues"]
+
+
 def test_ceo_replay_binding_fallback_is_diagnostic_not_replayable(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
@@ -3521,6 +5313,138 @@ def test_ceo_replay_binding_fallback_is_diagnostic_not_replayable(tmp_path: Path
     assert replay["used_binding_result_fallback"] is True
     assert "missing_action_ledger_using_binding_fallback" in replay["issues"]
     assert replay["action_count"] == 1
+
+
+def test_ceo_replay_fails_current_policy_action_without_dispatch_receipt_ref(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    action = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "decision": "run_champion_challenger",
+        "action_taken": "champion_challenger",
+        "status": "shadow_comparison_complete",
+        "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+        "transition_policy_version": "riskflow_ceo_transition_policy_v1",
+        "production_effect": "none",
+    }
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action, sort_keys=True) + "\n", encoding="utf-8")
+
+    replay_result = run_ceo_replay(options)
+    eval_result = run_ceo_eval_suite(options)
+
+    replay = replay_result["replay"]
+    cases = {item["case_id"]: item for item in eval_result["eval_suite"]["cases"]}
+    assert replay["status"] == "replay_gaps"
+    assert replay["dispatch_receipt_status"] == "fail"
+    assert replay["dispatch_receipt_checks"][0]["status"] == "fail"
+    assert "missing_action_dispatch_receipt_ref" in replay["dispatch_receipt_checks"][0]["failures"]
+    assert "missing_action_dispatch_receipt_ref" in replay["issues"]
+    assert cases["dispatch_receipt_backs_latest_action"]["status"] == "fail"
+    assert cases["dispatch_receipts_cover_action_ledger"]["status"] == "fail"
+    assert "dispatch_receipt_backs_latest_action" in eval_result["eval_suite"]["nine_nine_readiness"]["blocking_case_ids"]
+
+
+def test_ceo_binding_action_writer_creates_receipt_for_guarded_direct_action(tmp_path: Path) -> None:
+    options = replace(_options(tmp_path, apply=True), ceo_context="guarded_direct", ceo_authorized_action="champion-challenger")
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_preflight_gate_v0", "status": "pass", "safe_to_execute": True, "blockers": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    action = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "run_champion_challenger",
+        "action_taken": "champion_challenger",
+        "status": "shadow_comparison_complete",
+        "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+        "production_effect": "none",
+    }
+
+    paths = ceo_ops._write_binding_action_result(options, "ceo_test", "ceo_test_lab", action)
+
+    receipt_ref = action["dispatch_receipt"]
+    receipt_path = Path(receipt_ref["path"])
+    receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+    assert paths["dispatch_receipt_snapshot"] == receipt_path
+    assert receipt_path.parent.name == "dispatch_receipts"
+    assert receipt_ref["sha256"] == _sha256(receipt_path)
+    assert receipt["decision"] == "run_champion_challenger"
+    assert receipt["dispatch_mode"] == "guarded_direct"
+
+
+def test_ceo_binding_action_writer_refuses_receiptless_bound_action_without_preflight(tmp_path: Path) -> None:
+    options = replace(_options(tmp_path, apply=True), ceo_context="bound_dispatch", ceo_authorized_action="patch-research-infra")
+    action = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "decision": "patch_research_infra",
+        "action_taken": "research_infra_patch_plan",
+        "status": "planned",
+        "production_effect": "none",
+    }
+
+    with pytest.raises(ValueError, match="passing preflight gate"):
+        ceo_ops._write_binding_action_result(options, "ceo_test", "ceo_test_lab", action)
+
+
+def test_ceo_binding_action_writer_does_not_reuse_blocked_receipt_for_allowed_action(tmp_path: Path) -> None:
+    options = replace(_options(tmp_path, apply=True), ceo_context="bound_dispatch", ceo_authorized_action="patch-research-infra")
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_preflight_gate_v0", "status": "pass", "safe_to_execute": True, "blockers": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_approval_queue_v0", "status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    blocked_snapshot = root / "dispatch_receipts" / "blocked_patch.yaml"
+    blocked_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    blocked_receipt = {
+        "model": "riskflow_ceo_dispatch_receipt_v0",
+        "generated_at": "2026-06-06T00:00:00+00:00",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "patch_research_infra",
+        "dispatch_mode": "bound_dispatch",
+        "status": "dispatch_blocked",
+        "safe_to_dispatch": False,
+        "snapshot_path": str(blocked_snapshot),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+    blocked_snapshot.write_text(yaml.safe_dump(blocked_receipt), encoding="utf-8")
+    (root / "dispatch_receipt.yaml").write_text(yaml.safe_dump(blocked_receipt), encoding="utf-8")
+    action = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-06T00:01:00+00:00",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "patch_research_infra",
+        "action_taken": "research_infra_patch_plan",
+        "status": "planned",
+        "production_effect": "none",
+    }
+
+    paths = ceo_ops._write_binding_action_result(options, "ceo_test", "ceo_test_lab", action)
+
+    assert Path(action["dispatch_receipt"]["path"]) != blocked_snapshot
+    receipt = yaml.safe_load(paths["dispatch_receipt_snapshot"].read_text(encoding="utf-8"))
+    assert receipt["status"] == "dispatch_allowed"
+    assert receipt["safe_to_dispatch"] is True
 
 
 def test_ceo_replay_flags_illegal_state_transition(tmp_path: Path) -> None:
@@ -3557,6 +5481,191 @@ def test_ceo_replay_flags_illegal_state_transition(tmp_path: Path) -> None:
     replay = result["replay"]
     assert replay["status"] == "replay_gaps"
     assert replay["state_transition_status"] == "fail"
+    assert replay["state_transition_checks"][0]["status"] == "fail"
+    assert "illegal_action_transition" in replay["issues"]
+
+
+def test_ceo_replay_classifies_legacy_repeated_action_without_weakening_guarded_actions(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {
+            "model": "riskflow_ceo_binding_action_result_v0",
+            "generated_at": "2026-06-06T00:00:00Z",
+            "decision": "run_champion_challenger",
+            "action_taken": "champion_challenger",
+            "status": "shadow_comparison_complete",
+            "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_binding_action_result_v0",
+            "generated_at": "2026-06-06T00:01:00Z",
+            "decision": "run_champion_challenger",
+            "action_taken": "champion_challenger",
+            "status": "shadow_comparison_complete",
+            "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+            "production_effect": "none",
+        },
+    ]
+    (root / "ceo_action_ledger.jsonl").write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in entries) + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_ceo_replay(options)
+
+    replay = result["replay"]
+    assert replay["status"] == "replayable"
+    assert replay["state_transition_status"] == "pass"
+    assert replay["state_transition_legacy_gap_count"] == 1
+    assert replay["state_transition_checks"][0]["status"] == "legacy_policy_gap"
+    assert replay["state_transition_checks"][0]["legacy_policy_gap"] is True
+    assert "illegal_action_transition" not in replay["issues"]
+
+
+def test_ceo_replay_still_fails_guarded_repeated_action_with_dispatch_snapshots(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    snapshot_dir = root / "dispatch_receipts"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for index in [1, 2]:
+        receipt = {
+            "model": "riskflow_ceo_dispatch_receipt_v0",
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "decision": "run_champion_challenger",
+            "status": "dispatch_allowed",
+            "product_language_allowed": False,
+            "production_effect": "none",
+            "promotion_authority": "none",
+        }
+        receipt_path = snapshot_dir / f"receipt_{index}.yaml"
+        receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+        entries.append(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": f"2026-06-06T00:0{index}:00Z",
+                "decision": "run_champion_challenger",
+                "action_taken": "champion_challenger",
+                "status": "shadow_comparison_complete",
+                "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+                "dispatch_receipt": {"path": str(receipt_path), "sha256": _sha256(receipt_path)},
+                "production_effect": "none",
+            }
+        )
+    (root / "ceo_action_ledger.jsonl").write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in entries) + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_ceo_replay(options)
+
+    replay = result["replay"]
+    assert replay["status"] == "replay_gaps"
+    assert replay["state_transition_status"] == "fail"
+    assert replay["state_transition_legacy_gap_count"] == 0
+    assert replay["state_transition_checks"][0]["status"] == "fail"
+    assert "illegal_action_transition" in replay["issues"]
+
+
+def test_ceo_replay_classifies_legacy_fresh_validation_alias_without_weakening_current_policy(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {
+            "model": "riskflow_ceo_binding_action_result_v0",
+            "generated_at": "2026-06-06T00:00:00Z",
+            "decision": "run_champion_challenger",
+            "action_taken": "champion_challenger",
+            "status": "shadow_comparison_complete",
+            "next_allowed_actions": ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_binding_action_result_v0",
+            "generated_at": "2026-06-06T00:01:00Z",
+            "decision": "run_fresh_withheld_validation_contract",
+            "action_taken": "fresh_withheld_validation_contract",
+            "status": "blocked_missing_inputs",
+            "next_allowed_actions": ["repair_fresh_withheld_contract_inputs"],
+            "production_effect": "none",
+        },
+    ]
+    (root / "ceo_action_ledger.jsonl").write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in entries) + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_ceo_replay(options)
+
+    replay = result["replay"]
+    assert replay["status"] == "replayable"
+    assert replay["state_transition_status"] == "pass"
+    assert replay["state_transition_legacy_gap_count"] == 1
+    assert replay["state_transition_checks"][0]["status"] == "legacy_policy_gap"
+    assert "illegal_action_transition" not in replay["issues"]
+
+
+def test_ceo_replay_fails_current_fresh_validation_alias_with_dispatch_snapshot(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    snapshot_dir = root / "dispatch_receipts"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    decisions = [
+        (
+            "run_champion_challenger",
+            "champion_challenger",
+            "shadow_comparison_complete",
+            ["run_fresh_or_control_validation_for_promising_shadow_challengers"],
+        ),
+        (
+            "run_fresh_withheld_validation_contract",
+            "fresh_withheld_validation_contract",
+            "blocked_missing_inputs",
+            ["repair_fresh_withheld_contract_inputs"],
+        ),
+    ]
+    for index, (decision, action_taken, status, next_allowed_actions) in enumerate(decisions, start=1):
+        receipt = {
+            "model": "riskflow_ceo_dispatch_receipt_v0",
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "decision": decision,
+            "status": "dispatch_allowed",
+            "product_language_allowed": False,
+            "production_effect": "none",
+            "promotion_authority": "none",
+        }
+        receipt_path = snapshot_dir / f"receipt_{index}.yaml"
+        receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+        entries.append(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": f"2026-06-06T00:0{index}:00Z",
+                "decision": decision,
+                "action_taken": action_taken,
+                "status": status,
+                "next_allowed_actions": next_allowed_actions,
+                "dispatch_receipt": {"path": str(receipt_path), "sha256": _sha256(receipt_path)},
+                "production_effect": "none",
+            }
+        )
+    (root / "ceo_action_ledger.jsonl").write_text(
+        "\n".join(json.dumps(item, sort_keys=True) for item in entries) + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_ceo_replay(options)
+
+    replay = result["replay"]
+    assert replay["status"] == "replay_gaps"
+    assert replay["state_transition_status"] == "fail"
+    assert replay["state_transition_legacy_gap_count"] == 0
     assert replay["state_transition_checks"][0]["status"] == "fail"
     assert "illegal_action_transition" in replay["issues"]
 
@@ -3633,12 +5742,856 @@ def test_ceo_eval_suite_scores_replay_guardrails_and_closure(tmp_path: Path) -> 
     assert cases["dispatch_receipt_backs_latest_action"]["status"] == "pass"
     assert cases["dispatch_receipts_cover_action_ledger"]["status"] == "pass"
     assert cases["dispatch_receipt_fingerprints_trust_artifacts"]["status"] == "pass"
+    assert cases["approval_apply_has_current_provenance"]["status"] == "pass"
+    assert "approval_apply_provenance=not_applicable" in cases["approval_apply_has_current_provenance"]["evidence"]
     assert cases["production_guardrails_preserved"]["status"] == "pass"
+    assert cases["guardrail_audit_passes"]["status"] == "pass"
+    assert cases["artifact_coherence_has_no_hard_issues"]["status"] == "pass"
     assert cases["policy_eval_fixtures_pass"]["status"] == "pass"
+    assert cases["runtime_authority_manual_gates_clear"]["status"] == "pass"
+    assert all(item["action_scope"] == "eval_diagnostic_only" for item in suite["cases"])
+    assert all(item["dispatch_authority"] == "not_granted_by_eval_suite" for item in suite["cases"])
+    assert all(item["promotion_authority"] == "none" for item in suite["cases"])
+    assert all(item["production_effect"] == "none" for item in suite["cases"])
     assert suite["production_effect"] == "none"
+    fixtures = yaml.safe_load(result["paths"]["eval_fixtures"].read_text(encoding="utf-8"))
+    assert fixtures["case_count"] > 0
+    assert "skipped_reason" not in fixtures
     assert result["paths"]["eval_suite"].exists()
     assert result["paths"]["eval_suite_report"].exists()
     assert result["paths"]["eval_fixtures"].exists()
+
+
+def test_ceo_eval_suite_fails_guardrail_audit_violation(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "state_transition_status": "pass", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+        guardrail_audit={
+            "model": "riskflow_ceo_guardrail_audit_v0",
+            "status": "fail",
+            "violations": [{"artifact": "unsafe.yaml", "violation": "product_language_allowed"}],
+            "production_effect": "none",
+        },
+        artifact_coherence={"model": "riskflow_ceo_artifact_coherence_v0", "status": "pass", "hard_issue_count": 0, "issues": []},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["guardrail_audit_passes"]["status"] == "fail"
+    assert cases["guardrail_audit_passes"]["severity"] == "critical"
+    assert "violations=1" in cases["guardrail_audit_passes"]["evidence"]
+    assert suite["status"] == "fail"
+    assert "guardrail_audit_passes" in suite["nine_nine_readiness"]["blocking_case_ids"]
+
+
+def test_ceo_eval_suite_fails_hard_artifact_coherence_issue(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "state_transition_status": "pass", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+        guardrail_audit={"model": "riskflow_ceo_guardrail_audit_v0", "status": "pass", "violations": [], "production_effect": "none"},
+        artifact_coherence={
+            "model": "riskflow_ceo_artifact_coherence_v0",
+            "status": "fail",
+            "hard_issue_count": 1,
+            "issues": [{"artifact": "dispatch_receipt", "issues": ["receipt_fingerprint_drift"]}],
+            "production_effect": "none",
+        },
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["artifact_coherence_has_no_hard_issues"]["status"] == "fail"
+    assert cases["artifact_coherence_has_no_hard_issues"]["severity"] == "critical"
+    assert "hard_issues=1" in cases["artifact_coherence_has_no_hard_issues"]["evidence"]
+    assert suite["status"] == "fail"
+    assert "artifact_coherence_has_no_hard_issues" in suite["nine_nine_readiness"]["blocking_case_ids"]
+
+
+def test_ceo_eval_suite_missing_guardrail_and_coherence_are_not_green(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "state_transition_status": "pass", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["guardrail_audit_passes"]["status"] == "fail"
+    assert "status=missing_guardrail_audit" in cases["guardrail_audit_passes"]["evidence"]
+    assert cases["artifact_coherence_has_no_hard_issues"]["status"] == "fail"
+    assert "status=missing_artifact_coherence" in cases["artifact_coherence_has_no_hard_issues"]["evidence"]
+    assert suite["status"] == "fail"
+
+
+def test_ceo_eval_suite_does_not_skip_fixtures_from_run_id_substring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(
+        tmp_path,
+        run_id="ordinary_eval_fixture_named_run",
+        lab_run_id="ordinary_eval_fixture_named_run_lab",
+        apply=True,
+    )
+    calls: list[str] = []
+
+    def fake_eval_fixtures(passed_options: CeoOpsOptions) -> dict[str, object]:
+        ceo_run_id = ceo_ops.resolve_ceo_run_id(passed_options)
+        lab_run_id = ceo_ops.resolve_lab_run_id(passed_options, ceo_run_id)
+        root = ceo_ops.ceo_dir(passed_options, ceo_run_id)
+        root.mkdir(parents=True, exist_ok=True)
+        fixture_path = root / "ceo_eval_fixtures.yaml"
+        fixture_report_path = root / "ceo_eval_fixtures.md"
+        fixtures = {
+            "model": ceo_ops.CEO_EVAL_FIXTURES_MODEL,
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "status": "pass",
+            "case_count": 1,
+            "failed_case_count": 0,
+            "cases": [{"case_id": "sentinel_fixture_ran", "status": "pass"}],
+            "production_effect": "none",
+        }
+        fixture_path.write_text(yaml.safe_dump(fixtures), encoding="utf-8")
+        fixture_report_path.write_text("# fixtures\n", encoding="utf-8")
+        calls.append(ceo_run_id)
+        return {
+            "run_id": ceo_run_id,
+            "lab_run_id": lab_run_id,
+            "fixtures": fixtures,
+            "paths": {"eval_fixtures": fixture_path, "eval_fixtures_report": fixture_report_path},
+        }
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_eval_fixtures", fake_eval_fixtures)
+
+    result = run_ceo_eval_suite(options)
+
+    assert calls == ["ordinary_eval_fixture_named_run"]
+    cases = {item["case_id"]: item for item in result["eval_suite"]["cases"]}
+    assert cases["policy_eval_fixtures_pass"]["status"] == "pass"
+    fixtures = yaml.safe_load(result["paths"]["eval_fixtures"].read_text(encoding="utf-8"))
+    assert fixtures["case_count"] == 1
+    assert "skipped_reason" not in fixtures
+
+
+def test_ceo_eval_suite_blocks_9_9_readiness_on_live_stop_even_with_stale_safe_artifacts(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_execute_next(options)
+    root = options.report_root / "ceo_test"
+    ceo_stop_path = ceo_ops.ceo_stop_path(options, "ceo_test")
+    ceo_stop_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_stop_request_v0",
+                "run_id": "ceo_test",
+                "reason": "user_requested",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "no_pending_approvals",
+                "pending_count": 0,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "bounded_action_available",
+                "primary_action": {"action_id": "resumption_brief_next_command", "can_execute_now": True},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_eval_suite(options)
+
+    suite = result["eval_suite"]
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["runtime_authority_manual_gates_clear"]["status"] == "fail"
+    assert cases["runtime_authority_manual_gates_clear"]["severity"] == "critical"
+    assert "stop_requested=True" in cases["runtime_authority_manual_gates_clear"]["evidence"]
+    assert suite["status"] == "fail"
+    assert suite["nine_nine_readiness"]["status"] == "not_9_9_ready"
+    assert "runtime_authority_manual_gates_clear" in suite["nine_nine_readiness"]["blocking_case_ids"]
+
+
+def test_ceo_eval_suite_explicit_internal_option_skips_nested_fixtures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = replace(_options(tmp_path, apply=True), skip_eval_fixtures=True)
+
+    def fail_if_eval_fixtures_run(_: CeoOpsOptions) -> dict[str, object]:
+        raise AssertionError("internal skip should not call run_ceo_eval_fixtures")
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_eval_fixtures", fail_if_eval_fixtures_run)
+
+    result = run_ceo_eval_suite(options)
+
+    fixtures = yaml.safe_load(result["paths"]["eval_fixtures"].read_text(encoding="utf-8"))
+    assert fixtures["status"] == "pass"
+    assert fixtures["case_count"] == 0
+    assert fixtures["skipped_reason"] == "nested_eval_fixture_run"
+    assert "Explicit internal fixture subruns" in fixtures["guardrail"]
+    cases = {item["case_id"]: item for item in result["eval_suite"]["cases"]}
+    assert cases["policy_eval_fixtures_pass"]["status"] == "fail"
+    assert "cases=0" in cases["policy_eval_fixtures_pass"]["evidence"]
+    assert result["eval_suite"]["nine_nine_readiness"]["status"] == "not_9_9_ready"
+
+
+def test_ceo_eval_suite_does_not_require_current_receipt_for_legacy_latest_action(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": "2026-06-06T00:01:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_fresh_withheld_validation_contract",
+                "status": "blocked_missing_inputs",
+                "action_taken": "fresh_withheld_validation_contract",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "generated_at": "2026-06-06T00:02:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_frozen_candidate_validation",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_dispatch_receipt_v0",
+                "generated_at": "2026-06-06T00:03:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_frozen_candidate_validation",
+                "status": "dispatch_blocked",
+                "trust_artifact_fingerprints": {},
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={
+            "status": "replayable",
+            "action_count": 1,
+            "state_transition_status": "pass",
+            "dispatch_receipt_status": "pass",
+            "dispatch_receipt_checks": [{"status": "not_required"}],
+            "production_effect": "none",
+        },
+        trace_grade={"verdict": "pass", "recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={
+            "model": ceo_ops.CEO_MISSION_SCORE_MODEL,
+            "mission_dimensions": [{"dimension_id": item} for item in ceo_ops.MISSION_DIMENSIONS],
+            "product_language_allowed": False,
+            "production_effect": "none",
+            "promotion_authority": "none",
+        },
+        strategy_capital_dashboard={
+            "model": ceo_ops.CEO_STRATEGY_CAPITAL_DASHBOARD_MODEL,
+            "total_points": 100,
+            "capital_buckets": [{"allocation_points": 100}],
+            "product_language_allowed": False,
+            "production_effect": "none",
+            "promotion_authority": "none",
+        },
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["action_contract_matches_latest_action"]["status"] == "pass"
+    assert cases["dispatch_receipt_backs_latest_action"]["status"] == "pass"
+    assert cases["dispatch_receipt_fingerprints_trust_artifacts"]["status"] == "pass"
+    assert "latest_has_current_transition_evidence=False" in cases["action_contract_matches_latest_action"]["evidence"]
+    assert "receipt_required=False" in cases["dispatch_receipt_backs_latest_action"]["evidence"]
+    report = ceo_ops.render_ceo_eval_suite(suite)
+    assert "## Failed Case Detail" in report
+    assert "next=" in report
+
+
+def test_ceo_eval_suite_checks_action_receipt_snapshot_fingerprints_not_alias(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_path = root / "dispatch_receipts" / "action_snapshot.yaml"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = {
+        "model": "riskflow_ceo_dispatch_receipt_v0",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "run_champion_challenger",
+        "status": "dispatch_allowed",
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+        "trust_artifact_fingerprints": {},
+    }
+    snapshot_path.write_text(yaml.safe_dump(snapshot), encoding="utf-8")
+    required_fingerprints = {
+        name: {"path": str(root / f"{name}.yaml"), "exists": True, "sha256": f"{name}-sha"}
+        for name in [
+            "decision_packet",
+            "action_contract",
+            "preflight_gate",
+            "trace_grade",
+            "ceo_replay",
+            "ceo_eval_suite",
+            "guardrail_audit",
+            "memory_delta",
+            "approval_queue",
+            "approval_status",
+            "mission_score",
+            "strategy_capital_dashboard",
+            "artifact_coherence",
+            "resumption_brief",
+        ]
+    }
+    alias = {**snapshot, "trust_artifact_fingerprints": required_fingerprints}
+    (root / "dispatch_receipt.yaml").write_text(yaml.safe_dump(alias), encoding="utf-8")
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": "2026-06-06T00:01:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_champion_challenger",
+                "status": "shadow_comparison_complete",
+                "action_taken": "champion_challenger",
+                "dispatch_receipt": {"path": str(snapshot_path), "sha256": _sha256(snapshot_path)},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "decision": "run_champion_challenger",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 1, "dispatch_receipt_status": "pass", "dispatch_receipt_checks": [{"status": "pass"}]},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    case = {item["case_id"]: item for item in suite["cases"]}["dispatch_receipt_fingerprints_trust_artifacts"]
+    assert case["status"] == "fail"
+    assert "fingerprints=0" in case["evidence"]
+    assert "artifact_coherence" in case["evidence"]
+    assert "resumption_brief" in case["evidence"]
+    assert str(snapshot_path) in case["evidence"]
+
+
+def test_ceo_eval_suite_fails_action_receipt_snapshot_with_unusable_required_fingerprint(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_path = root / "dispatch_receipts" / "action_snapshot.yaml"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    required_names = [
+        "decision_packet",
+        "action_contract",
+        "preflight_gate",
+        "trace_grade",
+        "ceo_replay",
+        "ceo_eval_suite",
+        "guardrail_audit",
+        "memory_delta",
+        "approval_queue",
+        "approval_status",
+        "mission_score",
+        "strategy_capital_dashboard",
+        "artifact_coherence",
+        "resumption_brief",
+    ]
+    healthy_fingerprints = {
+        name: {"path": str(root / f"{name}.yaml"), "exists": True, "sha256": f"{name}-sha"}
+        for name in required_names
+    }
+    snapshot_fingerprints = dict(healthy_fingerprints)
+    snapshot_fingerprints["action_contract"] = {
+        "path": str(root / "action_contract.yaml"),
+        "exists": False,
+        "sha256": "",
+    }
+    snapshot = {
+        "model": "riskflow_ceo_dispatch_receipt_v0",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "run_champion_challenger",
+        "status": "dispatch_allowed",
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+        "trust_artifact_fingerprints": snapshot_fingerprints,
+    }
+    snapshot_path.write_text(yaml.safe_dump(snapshot), encoding="utf-8")
+    alias = {**snapshot, "trust_artifact_fingerprints": healthy_fingerprints}
+    (root / "dispatch_receipt.yaml").write_text(yaml.safe_dump(alias), encoding="utf-8")
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": "2026-06-06T00:01:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_champion_challenger",
+                "status": "shadow_comparison_complete",
+                "action_taken": "champion_challenger",
+                "dispatch_receipt": {"path": str(snapshot_path), "sha256": _sha256(snapshot_path)},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "decision": "run_champion_challenger",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 1, "dispatch_receipt_status": "pass", "dispatch_receipt_checks": [{"status": "pass"}]},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    case = {item["case_id"]: item for item in suite["cases"]}["dispatch_receipt_fingerprints_trust_artifacts"]
+    assert case["status"] == "fail"
+    assert "fingerprints=14" in case["evidence"]
+    assert "unusable=['action_contract']" in case["evidence"]
+    assert str(snapshot_path) in case["evidence"]
+
+
+def test_ceo_eval_suite_requires_accepted_role_result_validation(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "role_task_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "model": "riskflow_ceo_role_result_v0",
+                "task_id": "debt_candidate_a",
+                "status": "complete",
+                "result_path": "review.yaml",
+                "production_effect": "none",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={
+            "completed_task_count": 1,
+            "blocked_task_count": 0,
+            "pending_task_count": 0,
+            "tasks": [{"task_id": "debt_candidate_a", "status": "complete", "production_effect": "none"}],
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["role_results_close_the_role_queue"]["status"] == "fail"
+    assert "completed_validation_accepted=False" in cases["role_results_close_the_role_queue"]["evidence"]
+
+
+def test_ceo_eval_suite_flags_approval_apply_without_current_provenance(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "decision": "approval_apply",
+                "action_taken": "cleared_recorded_stop_files",
+                "status": "clear_stop_request_applied",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_apply_clear_stop_request.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_apply_v0",
+                "approval_id": "clear_stop_request",
+                "status": "clear_stop_request_applied",
+                "approval_item_current": False,
+                "recorded_approval_item_fingerprint": "old",
+                "current_approval_item_fingerprint": "",
+                "source_artifact": "",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    case = {item["case_id"]: item for item in suite["cases"]}["approval_apply_has_current_provenance"]
+    assert case["status"] == "fail"
+    assert case["severity"] == "high"
+    assert "approval_item_current=False" in case["evidence"]
+    assert "fingerprints_match=False" in case["evidence"]
+
+
+def test_ceo_eval_suite_accepts_approval_apply_current_provenance_path(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    approval_apply_path = root / "approval_apply_promotion_proposal.yaml"
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "decision": "approval_apply",
+                "action_taken": "promotion_approval_closure_recorded",
+                "status": "promotion_approval_closed_shadow_only",
+                "outputs": {"approval_apply": str(approval_apply_path)},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    approval_apply_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_apply_v0",
+                "approval_id": "promotion_proposal",
+                "status": "promotion_approval_closed_shadow_only",
+                "approval_item_current": True,
+                "recorded_approval_item_fingerprint": "matching-fingerprint",
+                "current_approval_item_fingerprint": "matching-fingerprint",
+                "source_artifact": "promotion_proposal.yaml",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    case = {item["case_id"]: item for item in suite["cases"]}["approval_apply_has_current_provenance"]
+    assert case["status"] == "pass"
+    assert "artifact_path=" in case["evidence"]
+    assert "source_artifact=promotion_proposal.yaml" in case["evidence"]
+
+
+def test_ceo_eval_suite_fails_pending_role_tasks_without_ledger(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={
+            "completed_task_count": 0,
+            "blocked_task_count": 0,
+            "pending_task_count": 1,
+            "pending_manual_task_count": 0,
+            "pending_autonomous_task_count": 1,
+            "top_pending_task_id": "debt_candidate_a",
+            "tasks": [
+                {
+                    "task_id": "debt_candidate_a",
+                    "status": "pending",
+                    "role_id": "validation_referee",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    role_case = cases["role_results_close_the_role_queue"]
+    assert role_case["status"] == "fail"
+    assert role_case["severity"] == "advisory"
+    assert "pending=1" in role_case["evidence"]
+    assert "pending_autonomous=1" in role_case["evidence"]
+    assert "top_pending=debt_candidate_a" in role_case["evidence"]
+    assert role_case["next_action"] == "record_next_autonomous_specialist_result"
+
+
+def test_ceo_eval_suite_fails_blocked_role_tasks(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={
+            "completed_task_count": 0,
+            "blocked_task_count": 1,
+            "pending_task_count": 0,
+            "pending_manual_task_count": 0,
+            "pending_autonomous_task_count": 0,
+            "top_pending_task_id": "",
+            "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+            "top_blocked_role_id": "validation_referee",
+            "top_blocked_review_status": "accepted_blocked_result",
+            "top_blocked_next_action": "complete_champion_challenger_visual_review",
+            "top_blocked_finding": "Visual-review queue is missing chart labels.",
+            "tasks": [
+                {
+                    "task_id": "debt_candidate_a_visual_review_evidence",
+                    "status": "blocked",
+                    "role_id": "validation_referee",
+                    "result_resolution_mode": "specialist_result_required",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    role_case = {item["case_id"]: item for item in suite["cases"]}["role_results_close_the_role_queue"]
+    assert role_case["status"] == "fail"
+    assert role_case["severity"] == "advisory"
+    assert "blocked=1" in role_case["evidence"]
+    assert "top_blocked=debt_candidate_a_visual_review_evidence" in role_case["evidence"]
+    assert "top_blocked_role=validation_referee" in role_case["evidence"]
+    assert "top_blocked_review=accepted_blocked_result" in role_case["evidence"]
+    assert "top_blocked_next=complete_champion_challenger_visual_review" in role_case["evidence"]
+    assert "top_blocked_finding=Visual-review queue is missing chart labels." in role_case["evidence"]
+    assert role_case["next_action"] == "review_blocked_role_tasks_or_complete_missing_evidence"
+
+
+def test_ceo_eval_suite_routes_manual_pending_role_tasks_to_user_approval(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 1, "production_effect": "none"},
+        role_queue={
+            "completed_task_count": 0,
+            "blocked_task_count": 0,
+            "pending_task_count": 1,
+            "pending_manual_task_count": 1,
+            "pending_autonomous_task_count": 0,
+            "top_pending_task_id": "approval_clear_stop_request",
+            "tasks": [
+                {
+                    "task_id": "approval_clear_stop_request",
+                    "status": "pending",
+                    "role_id": "risk_officer",
+                    "result_resolution_mode": "manual_gate_blocked_record",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    role_case = {item["case_id"]: item for item in suite["cases"]}["role_results_close_the_role_queue"]
+    assert role_case["status"] == "fail"
+    assert "pending_manual=1" in role_case["evidence"]
+    assert role_case["next_action"] == "wait_for_user_approval_or_record_manual_gate_blocked"
+
+
+def test_ceo_eval_suite_requires_repair_apply_ledger_for_latest_receipt(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "repair_apply.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "generated_at": "2026-06-06T00:00:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "repair_closed",
+                "repair_key": "blocker:stale_artifacts",
+                "action_executed": True,
+                "repair_closed": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 0, "dispatch_receipt_status": "pass"},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    cases = {item["case_id"]: item for item in suite["cases"]}
+    assert cases["repair_apply_receipt_is_replayable"]["status"] == "fail"
+    assert "latest_repair_apply=True" in cases["repair_apply_receipt_is_replayable"]["evidence"]
+    assert "ledger_entries=0" in cases["repair_apply_receipt_is_replayable"]["evidence"]
 
 
 def test_ceo_eval_suite_flags_missing_dispatch_receipt_for_latest_action(tmp_path: Path) -> None:
@@ -3655,6 +6608,9 @@ def test_ceo_eval_suite_flags_missing_dispatch_receipt_for_latest_action(tmp_pat
     cases = {item["case_id"]: item for item in suite["cases"]}
     assert cases["dispatch_receipt_backs_latest_action"]["status"] == "fail"
     assert cases["dispatch_receipt_backs_latest_action"]["severity"] == "critical"
+    assert "action_receipt_exists=False" in cases["dispatch_receipt_backs_latest_action"]["evidence"]
+    assert "action_receipt_sha_match=False" in cases["dispatch_receipt_backs_latest_action"]["evidence"]
+    assert "action_receipt_path=" in cases["dispatch_receipt_backs_latest_action"]["evidence"]
     assert cases["dispatch_receipts_cover_action_ledger"]["status"] == "fail"
     assert suite["status"] == "fail"
     assert "dispatch_receipt_backs_latest_action" in suite["nine_nine_readiness"]["blocking_case_ids"]
@@ -3671,6 +6627,7 @@ def test_ceo_eval_suite_scores_mission_and_strategy_readiness(tmp_path: Path) ->
     assert missing_cases["strategy_capital_allocates_attention"]["status"] == "fail"
     assert missing_strategy["status"] == "pass"
     assert "strategy_capital_allocates_attention" in missing_strategy["nine_nine_readiness"]["advisory_case_ids"]
+    assert "role_results_close_the_role_queue" in missing_strategy["nine_nine_readiness"]["advisory_case_ids"]
 
     run_ceo_strategy_capital_dashboard(options)
     ready_strategy = run_ceo_eval_suite(options)["eval_suite"]
@@ -3740,10 +6697,49 @@ def test_ceo_portfolio_allocator_prioritizes_pending_approval(tmp_path: Path) ->
     allocator = result["allocator"]
     assert allocator["selected_lane"]["lane_id"] == "approval_governance"
     assert allocator["selected_lane"]["next_action"] == "wait_for_user_approval"
+    assert allocator["selected_lane"]["action_scope"] == "portfolio_attention_only"
+    assert allocator["selected_lane"]["dispatch_authority"] == "not_granted_by_portfolio_allocator_lane"
+    assert allocator["action_scope"] == "portfolio_attention_only"
+    assert allocator["dispatch_authority"] == "not_granted_by_portfolio_allocator"
+    assert allocator["runtime_authority_note"] == ceo_ops.CEO_RUNTIME_AUTHORITY_NOTE
     assert allocator["product_language_allowed"] is False
     assert allocator["production_effect"] == "none"
+    assert allocator["promotion_authority"] == "none"
     assert result["paths"]["portfolio_allocator"].exists()
     assert result["paths"]["portfolio_allocator_report"].exists()
+    report = result["paths"]["portfolio_allocator_report"].read_text(encoding="utf-8")
+    assert "Attention next action: wait_for_user_approval" in report
+    assert "Action scope: portfolio_attention_only" in report
+    assert "Dispatch authority: not_granted_by_portfolio_allocator" in report
+
+
+def test_ceo_portfolio_allocator_empty_lanes_defer_to_runtime_authority() -> None:
+    allocator = ceo_ops.build_ceo_portfolio_allocator(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        operating_dashboard={
+            "candidate_portfolio_count": 0,
+            "validation_gate": {"next_action": ""},
+        },
+        executive_kpis={"kpis": {}},
+        approval_queue={"pending_count": 0},
+        role_queue={"pending_task_count": 0, "next_action": ""},
+        evidence_debt_register={"debt_count": 0, "next_action": ""},
+        capability_backlog={"backlog_count": 0, "items": []},
+        trace_grade={"verdict": "pass", "recommended_next_action": ""},
+        knowledge_graph_delta={"recommended_obsidian_summaries": []},
+    )
+
+    fallback_lanes = {
+        lane["lane_id"]: lane["next_action"]
+        for lane in allocator["lanes"]
+        if lane["lane_id"] in {"approval_governance", "research_infrastructure", "specialist_review", "memory_handoff"}
+    }
+    assert set(fallback_lanes.values()) == {"defer_to_runtime_authority_surface"}
+    assert all(action != "continue_with_bound_action_dispatch" for action in fallback_lanes.values())
+    assert all(lane["action_scope"] == "portfolio_attention_only" for lane in allocator["lanes"])
+    assert allocator["dispatch_authority"] == "not_granted_by_portfolio_allocator"
+    assert allocator["production_effect"] == "none"
 
 
 def test_ceo_mission_score_writes_all_mission_dimensions(tmp_path: Path) -> None:
@@ -3769,8 +6765,17 @@ def test_ceo_mission_score_writes_all_mission_dimensions(tmp_path: Path) -> None
     assert score["product_language_allowed"] is False
     assert score["production_effect"] == "none"
     assert score["promotion_authority"] == "none"
+    assert score["action_scope"] == "mission_strategy_only"
+    assert score["dispatch_authority"] == "not_granted_by_mission_score"
+    assert score["runtime_authority_note"] == ceo_ops.CEO_RUNTIME_AUTHORITY_NOTE
+    assert all(item["action_scope"] == "mission_strategy_only" for item in dimensions.values())
+    assert all(item["dispatch_authority"] == "not_granted_by_mission_score_dimension" for item in dimensions.values())
     assert result["paths"]["mission_score"].exists()
     assert result["paths"]["mission_score_report"].exists()
+    report = result["paths"]["mission_score_report"].read_text(encoding="utf-8")
+    assert "Mission attention action:" in report
+    assert "Action scope: mission_strategy_only" in report
+    assert "Dispatch authority: not_granted_by_mission_score" in report
 
 
 def test_ceo_mission_score_maps_candidates_to_product_roles() -> None:
@@ -3811,6 +6816,10 @@ def test_ceo_mission_score_maps_candidates_to_product_roles() -> None:
     assert candidate_map["reset_a"]["dimension_id"] == "reset_quality"
     assert dimensions["warning_blocker"]["candidate_count"] == 1
     assert dimensions["reset_quality"]["candidate_count"] == 1
+    assert dimensions["warning_blocker"]["action_scope"] == "mission_strategy_only"
+    assert dimensions["warning_blocker"]["dispatch_authority"] == "not_granted_by_mission_score_dimension"
+    assert score["action_scope"] == "mission_strategy_only"
+    assert score["dispatch_authority"] == "not_granted_by_mission_score"
     assert score["production_effect"] == "none"
 
 
@@ -3864,6 +6873,8 @@ def test_ceo_strategy_capital_dashboard_prioritizes_approval_gate() -> None:
     assert dashboard["model"] == "riskflow_ceo_strategy_capital_dashboard_v0"
     assert dashboard["status"] == "blocked_by_safety_or_approval"
     assert dashboard["safe_to_continue"] is False
+    assert dashboard["safe_to_continue_scope"] == "strategy_attention_only_not_dispatch_authority"
+    assert dashboard["dispatch_authority"] == "not_granted_by_strategy_capital_dashboard"
     assert dashboard["selected_capital_bucket"] == "approval_and_safety"
     assert dashboard["selected_strategy"] == "wait_for_user_approval_or_repair_preflight"
     assert dashboard["capital_buckets"][0]["bucket_id"] == "approval_and_safety"
@@ -3875,6 +6886,8 @@ def test_ceo_strategy_capital_points_sum_to_100() -> None:
 
     assert dashboard["status"] == "strategy_capital_allocated"
     assert dashboard["safe_to_continue"] is True
+    assert dashboard["safe_to_continue_scope"] == "strategy_attention_only_not_dispatch_authority"
+    assert dashboard["dispatch_authority"] == "not_granted_by_strategy_capital_dashboard"
     assert dashboard["total_points"] == 100
     assert sum(int(item["allocation_points"]) for item in dashboard["capital_buckets"]) == 100
     assert len(dashboard["ordered_action_queue"]) == len(dashboard["capital_buckets"])
@@ -3898,7 +6911,12 @@ def test_ceo_strategy_capital_dashboard_is_diagnostic_only(tmp_path: Path) -> No
     assert dashboard["product_language_allowed"] is False
     assert dashboard["production_effect"] == "none"
     assert dashboard["promotion_authority"] == "none"
+    assert dashboard["safe_to_continue_scope"] == "strategy_attention_only_not_dispatch_authority"
+    assert dashboard["dispatch_authority"] == "not_granted_by_strategy_capital_dashboard"
     assert sum(int(item["allocation_points"]) for item in dashboard["capital_buckets"]) == 100
+    report = result["paths"]["strategy_capital_dashboard_report"].read_text(encoding="utf-8")
+    assert "Safety scope: strategy_attention_only_not_dispatch_authority" in report
+    assert "Dispatch authority: not_granted_by_strategy_capital_dashboard" in report
     assert not (root / "binding_action_result.yaml").exists()
     assert not (root / "ceo_action_ledger.jsonl").exists()
 
@@ -3917,6 +6935,9 @@ def test_ceo_resumption_brief_writes_fresh_session_trust_card(tmp_path: Path) ->
     assert brief["product_language_allowed"] is False
     assert brief["production_effect"] == "none"
     assert brief["promotion_authority"] == "none"
+    assert brief["trace_grade_status"] in {"pass", "warn", "fail"}
+    assert "trace_grade_recommended_next_action" in brief
+    assert "trace_grade_manual_data_import_required" in brief
     if brief["resume_status"] == "blocked_preflight":
         assert "execute-next" not in brief["next_command"]
         assert brief["preflight_blockers"]
@@ -3931,6 +6952,10 @@ def test_ceo_resumption_brief_writes_fresh_session_trust_card(tmp_path: Path) ->
     assert artifacts["strategy_capital_dashboard"]["exists"] is True
     assert result["paths"]["resumption_brief"].exists()
     assert result["paths"]["resumption_brief_report"].exists()
+    report = result["paths"]["resumption_brief_report"].read_text(encoding="utf-8")
+    assert "Trace grade:" in report
+    assert "Trace recommended next action:" in report
+    assert "Trace manual data import required:" in report
     assert not (root / "binding_action_result.yaml").exists()
     assert not (root / "ceo_action_ledger.jsonl").exists()
 
@@ -4021,6 +7046,8 @@ def test_ceo_resumption_brief_allows_one_bound_action_only_when_clean(tmp_path: 
 
     assert brief["resume_status"] == "safe_for_one_bound_action"
     assert brief["next_command"] == "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply"
+    assert brief["authorized_strategic_route"] == "run_fresh_withheld_validation_executor"
+    assert brief["authorized_route_source"] == "strategy_capital_dashboard"
     assert brief["product_language_allowed"] is False
     assert brief["promotion_authority"] == "none"
 
@@ -4093,6 +7120,19 @@ def _write_clean_coherence_inputs(root: Path) -> None:
             "production_effect": "none",
         },
     )
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "generated_at": "2026-06-06T00:01:30+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_champion_challenger",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "executive_decision_packet.md").write_text("# packet\n", encoding="utf-8")
     for name in [
         "preflight_gate.yaml",
@@ -4100,8 +7140,47 @@ def _write_clean_coherence_inputs(root: Path) -> None:
         "ceo_eval_suite.yaml",
         "mission_score.yaml",
         "strategy_capital_dashboard.yaml",
+        "approval_queue.yaml",
+        "approval_status.yaml",
+        "role_task_queue.yaml",
+        "role_dispatch.yaml",
+        "role_result_validation.yaml",
+        "repair_apply.yaml",
+        "action_board.yaml",
+        "decision_quality.yaml",
+        "operator_brief.yaml",
     ]:
         _write_coherence_artifact(root, name)
+    action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
+    receipt_path = Path(action["dispatch_receipt"]["path"])
+    receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+    for fingerprint_name, artifact_name in {
+        "action_contract": "action_contract.yaml",
+        "preflight_gate": "preflight_gate.yaml",
+        "ceo_replay": "ceo_replay.yaml",
+        "ceo_eval_suite": "ceo_eval_suite.yaml",
+        "mission_score": "mission_score.yaml",
+        "strategy_capital_dashboard": "strategy_capital_dashboard.yaml",
+        "approval_queue": "approval_queue.yaml",
+        "approval_status": "approval_status.yaml",
+        "role_task_queue": "role_task_queue.yaml",
+        "role_dispatch": "role_dispatch.yaml",
+        "role_result_validation": "role_result_validation.yaml",
+        "repair_apply": "repair_apply.yaml",
+        "action_board": "action_board.yaml",
+        "decision_quality": "decision_quality.yaml",
+        "operator_brief": "operator_brief.yaml",
+    }.items():
+        artifact_path = root / artifact_name
+        receipt["trust_artifact_fingerprints"][fingerprint_name] = {
+            "path": str(artifact_path),
+            "exists": artifact_path.exists(),
+            "sha256": _sha256(artifact_path) if artifact_path.exists() else "",
+        }
+    receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+    action["dispatch_receipt"]["sha256"] = _sha256(receipt_path)
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def test_ceo_artifact_coherence_passes_clean_current_artifacts(tmp_path: Path) -> None:
@@ -4135,6 +7214,263 @@ def test_ceo_artifact_coherence_flags_stale_mission_after_latest_action(tmp_path
     assert "stale_before_latest_action" in issues["mission_score"]
 
 
+def test_ceo_artifact_coherence_keeps_stale_decision_quality_advisory(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    _write_coherence_artifact(root, "decision_quality.yaml", generated_at="2026-06-06T00:00:30+00:00")
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert coherence["hard_issue_count"] == 0
+    assert "stale_before_latest_action" in issues["decision_quality"]
+
+
+def test_ceo_artifact_coherence_keeps_approval_role_freshness_advisory(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    _write_coherence_artifact(root, "approval_queue.yaml", generated_at="2026-06-06T00:00:30+00:00")
+    _write_coherence_artifact(root, "role_task_queue.yaml", generated_at="2026-06-06T00:00:30+00:00")
+    _write_coherence_artifact(root, "role_result_validation.yaml", generated_at="2026-06-06T00:00:30+00:00")
+    (root / "role_dispatch.yaml").unlink()
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item for item in coherence["issues"]}
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert coherence["hard_issue_count"] == 0
+    assert "stale_before_latest_action" in issues["approval_queue"]["issues"]
+    assert "stale_before_latest_action" in issues["role_task_queue"]["issues"]
+    assert "stale_before_latest_action" in issues["role_result_validation"]["issues"]
+    assert issues["role_dispatch"]["issues"] == ["missing_artifact"]
+    assert all(item["severity"] == "advisory" for item in issues.values())
+
+
+def test_ceo_artifact_coherence_flags_manual_gate_handoff_semantic_mismatch(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "manual_gate_required",
+                "primary_action": {
+                    "action_id": "blocker:stop_requested",
+                    "command_kind": "manual_gate",
+                    "can_execute_now": True,
+                    "requires_manual_gate": True,
+                },
+                "runnable_repairs": [
+                    {"action_id": "resumption_brief_next_command", "can_execute_now": True},
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "decision_quality_written",
+                "effective_runtime_action": "blocker:stop_requested",
+                "effective_runtime_command_kind": "manual_gate",
+                "effective_runtime_can_execute_now": True,
+                "runtime_blocked": False,
+                "runtime_block_reason": "",
+                "selected_action_is_executable_now": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "ready_for_one_operator_step",
+                "current_situation": {
+                    "action_board_status": "manual_gate_required",
+                    "primary_action": "blocker:stop_requested",
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    semantic = next(item for item in coherence["issues"] if item["artifact"] == "handoff_semantics")
+    assert coherence["status"] == "fail"
+    assert coherence["hard_issue_count"] == 1
+    assert semantic["severity"] == "hard"
+    assert "manual_gate_primary_marked_executable" in semantic["issues"]
+    assert "manual_gate_has_runnable_actions" in semantic["issues"]
+    assert "manual_gate_decision_quality_selected_action_executable" in semantic["issues"]
+    assert "manual_gate_operator_brief_status_mismatch" in semantic["issues"]
+    report = result["paths"]["artifact_coherence_report"].read_text(encoding="utf-8")
+    assert "handoff_semantics" in report
+    assert "action_board_status" in report
+
+
+def test_ceo_artifact_coherence_flags_bounded_action_handoff_semantic_mismatch(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "bounded_action_available",
+                "primary_action": {
+                    "action_id": "resumption_brief_next_command",
+                    "command_kind": "bounded_dispatch",
+                    "can_execute_now": True,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "decision_quality_written",
+                "effective_runtime_action": "blocker:stop_requested",
+                "effective_runtime_command_kind": "manual_gate",
+                "effective_runtime_can_execute_now": False,
+                "runtime_blocked": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "waiting_on_manual_gate",
+                "current_situation": {
+                    "action_board_status": "bounded_action_available",
+                    "primary_action": "resumption_brief_next_command",
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    semantic = next(item for item in coherence["issues"] if item["artifact"] == "handoff_semantics")
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert coherence["hard_issue_count"] == 0
+    assert semantic["severity"] == "advisory"
+    assert "decision_quality_effective_action_mismatch" in semantic["issues"]
+    assert "bounded_action_decision_quality_not_executable" in semantic["issues"]
+    assert "bounded_action_operator_brief_status_mismatch" in semantic["issues"]
+
+
+def test_ceo_artifact_coherence_flags_live_stop_stale_safe_handoff(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    ceo_ops.ceo_stop_path(options, "ceo_test").write_text("user_requested\n", encoding="utf-8")
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "bounded_action_available",
+                "primary_action": {
+                    "action_id": "resumption_brief_next_command",
+                    "command_kind": "bounded_dispatch",
+                    "can_execute_now": True,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "decision_quality_written",
+                "effective_runtime_action": "resumption_brief_next_command",
+                "effective_runtime_command_kind": "bounded_dispatch",
+                "effective_runtime_can_execute_now": True,
+                "runtime_blocked": False,
+                "selected_action_is_executable_now": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "ready_for_one_operator_step",
+                "current_situation": {
+                    "action_board_status": "bounded_action_available",
+                    "primary_action": "resumption_brief_next_command",
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    semantic = next(item for item in coherence["issues"] if item["artifact"] == "handoff_semantics")
+    assert coherence["status"] == "fail"
+    assert coherence["hard_issue_count"] == 1
+    assert semantic["severity"] == "hard"
+    assert "live_stop_runtime_authority_mismatch" in semantic["issues"]
+    assert "action_board_bounded_action_available" in semantic["evidence"]["live_stop_stale_safe_signals"]
+    assert "decision_quality_effective_runtime_executable" in semantic["evidence"]["live_stop_stale_safe_signals"]
+    assert semantic["evidence"]["stop_requested"] is True
+
+
 def test_ceo_artifact_coherence_flags_run_id_mismatch(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
@@ -4147,6 +7483,104 @@ def test_ceo_artifact_coherence_flags_run_id_mismatch(tmp_path: Path) -> None:
     issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
     assert coherence["status"] == "fail"
     assert "run_id_mismatch" in issues["preflight_gate"]
+
+
+def test_ceo_artifact_coherence_flags_action_contract_decision_mismatch(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "run_frozen_candidate_validation",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
+    assert coherence["status"] == "fail"
+    assert coherence["hard_issue_count"] == 2
+    assert "action_contract_decision_mismatch" in issues["action_contract"]
+
+
+def test_ceo_artifact_coherence_keeps_legacy_no_receipt_action_advisory(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
+    action.pop("dispatch_receipt", None)
+    action.pop("transition_policy_version", None)
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action, sort_keys=True) + "\n", encoding="utf-8")
+    contract = yaml.safe_load((root / "action_contract.yaml").read_text(encoding="utf-8"))
+    contract["decision"] = "run_frozen_candidate_validation"
+    (root / "action_contract.yaml").write_text(yaml.safe_dump(contract), encoding="utf-8")
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert coherence["hard_issue_count"] == 0
+    assert coherence["advisory_issue_count"] == 2
+    assert coherence["latest_action_has_current_transition_evidence"] is False
+    assert "action_contract_decision_mismatch" in issues["action_contract"]
+    assert "missing_action_dispatch_receipt_ref" in issues["dispatch_receipt"]
+
+
+def test_ceo_artifact_coherence_flags_missing_action_receipt_snapshot(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
+    missing_receipt = root / "dispatch_receipts" / "missing_receipt.yaml"
+    action["dispatch_receipt"] = {"path": str(missing_receipt), "sha256": "missing"}
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
+    assert coherence["status"] == "fail"
+    assert "missing_action_dispatch_receipt_snapshot" in issues["dispatch_receipt"]
+
+
+def test_ceo_artifact_coherence_flags_receipt_fingerprint_drift(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
+    receipt_path = Path(action["dispatch_receipt"]["path"])
+    receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+    preflight_path = root / "preflight_gate.yaml"
+    receipt["trust_artifact_fingerprints"]["preflight_gate"] = {
+        "path": str(preflight_path),
+        "exists": True,
+        "sha256": _sha256(preflight_path),
+    }
+    receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+    action["dispatch_receipt"]["sha256"] = _sha256(receipt_path)
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+    _write_coherence_artifact(root, "preflight_gate.yaml", generated_at="2026-06-06T00:06:00+00:00")
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    dispatch_issue = next(item for item in coherence["issues"] if item["artifact"] == "dispatch_receipt")
+    mismatches = dispatch_issue["evidence"]["trust_fingerprint_mismatches"]
+    assert coherence["status"] == "fail"
+    assert "dispatch_receipt_trust_fingerprint_drift" in dispatch_issue["issues"]
+    assert mismatches[0]["artifact"] == "preflight_gate"
+    assert mismatches[0]["reason"] == "fingerprinted_artifact_sha_mismatch"
 
 
 def test_ceo_resumption_brief_downgrades_clean_preflight_on_failed_coherence(tmp_path: Path) -> None:
@@ -4184,13 +7618,96 @@ def test_ceo_resumption_brief_downgrades_clean_preflight_on_failed_coherence(tmp
     assert "execute-next" not in brief["next_command"]
 
 
+def test_ceo_resumption_brief_allows_advisory_artifact_coherence_issues(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    latest_packet = root / "executive_decision_packet.md"
+    latest_packet.write_text("# packet\n", encoding="utf-8")
+
+    brief = ceo_ops.build_ceo_resumption_brief(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        stop_requested=False,
+        preflight_gate={"status": "pass", "safe_to_execute": True, "blockers": [], "production_effect": "none"},
+        replay={"model": "riskflow_ceo_replay_v0", "status": "replayable", "production_effect": "none"},
+        eval_suite={
+            "model": "riskflow_ceo_eval_suite_v0",
+            "status": "pass",
+            "nine_nine_readiness": {"status": "ready_for_extended_autonomy", "advisory_case_ids": []},
+            "production_effect": "none",
+        },
+        mission_score={"model": "riskflow_ceo_mission_score_v0", "production_effect": "none"},
+        strategy_capital_dashboard={"model": "riskflow_ceo_strategy_capital_dashboard_v0", "production_effect": "none"},
+        artifact_coherence={
+            "model": "riskflow_ceo_artifact_coherence_v0",
+            "status": "pass_with_advisory_issues",
+            "hard_issue_count": 0,
+            "advisory_issue_count": 2,
+            "issues": [
+                {"artifact": "action_contract", "issues": ["action_contract_decision_mismatch"]},
+                {"artifact": "dispatch_receipt", "issues": ["missing_action_dispatch_receipt_ref"]},
+            ],
+            "production_effect": "none",
+        },
+        latest_packet=latest_packet,
+    )
+
+    assert brief["resume_status"] == "safe_for_one_bound_action"
+    assert "execute-next" in brief["next_command"]
+
+
 def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
+    clean_root = options.report_root / "ceo_clean_actionable"
     actionable_root = options.report_root / "ceo_actionable"
+    eval_blocked_root = options.report_root / "ceo_eval_blocked"
+    stale_trace_root = options.report_root / "ceo_stale_trace_fail"
+    stale_manual_gate_root = options.report_root / "ceo_stale_manual_gate"
+    stale_stop_safe_root = options.report_root / "ceo_stale_stop_safe"
     stopped_root = options.report_root / "ceo_stopped"
     blocked_root = options.report_root / "ceo_blocked"
-    for root in [actionable_root, stopped_root, blocked_root]:
+    for root in [
+        clean_root,
+        actionable_root,
+        eval_blocked_root,
+        stale_trace_root,
+        stale_manual_gate_root,
+        stale_stop_safe_root,
+        stopped_root,
+        blocked_root,
+    ]:
         root.mkdir(parents=True, exist_ok=True)
+
+    (clean_root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_clean_actionable",
+                "lab_run_id": "ceo_clean_actionable_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo operator-step --run-id ceo_clean_actionable --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (clean_root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "safe_to_execute": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (clean_root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump({"status": "dispatch_allowed", "safe_to_dispatch": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (clean_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "issue_count": 0, "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (clean_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
 
     (actionable_root / "resumption_brief.yaml").write_text(
         yaml.safe_dump(
@@ -4221,6 +7738,20 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    (actionable_root / "trace_grade.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_trace_grade_v0",
+                "verdict": "pass",
+                "score": 93,
+                "recommended_next_action": "continue_with_one_bound_ceo_action",
+                "issues": [],
+                "criteria": {"manual_data_import_required": False},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (actionable_root / "blocker_stack.yaml").write_text(
         yaml.safe_dump({"model": "riskflow_ceo_blocker_stack_v0", "status": "clear_for_one_bound_action", "top_blocker": "", "production_effect": "none"}),
         encoding="utf-8",
@@ -4242,6 +7773,19 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    (actionable_root / "repair_apply.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_apply_v0",
+                "status": "repair_closed",
+                "repair_key": "blocker:stale_artifacts",
+                "action_executed": True,
+                "repair_closed": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (actionable_root / "operator_brief.yaml").write_text(
         yaml.safe_dump(
             {
@@ -4249,6 +7793,167 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
                 "status": "ready_for_one_operator_step",
                 "plain_english_summary": "CEO mode has one bounded action available.",
                 "recommended_next_action": "PYTHONPATH=src python3 -m riskflow ceo operator-step --run-id ceo_actionable --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "bounded_action_available",
+                "primary_action": {
+                    "action_id": "resumption_brief_next_command",
+                    "command_kind": "bounded_dispatch",
+                    "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_actionable --apply",
+                    "can_execute_now": True,
+                    "authorized_strategic_route": "run_fresh_withheld_validation_executor",
+                    "authorized_route_source": "action_contract",
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "status": "decision_quality_written",
+                "selected_action": "run_fresh_withheld_validation_executor",
+                "confidence": "medium",
+                "runtime_authority_status": "bounded_action_available",
+                "executable_next_action": "resumption_brief_next_command",
+                "executable_next_command_kind": "bounded_dispatch",
+                "runtime_authorized_strategic_route": "run_fresh_withheld_validation_executor",
+                "executable_can_execute_now": True,
+                "selected_action_is_executable_now": True,
+                "selected_action_blocked_by": "",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "ceo_replay.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_replay_v0",
+                "status": "replayable",
+                "issues": [],
+                "operator_step_status": "pass",
+                "operator_step_count": 3,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "ceo_eval_suite.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_eval_suite_v0",
+                "status": "pass",
+                "score": 94,
+                "nine_nine_readiness": {
+                    "status": "ready_for_extended_autonomy",
+                    "blocking_case_ids": [],
+                    "advisory_case_ids": ["role_results_close_the_role_queue"],
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_artifact_coherence_v0",
+                "status": "pass_with_advisory_issues",
+                "issue_count": 1,
+                "hard_issue_count": 0,
+                "advisory_issue_count": 1,
+                "issues": [
+                    {
+                        "artifact": "action_contract",
+                        "issues": ["action_contract_decision_mismatch"],
+                        "severity": "advisory",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_queue_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "pending_items": [
+                    {
+                        "approval_id": "clear_stop_request",
+                        "kind": "resume_stopped_run",
+                        "reason": "stop request awaits user approval",
+                        "source_artifact": "stop.request",
+                        "required_user_decision": "approve_or_reject_resume_or_clear_stop",
+                        "approval_authority": "user_only",
+                        "approval_item_fingerprint": "actionable-stop-fingerprint",
+                    }
+                ],
+                "top_pending_approval_id": "clear_stop_request",
+                "top_pending_approval_record_command": "PYTHONPATH=src python3 -m riskflow ceo approval-record --run-id ceo_actionable --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed",
+                "top_pending_approval_apply_command": "PYTHONPATH=src python3 -m riskflow ceo approval-apply --run-id ceo_actionable --approval-id clear_stop_request --user-confirmed --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "approval_status.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_approval_status_v0",
+                "status": "pending_approvals",
+                "pending_count": 1,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "role_result_validation.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_result_v0",
+                "status": "accepted",
+                "task_id": "debt_candidate_a",
+                "issues": [],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (actionable_root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "status": "pending_role_tasks",
+                "pending_task_count": 2,
+                "pending_manual_task_count": 1,
+                "pending_autonomous_task_count": 1,
+                "completed_task_count": 1,
+                "blocked_task_count": 2,
+                "top_pending_task_id": "approval_clear_stop_request",
+                "top_pending_role_id": "risk_officer",
+                "top_pending_owner_command": "wait_for_user_approval",
+                "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+                "top_blocked_role_id": "product_translator",
+                "top_blocked_packet_path": "reports/ceo_runs/ceo_actionable/role_dispatch_packets/debt_candidate_a_visual_review_evidence.md",
+                "top_blocked_result_resolution_mode": "specialist_result_required",
+                "top_blocked_validation_status": "accepted",
+                "top_blocked_review_status": "accepted_blocked_result",
+                "top_blocked_result_path": "reports/ceo_runs/ceo_actionable/specialist_results/debt_candidate_a_visual_review_evidence.yaml",
+                "top_blocked_next_action": "complete_champion_challenger_visual_review",
+                "top_blocked_finding": "Visual review evidence is missing.",
                 "production_effect": "none",
             }
         ),
@@ -4263,6 +7968,253 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
         encoding="utf-8",
     )
     (actionable_root / "executive_decision_packet.md").write_text("# packet\n", encoding="utf-8")
+
+    (eval_blocked_root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_eval_blocked",
+                "lab_run_id": "ceo_eval_blocked_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo operator-step --run-id ceo_eval_blocked --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "safe_to_execute": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump({"status": "dispatch_allowed", "safe_to_dispatch": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "trace_grade.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_trace_grade_v0",
+                "verdict": "fail",
+                "score": 55,
+                "recommended_next_action": "stop_for_manual_data_import",
+                "issues": ["manual_data_import_required"],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "issue_count": 0, "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "ceo_replay.yaml").write_text(
+        yaml.safe_dump({"status": "replay_gaps", "issues": ["missing_action_ledger_entries"], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (eval_blocked_root / "ceo_eval_suite.yaml").write_text(
+        yaml.safe_dump({"status": "fail", "score": 40, "nine_nine_readiness": {"blocking_case_ids": ["replayable_action_timeline"]}, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    (stale_trace_root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_stale_trace_fail",
+                "lab_run_id": "ceo_stale_trace_fail_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_stale_trace_fail --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "safe_to_execute": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump({"status": "dispatch_allowed", "safe_to_dispatch": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "trace_grade.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_trace_grade_v0",
+                "verdict": "fail",
+                "score": 15,
+                "recommended_next_action": "import_or_curate_fresh_ohlcv_data",
+                "issues": ["manual_data_import_required"],
+                "criteria": {"manual_data_import_required": True},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "ceo_replay.yaml").write_text(
+        yaml.safe_dump({"status": "replayable", "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "ceo_eval_suite.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "score": 95, "nine_nine_readiness": {"blocking_case_ids": []}, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "issue_count": 0, "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    (stale_manual_gate_root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_stale_manual_gate",
+                "lab_run_id": "ceo_stale_manual_gate_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_stale_manual_gate --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "safe_to_execute": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump({"status": "dispatch_allowed", "safe_to_dispatch": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "manual_gate_required",
+                "primary_action": {"action_id": "blocker:stop_requested", "command_kind": "manual_gate"},
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "status": "waiting_on_manual_gate",
+                "plain_english_summary": "CEO mode is stopped at a manual gate.",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "runtime_authority_status": "manual_gate_required",
+                "runtime_blocked": True,
+                "runtime_block_reason": "manual_gate_required:blocker:stop_requested",
+                "selected_action": "run_frozen_candidate_validation",
+                "selected_action_is_executable_now": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "issue_count": 0, "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_manual_gate_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    (stale_stop_safe_root / "stop.request").write_text("user_requested\n", encoding="utf-8")
+    (stale_stop_safe_root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_stale_stop_safe",
+                "lab_run_id": "ceo_stale_stop_safe_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_stale_stop_safe --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "preflight_gate.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "safe_to_execute": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "dispatch_receipt.yaml").write_text(
+        yaml.safe_dump({"status": "dispatch_allowed", "safe_to_dispatch": True, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "bounded_action_available",
+                "primary_action": {
+                    "action_id": "resumption_brief_next_command",
+                    "command_kind": "bounded_dispatch",
+                    "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_stale_stop_safe --apply",
+                    "can_execute_now": True,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "status": "ready_for_one_operator_step",
+                "plain_english_summary": "CEO mode has one bounded action available.",
+                "recommended_next_action": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_stale_stop_safe --apply",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "runtime_authority_status": "bounded_action_available",
+                "effective_runtime_action": "resumption_brief_next_command",
+                "effective_runtime_command_kind": "bounded_dispatch",
+                "effective_runtime_can_execute_now": True,
+                "runtime_blocked": False,
+                "selected_action": "run_champion_challenger",
+                "selected_action_is_executable_now": True,
+                "executable_next_action": "resumption_brief_next_command",
+                "executable_next_command_kind": "bounded_dispatch",
+                "executable_can_execute_now": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "artifact_coherence.yaml").write_text(
+        yaml.safe_dump({"status": "pass", "issue_count": 0, "issues": [], "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (stale_stop_safe_root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
 
     (stopped_root / "stop.request").write_text("user_requested\n", encoding="utf-8")
     (stopped_root / "resumption_brief.yaml").write_text(
@@ -4298,19 +8250,132 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
     assert index["model"] == "riskflow_ceo_run_index_v0"
     assert index["status"] == "runs_indexed"
     assert index["status_counts"]["actionable"] == 1
-    assert index["status_counts"]["stopped"] == 1
-    assert index["status_counts"]["blocked"] == 1
-    assert rows["ceo_actionable"]["status"] == "actionable"
+    assert index["status_counts"]["stopped"] == 2
+    assert index["status_counts"]["blocked"] == 5
+    assert rows["ceo_clean_actionable"]["status"] == "actionable"
+    assert rows["ceo_actionable"]["status"] == "blocked"
+    assert rows["ceo_eval_blocked"]["status"] == "blocked"
+    assert rows["ceo_eval_blocked"]["replay_status"] == "replay_gaps"
+    assert rows["ceo_eval_blocked"]["eval_suite_status"] == "fail"
+    assert rows["ceo_eval_blocked"]["trace_grade_status"] == "fail"
+    assert rows["ceo_eval_blocked"]["trace_grade_manual_data_import_required"] is True
+    assert rows["ceo_stale_trace_fail"]["status"] == "blocked"
+    assert rows["ceo_stale_trace_fail"]["resume_status"] == "safe_for_one_bound_action"
+    assert rows["ceo_stale_trace_fail"]["preflight_status"] == "pass"
+    assert rows["ceo_stale_trace_fail"]["dispatch_safe_to_dispatch"] is True
+    assert rows["ceo_stale_trace_fail"]["replay_status"] == "replayable"
+    assert rows["ceo_stale_trace_fail"]["eval_suite_status"] == "pass"
+    assert rows["ceo_stale_trace_fail"]["trace_grade_status"] == "fail"
+    assert rows["ceo_stale_trace_fail"]["trace_grade_manual_data_import_required"] is True
+    assert rows["ceo_stale_manual_gate"]["status"] == "blocked"
+    assert rows["ceo_stale_manual_gate"]["dispatch_receipt_status"] == "dispatch_allowed"
+    assert rows["ceo_stale_manual_gate"]["dispatch_safe_to_dispatch"] is True
+    assert rows["ceo_stale_manual_gate"]["effective_operator_status"] == "manual_gate_required"
+    assert rows["ceo_stale_manual_gate"]["manual_gate_active"] is True
+    assert rows["ceo_stale_manual_gate"]["effective_operator_runtime_block_reason"] == "manual_gate_required:blocker:stop_requested"
+    assert rows["ceo_stale_manual_gate"]["action_board_status"] == "manual_gate_required"
+    assert rows["ceo_stale_manual_gate"]["decision_quality_runtime_authority"] == "manual_gate_required"
+    assert rows["ceo_stale_manual_gate"]["decision_quality_runtime_blocked"] is True
+    assert rows["ceo_stale_stop_safe"]["status"] == "stopped"
+    assert rows["ceo_stale_stop_safe"]["resume_status"] == "blocked_stop_requested"
+    assert rows["ceo_stale_stop_safe"]["dispatch_receipt_status"] == "dispatch_blocked"
+    assert rows["ceo_stale_stop_safe"]["dispatch_safe_to_dispatch"] is False
+    assert rows["ceo_stale_stop_safe"]["dispatch_reason"] == "live stop request/manual gate overrides reused safe artifacts"
+    assert rows["ceo_stale_stop_safe"]["effective_operator_status"] == "manual_gate_required"
+    assert rows["ceo_stale_stop_safe"]["manual_gate_active"] is True
+    assert rows["ceo_stale_stop_safe"]["effective_operator_runtime_block_reason"] == "manual_gate_required:blocker:stop_requested"
+    assert rows["ceo_stale_stop_safe"]["action_board_status"] == "manual_gate_required"
+    assert rows["ceo_stale_stop_safe"]["operator_brief_status"] == "waiting_on_manual_gate"
+    assert rows["ceo_stale_stop_safe"]["operator_brief_next_action"].endswith("approval-queue --run-id ceo_stale_stop_safe")
+    assert rows["ceo_stale_stop_safe"]["decision_quality_effective_runtime_action"] == "blocker:stop_requested"
+    assert rows["ceo_stale_stop_safe"]["decision_quality_effective_runtime_command_kind"] == "manual_gate"
+    assert rows["ceo_stale_stop_safe"]["decision_quality_effective_runtime_can_execute_now"] is False
+    assert rows["ceo_stale_stop_safe"]["decision_quality_runtime_authority"] == "manual_gate_required"
+    assert rows["ceo_stale_stop_safe"]["decision_quality_executable_next_action"] == "blocker:stop_requested"
+    assert rows["ceo_stale_stop_safe"]["decision_quality_executable_command_kind"] == "manual_gate"
+    assert rows["ceo_stale_stop_safe"]["decision_quality_executable_can_execute_now"] is False
+    assert rows["ceo_stale_stop_safe"]["decision_quality_selected_action_is_executable_now"] is False
+    assert rows["ceo_stale_stop_safe"]["decision_quality_selected_action_blocked_by"] == "manual_gate_required:blocker:stop_requested"
+    assert rows["ceo_stale_stop_safe"]["next_command"].endswith("approval-queue --run-id ceo_stale_stop_safe")
+    assert "execute-next" not in rows["ceo_stale_stop_safe"]["next_command"]
     assert rows["ceo_actionable"]["latest_decision_packet_exists"] is True
     assert rows["ceo_actionable"]["dispatch_receipt_status"] == "dispatch_allowed"
     assert rows["ceo_actionable"]["dispatch_safe_to_dispatch"] is True
+    assert rows["ceo_actionable"]["trace_grade_status"] == "pass"
+    assert rows["ceo_actionable"]["trace_grade_score"] == 93
+    assert rows["ceo_actionable"]["trace_grade_recommended_next_action"] == "continue_with_one_bound_ceo_action"
+    assert rows["ceo_actionable"]["trace_grade_manual_data_import_required"] is False
     assert rows["ceo_actionable"]["top_blocker"] == ""
     assert rows["ceo_actionable"]["incident_count"] == 0
     assert rows["ceo_actionable"]["repair_plan_status"] == "no_repairs_required"
     assert rows["ceo_actionable"]["top_repair"] == ""
     assert rows["ceo_actionable"]["top_repair_kind"] == ""
+    assert rows["ceo_actionable"]["repair_apply_status"] == "repair_closed"
+    assert rows["ceo_actionable"]["repair_apply_key"] == "blocker:stale_artifacts"
+    assert rows["ceo_actionable"]["repair_apply_executed"] is True
+    assert rows["ceo_actionable"]["repair_apply_closed"] is True
+    assert rows["ceo_actionable"]["effective_operator_status"] == "bounded_action_available"
+    assert rows["ceo_actionable"]["manual_gate_active"] is False
     assert rows["ceo_actionable"]["operator_brief_status"] == "ready_for_one_operator_step"
     assert rows["ceo_actionable"]["operator_brief_summary"] == "CEO mode has one bounded action available."
+    assert rows["ceo_actionable"]["decision_quality_status"] == "decision_quality_written"
+    assert rows["ceo_actionable"]["decision_quality_selected_action"] == "run_fresh_withheld_validation_executor"
+    assert rows["ceo_actionable"]["decision_quality_confidence"] == "medium"
+    assert rows["ceo_actionable"]["decision_quality_runtime_authority"] == "bounded_action_available"
+    assert rows["ceo_actionable"]["decision_quality_executable_next_action"] == "resumption_brief_next_command"
+    assert rows["ceo_actionable"]["decision_quality_executable_command_kind"] == "bounded_dispatch"
+    assert rows["ceo_actionable"]["decision_quality_runtime_authorized_strategic_route"] == "run_fresh_withheld_validation_executor"
+    assert rows["ceo_actionable"]["decision_quality_executable_can_execute_now"] is True
+    assert rows["ceo_actionable"]["decision_quality_selected_action_is_executable_now"] is True
+    assert rows["ceo_actionable"]["decision_quality_selected_action_blocked_by"] == ""
+    assert rows["ceo_actionable"]["replay_status"] == "replayable"
+    assert rows["ceo_actionable"]["replay_issue_count"] == 0
+    assert rows["ceo_actionable"]["operator_step_status"] == "pass"
+    assert rows["ceo_actionable"]["operator_step_count"] == 3
+    assert rows["ceo_actionable"]["eval_suite_status"] == "pass"
+    assert rows["ceo_actionable"]["eval_suite_score"] == 94
+    assert rows["ceo_actionable"]["nine_nine_readiness"] == "ready_for_extended_autonomy"
+    assert rows["ceo_actionable"]["nine_nine_blocking_case_count"] == 0
+    assert rows["ceo_actionable"]["artifact_coherence_status"] == "pass_with_advisory_issues"
+    assert rows["ceo_actionable"]["artifact_coherence_issue_count"] == 1
+    assert rows["ceo_actionable"]["artifact_coherence_top_issue"] == "action_contract"
+    assert rows["ceo_actionable"]["artifact_coherence_top_issue_types"] == ["action_contract_decision_mismatch"]
+    assert rows["ceo_actionable"]["artifact_coherence_top_issue_severity"] == "advisory"
+    assert rows["ceo_actionable"]["approval_queue_status"] == "pending_approvals"
+    assert rows["ceo_actionable"]["approval_pending_count"] == 1
+    assert rows["ceo_actionable"]["approval_top_pending_id"] == "clear_stop_request"
+    assert rows["ceo_actionable"]["approval_top_pending_kind"] == "resume_stopped_run"
+    assert rows["ceo_actionable"]["approval_top_pending_reason"] == "stop request awaits user approval"
+    assert rows["ceo_actionable"]["approval_top_pending_source"] == "stop.request"
+    assert rows["ceo_actionable"]["approval_top_pending_required_user_decision"] == "approve_or_reject_resume_or_clear_stop"
+    assert rows["ceo_actionable"]["approval_top_pending_authority"] == "user_only"
+    assert rows["ceo_actionable"]["approval_top_pending_fingerprint"] == "actionable-stop-fingerprint"
+    assert rows["ceo_actionable"]["approval_record_command"].endswith(
+        "approval-record --run-id ceo_actionable --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed"
+    )
+    assert rows["ceo_actionable"]["role_queue_status"] == "pending_role_tasks"
+    assert rows["ceo_actionable"]["role_pending_task_count"] == 2
+    assert rows["ceo_actionable"]["role_pending_manual_task_count"] == 1
+    assert rows["ceo_actionable"]["role_pending_autonomous_task_count"] == 1
+    assert rows["ceo_actionable"]["role_completed_task_count"] == 1
+    assert rows["ceo_actionable"]["role_blocked_task_count"] == 2
+    assert rows["ceo_actionable"]["role_top_pending_task_id"] == "approval_clear_stop_request"
+    assert rows["ceo_actionable"]["role_top_pending_role_id"] == "risk_officer"
+    assert rows["ceo_actionable"]["role_top_pending_owner_command"] == "wait_for_user_approval"
+    assert rows["ceo_actionable"]["role_top_blocked_task_id"] == "debt_candidate_a_visual_review_evidence"
+    assert rows["ceo_actionable"]["role_top_blocked_role_id"] == "product_translator"
+    assert rows["ceo_actionable"]["role_top_blocked_result_resolution_mode"] == "specialist_result_required"
+    assert rows["ceo_actionable"]["role_top_blocked_validation_status"] == "accepted"
+    assert rows["ceo_actionable"]["role_top_blocked_closure_command"].endswith(
+        "role-result --run-id ceo_actionable --task-id debt_candidate_a_visual_review_evidence "
+        "--status complete --result-path <path-to-specialist-result.yaml>"
+    )
+    assert rows["ceo_actionable"]["role_top_blocked_review_status"] == "accepted_blocked_result"
+    assert rows["ceo_actionable"]["role_top_blocked_result_path"].endswith("debt_candidate_a_visual_review_evidence.yaml")
+    assert rows["ceo_actionable"]["role_top_blocked_next_action"] == "complete_champion_challenger_visual_review"
+    assert rows["ceo_actionable"]["role_top_blocked_finding"] == "Visual review evidence is missing."
+    assert rows["ceo_actionable"]["role_result_validation_status"] == "accepted"
+    assert rows["ceo_actionable"]["role_result_validation_task"] == "debt_candidate_a"
     assert rows["ceo_actionable"]["mission_score"] == 82
     assert rows["ceo_actionable"]["strategy_capital_bucket"] == "validation_authority"
     assert rows["ceo_stopped"]["status"] == "stopped"
@@ -4320,6 +8385,49 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
     report = result["paths"]["run_index_report"].read_text(encoding="utf-8")
     assert "resumption_next=" in report
     assert "brief=ready_for_one_operator_step" in report
+    assert "decision=run_fresh_withheld_validation_executor" in report
+    assert "decision_authority=bounded_action_available" in report
+    assert "decision_exec=resumption_brief_next_command" in report
+    assert "decision_can_execute=True" in report
+    assert "decision_blocked_by=none" in report
+    assert "effective_operator=bounded_action_available" in report
+    assert "manual_gate_active=False" in report
+    assert "decision_runtime_route=run_fresh_withheld_validation_executor" in report
+    assert "trace=pass" in report
+    assert "trace_score=93" in report
+    assert "trace_next=continue_with_one_bound_ceo_action" in report
+    assert "manual_data_import_required=False" in report
+    assert "repair_apply=repair_closed" in report
+    assert "replay=replayable" in report
+    assert "operator_step=pass" in report
+    assert "operator_steps=3" in report
+    assert "eval=pass" in report
+    assert "eval_score=94" in report
+    assert "readiness=ready_for_extended_autonomy" in report
+    assert "readiness_blockers=0" in report
+    assert "coherence=pass_with_advisory_issues" in report
+    assert "coherence_issues=1" in report
+    assert "artifact_coherence_top_issue=action_contract severity=advisory" in report
+    assert "types=['action_contract_decision_mismatch']" in report
+    assert "approval=pending_approvals" in report
+    assert "top_approval=clear_stop_request" in report
+    assert "kind=resume_stopped_run" in report
+    assert "authority=user_only" in report
+    assert "reason=stop request awaits user approval" in report
+    assert "source=stop.request" in report
+    assert "fingerprint=actionable-stop-fingerprint" in report
+    assert "approval-record --run-id ceo_actionable --approval-id clear_stop_request" in report
+    assert "repair_closed=True" in report
+    assert "repair_apply_key=blocker:stale_artifacts" in report
+    assert "role_queue=pending_role_tasks" in report
+    assert "role_pending=2" in report
+    assert "role_completed=1" in report
+    assert "role_blocked=2" in report
+    assert "top_role_task=approval_clear_stop_request" in report
+    assert "top_blocked_role_task=debt_candidate_a_visual_review_evidence" in report
+    assert "role_validation=accepted" in report
+    assert "top_blocked_role_review=accepted_blocked_result" in report
+    assert "top_blocked_role_finding=Visual review evidence is missing." in report
     assert "operator_summary=CEO mode has one bounded action available." in report
     assert "repair_next=`PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_actionable --apply`" in report
 
@@ -4337,6 +8445,441 @@ def test_ceo_run_index_is_diagnostic_only(tmp_path: Path) -> None:
     assert result["run_index"]["production_effect"] == "none"
     assert result["run_index"]["promotion_authority"] == "none"
     assert (root / "ceo_action_ledger.jsonl").read_text(encoding="utf-8") == ledger_before
+
+
+def test_ceo_cli_run_index_prints_latest_decision_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_index_path = tmp_path / "reports" / "ceo_runs" / "run_index.yaml"
+    run_index_report_path = tmp_path / "reports" / "ceo_runs" / "run_index.md"
+
+    def fake_run_index(_options: CeoOpsOptions, *, limit: int = 25) -> dict[str, object]:
+        return {
+            "run_index": {
+                "model": "riskflow_ceo_run_index_v0",
+                "status": "runs_indexed",
+                "run_count": 1,
+                "status_counts": {"stopped": 1},
+                "runs": [
+                    {
+                        "run_id": "ceo_latest",
+                        "status": "stopped",
+                        "artifact_coherence_status": "pass_with_advisory_issues",
+                        "artifact_coherence_top_issue": "action_contract",
+                        "artifact_coherence_top_issue_severity": "advisory",
+                        "effective_operator_status": "manual_gate_required",
+                        "manual_gate_active": True,
+                        "decision_quality_selected_action": "run_frozen_candidate_validation",
+                        "decision_quality_runtime_authority": "manual_gate_required",
+                        "decision_quality_executable_can_execute_now": False,
+                        "decision_quality_selected_action_blocked_by": "manual_gate_required:blocker:stop_requested",
+                        "role_top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+                        "role_top_blocked_role_id": "product_translator",
+                        "role_top_blocked_result_resolution_mode": "specialist_result_required",
+                        "role_top_blocked_validation_status": "accepted",
+                        "role_top_blocked_closure_command": (
+                            "PYTHONPATH=src python3 -m riskflow ceo role-result --run-id ceo_latest "
+                            "--task-id debt_candidate_a_visual_review_evidence --status complete "
+                            "--result-path <path-to-specialist-result.yaml>"
+                        ),
+                        "role_top_blocked_review_status": "accepted_blocked_result",
+                        "role_top_blocked_result_path": (
+                            "reports/ceo_runs/ceo_latest/specialist_results/"
+                            "debt_candidate_a_visual_review_evidence.yaml"
+                        ),
+                        "role_top_blocked_next_action": "complete_champion_challenger_visual_review",
+                        "role_top_blocked_finding": "Visual review evidence is missing.",
+                        "next_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_latest",
+                    }
+                ],
+                "production_effect": "none",
+            },
+            "paths": {"run_index": run_index_path, "run_index_report": run_index_report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_run_index", fake_run_index)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="run-index",
+            run_id=None,
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+            limit=25,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Latest run: ceo_latest" in out
+    assert "Latest artifact coherence: pass_with_advisory_issues" in out
+    assert "Latest artifact coherence top issue: action_contract" in out
+    assert "Latest artifact coherence top issue severity: advisory" in out
+    assert "Latest effective operator status: manual_gate_required" in out
+    assert "Latest manual gate active: True" in out
+    assert "Latest decision: run_frozen_candidate_validation" in out
+    assert "Latest decision authority: manual_gate_required" in out
+    assert "Latest decision can execute: False" in out
+    assert "Latest decision blocked by: manual_gate_required:blocker:stop_requested" in out
+    assert "Latest top blocked role task: debt_candidate_a_visual_review_evidence" in out
+    assert "Latest top blocked role: product_translator" in out
+    assert "Latest top blocked role mode: specialist_result_required" in out
+    assert "Latest top blocked role validation: accepted" in out
+    assert "Latest top blocked role closure: PYTHONPATH=src python3 -m riskflow ceo role-result" in out
+    assert "Latest top blocked role review: accepted_blocked_result" in out
+    assert "Latest top blocked role result: reports/ceo_runs/ceo_latest/specialist_results/debt_candidate_a_visual_review_evidence.yaml" in out
+    assert "Latest top blocked role next action: complete_champion_challenger_visual_review" in out
+    assert "Latest top blocked role finding: Visual review evidence is missing." in out
+    assert "Latest next command: PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_latest" in out
+
+
+def test_ceo_cli_status_prints_runtime_authority_without_selected_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_status(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "company_status": {
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "lab_status": {},
+                "stop_requested": True,
+                "true_blocker": False,
+                "open_lanes": [],
+                "operating_artifacts": {
+                    "decision_quality_status": "missing_decision_quality",
+                    "decision_quality_effective_runtime_action": "blocker:stop_requested",
+                    "decision_quality_effective_runtime_command_kind": "manual_gate",
+                    "decision_quality_effective_runtime_can_execute_now": False,
+                    "decision_quality_runtime_blocked": True,
+                    "decision_quality_runtime_block_reason": "manual_gate_required:blocker:stop_requested",
+                    "decision_quality_runtime_authority": "manual_gate_required",
+                    "decision_quality_executable_next_action": "blocker:stop_requested",
+                    "decision_quality_executable_command_kind": "manual_gate",
+                    "decision_quality_executable_can_execute_now": False,
+                    "decision_quality_selected_action_is_executable_now": False,
+                    "decision_quality_selected_action_blocked_by": "manual_gate_required:blocker:stop_requested",
+                },
+            }
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_status", fake_status)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="status",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+            show_lab_status=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Decision quality effective runtime action: blocker:stop_requested" in out
+    assert "Decision quality selected action: none" in out
+    assert "Decision quality runtime authority: manual_gate_required" in out
+    assert "Decision quality selected action blocked by: manual_gate_required:blocker:stop_requested" in out
+
+
+def test_ceo_cli_flight_dashboard_prints_trace_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dashboard_path = tmp_path / "flight.yaml"
+    dashboard_report_path = tmp_path / "flight.md"
+
+    def fake_flight_dashboard(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "dashboard": {
+                "safe_to_continue": False,
+                "blockers": ["trace_grade_failed"],
+                "next_recommended_action": "honor_stop_request",
+                "trace_grade": {
+                    "verdict": "fail",
+                    "score": 15,
+                    "recommended_next_action": "honor_stop_request",
+                    "manual_data_import_required": False,
+                    "issues": ["stop_requested"],
+                },
+            },
+            "paths": {"dashboard": dashboard_path, "dashboard_report": dashboard_report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_flight_dashboard", fake_flight_dashboard)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="flight-dashboard",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Trace verdict: fail" in out
+    assert "Trace score: 15" in out
+    assert "Trace recommended next action: honor_stop_request" in out
+    assert "Trace manual data import required: False" in out
+    assert "Trace issues: ['stop_requested']" in out
+    assert "Safety scope: flight_dashboard_only_not_dispatch_authority" in out
+    assert "Dispatch authority: not_granted_by_flight_dashboard" in out
+
+
+def test_ceo_cli_operating_dashboard_prints_trace_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dashboard_path = tmp_path / "operating.yaml"
+    dashboard_report_path = tmp_path / "operating.md"
+
+    def fake_operating_dashboard(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "dashboard": {
+                "candidate_portfolio_count": 2,
+                "capability_backlog_count": 1,
+                "next_recommended_action": "repair_trace",
+                "trace": {
+                    "verdict": "warn",
+                    "score": 72,
+                    "recommended_next_action": "repair_trace",
+                    "manual_data_import_required": True,
+                    "issues": ["manual_data_import_required"],
+                },
+            },
+            "paths": {"dashboard": dashboard_path, "dashboard_report": dashboard_report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_operating_dashboard", fake_operating_dashboard)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="operating-dashboard",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Trace verdict: warn" in out
+    assert "Trace score: 72" in out
+    assert "Safety scope: flight_dashboard_only_not_dispatch_authority" in out
+    assert "Dispatch authority: not_granted_by_operating_dashboard" in out
+    assert "Trace recommended next action: repair_trace" in out
+    assert "Trace manual data import required: True" in out
+    assert "Trace issues: ['manual_data_import_required']" in out
+
+
+def test_ceo_cli_strategy_capital_dashboard_prints_authority_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dashboard_path = tmp_path / "strategy.yaml"
+    dashboard_report_path = tmp_path / "strategy.md"
+
+    def fake_strategy_dashboard(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "dashboard": {
+                "safe_to_continue": True,
+                "safe_to_continue_scope": "strategy_attention_only_not_dispatch_authority",
+                "dispatch_authority": "not_granted_by_strategy_capital_dashboard",
+                "runtime_authority_note": "Dispatch authority is decided by ceo status.",
+                "selected_capital_bucket": "validation_authority",
+                "selected_strategy": "run_fresh_withheld_validation_executor",
+                "total_points": 100,
+            },
+            "paths": {
+                "strategy_capital_dashboard": dashboard_path,
+                "strategy_capital_dashboard_report": dashboard_report_path,
+            },
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_strategy_capital_dashboard", fake_strategy_dashboard)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="strategy-capital-dashboard",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Safety scope: strategy_attention_only_not_dispatch_authority" in out
+    assert "Dispatch authority: not_granted_by_strategy_capital_dashboard" in out
+    assert "Runtime authority note: Dispatch authority is decided by ceo status." in out
+
+
+def test_ceo_cli_executive_kpis_prints_authority_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    kpi_path = tmp_path / "executive_kpis.yaml"
+    report_path = tmp_path / "executive_kpis.md"
+
+    def fake_executive_kpis(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "kpis": {
+                "status": "operating_clear",
+                "next_action": "defer_to_runtime_authority_surface",
+                "next_action_scope": "executive_health_diagnostic_only",
+                "dispatch_authority": "not_granted_by_executive_kpis",
+                "runtime_authority_note": "Dispatch authority is decided by ceo status.",
+                "kpis": {
+                    "open_approval_count": 0,
+                    "evidence_debt_count": 0,
+                    "trace_verdict": "pass",
+                    "trace_score": 91,
+                    "trace_recommended_next_action": "defer_to_runtime_authority_surface",
+                    "trace_manual_data_import_required": False,
+                    "trace_issues": [],
+                },
+            },
+            "paths": {"executive_kpis": kpi_path, "executive_kpis_report": report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_executive_kpis", fake_executive_kpis)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="executive-kpis",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Attention next action: defer_to_runtime_authority_surface" in out
+    assert "Next action scope: executive_health_diagnostic_only" in out
+    assert "Dispatch authority: not_granted_by_executive_kpis" in out
+    assert "Runtime authority note: Dispatch authority is decided by ceo status." in out
+
+
+def test_ceo_cli_portfolio_allocator_prints_authority_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    allocator_path = tmp_path / "portfolio_allocator.yaml"
+    report_path = tmp_path / "portfolio_allocator.md"
+
+    def fake_portfolio_allocator(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "allocator": {
+                "selected_lane": {
+                    "lane_id": "validation_authority",
+                    "score": 90,
+                    "next_action": "run_fresh_withheld_validation_executor",
+                },
+                "action_scope": "portfolio_attention_only",
+                "dispatch_authority": "not_granted_by_portfolio_allocator",
+                "runtime_authority_note": "Dispatch authority is decided by ceo status.",
+                "production_effect": "none",
+            },
+            "paths": {"portfolio_allocator": allocator_path, "portfolio_allocator_report": report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_portfolio_allocator", fake_portfolio_allocator)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="portfolio-allocator",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Attention next action: run_fresh_withheld_validation_executor" in out
+    assert "Action scope: portfolio_attention_only" in out
+    assert "Dispatch authority: not_granted_by_portfolio_allocator" in out
+    assert "Runtime authority note: Dispatch authority is decided by ceo status." in out
+
+
+def test_ceo_cli_mission_score_prints_authority_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    score_path = tmp_path / "mission_score.yaml"
+    report_path = tmp_path / "mission_score.md"
+
+    def fake_mission_score(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "mission_score": {
+                "status": "mission_compounding",
+                "overall_mission_score": 72,
+                "lowest_dimension": "reset_quality",
+                "next_best_mission_action": "run_champion_challenger",
+                "action_scope": "mission_strategy_only",
+                "dispatch_authority": "not_granted_by_mission_score",
+                "runtime_authority_note": "Dispatch authority is decided by ceo status.",
+                "production_effect": "none",
+            },
+            "paths": {"mission_score": score_path, "mission_score_report": report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_mission_score", fake_mission_score)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="mission-score",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Mission attention action: run_champion_challenger" in out
+    assert "Action scope: mission_strategy_only" in out
+    assert "Dispatch authority: not_granted_by_mission_score" in out
+    assert "Runtime authority note: Dispatch authority is decided by ceo status." in out
 
 
 def test_ceo_dispatch_receipt_command_is_diagnostic_only(tmp_path: Path) -> None:
@@ -4416,6 +8959,7 @@ def test_ceo_blocker_stack_orders_stop_approval_and_replay_gaps(tmp_path: Path) 
     assert stack["model"] == "riskflow_ceo_blocker_stack_v0"
     assert stack["status"] == "blocked"
     assert blocker_ids[0] == "stop_requested"
+    assert stack["top_blocker_evidence"] == "blocked_stop_requested"
     assert "pending_user_approval" in blocker_ids
     assert "replay_gaps" in blocker_ids
     assert "eval_blocking_case:replayable_action_timeline" in blocker_ids
@@ -4424,7 +8968,36 @@ def test_ceo_blocker_stack_orders_stop_approval_and_replay_gaps(tmp_path: Path) 
     assert "approval-queue" in stack["next_command"]
     assert result["paths"]["blocker_stack"].exists()
     assert result["paths"]["blocker_stack_report"].exists()
+    report = result["paths"]["blocker_stack_report"].read_text(encoding="utf-8")
+    assert "Top blocker evidence: blocked_stop_requested" in report
+    assert "evidence=blocked_stop_requested" in report
+    assert "evidence=pending_approvals=1" in report
     assert stack["production_effect"] == "none"
+
+
+def test_ceo_blocker_stack_stop_overrides_stale_resumption_next_command() -> None:
+    stack = ceo_ops.build_ceo_blocker_stack(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        stop_requested=True,
+        preflight_gate={},
+        dispatch_receipt={"status": "dispatch_allowed", "safe_to_dispatch": True},
+        resumption_brief={
+            "resume_status": "safe_for_one_bound_action",
+            "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+        },
+        replay={"status": "replayable"},
+        eval_suite={"nine_nine_readiness": {"blocking_case_ids": []}},
+        approval_queue={},
+        memory_delta={},
+        evidence_debt_register={},
+    )
+
+    assert stack["status"] == "blocked"
+    assert stack["top_blocker"] == "stop_requested"
+    assert stack["top_blocker_evidence"] == "safe_for_one_bound_action"
+    assert stack["next_command"] == "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test"
+    assert "execute-next" not in stack["next_command"]
 
 
 def test_ceo_blocker_stack_is_diagnostic_only(tmp_path: Path) -> None:
@@ -4575,6 +9148,8 @@ def test_ceo_repair_plan_orders_manual_gate_and_runnable_repairs(tmp_path: Path)
     symbolic_items = [item for item in plan["repair_items"] if item["command_kind"] == "implementation_required"]
     assert symbolic_items
     assert all(item["can_execute_autonomously"] is False for item in symbolic_items)
+    assert all(item["implementation_playbook"]["non_executable_by_repair_apply"] is True for item in symbolic_items)
+    assert plan["implementation_playbook_count"] == len(symbolic_items)
     assert plan["production_effect"] == "none"
     assert plan["runnable_repair_count"] == plan["autonomous_repair_count"]
     assert result["paths"]["repair_plan"].exists()
@@ -4612,8 +9187,91 @@ def test_ceo_repair_plan_marks_symbolic_repairs_as_implementation_required(tmp_p
     assert item["command_kind"] == "implementation_required"
     assert item["needs_implementation"] is True
     assert item["can_execute_autonomously"] is False
+    assert item["implementation_playbook"]["summary"].startswith("Repair CEO replay state-transition policy")
+    assert "src/riskflow/ceo_ops.py" in item["implementation_playbook"]["target_files"]
+    assert "_build_ceo_state_transition_checks" in item["implementation_playbook"]["target_functions"]
+    assert "replay" in item["implementation_playbook"]["test_selectors"]
+    assert item["implementation_playbook"]["non_executable_by_repair_apply"] is True
+    assert plan["implementation_playbook_count"] == 1
     assert plan["autonomous_repair_count"] == 0
     assert plan["runnable_repair_count"] == 0
+
+
+def test_ceo_repair_plan_targets_trust_alignment_playbook_for_artifact_coherence_incidents(tmp_path: Path) -> None:
+    plan = ceo_ops.build_ceo_repair_plan(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "blockers": [], "production_effect": "none"},
+        incident_register={
+            "model": "riskflow_ceo_operating_incident_register_v0",
+            "incidents": [
+                {
+                    "incident_key": "artifact_coherence:action_contract:action_contract_decision_mismatch",
+                    "severity": "high",
+                    "category": "artifact_coherence",
+                    "owner_command": "rerun_or_repair_stale_trust_artifacts",
+                    "closure_condition": "artifact_coherence.status is pass",
+                    "latest_evidence": {"evidence": "action_contract_decision_mismatch"},
+                    "production_effect": "none",
+                },
+                {
+                    "incident_key": "artifact_coherence:dispatch_receipt:missing_action_dispatch_receipt_ref",
+                    "severity": "high",
+                    "category": "artifact_coherence",
+                    "owner_command": "rerun_or_repair_stale_trust_artifacts",
+                    "closure_condition": "artifact_coherence.status is pass",
+                    "latest_evidence": {"evidence": "missing_action_dispatch_receipt_ref"},
+                    "production_effect": "none",
+                },
+            ],
+            "production_effect": "none",
+        },
+    )
+
+    items = {item["repair_key"]: item for item in plan["repair_items"]}
+    for key in [
+        "incident:artifact_coherence:action_contract:action_contract_decision_mismatch",
+        "incident:artifact_coherence:dispatch_receipt:missing_action_dispatch_receipt_ref",
+    ]:
+        playbook = items[key]["implementation_playbook"]
+        assert items[key]["command_kind"] == "implementation_required"
+        assert playbook["summary"].startswith("Repair latest-action trust alignment")
+        assert "_write_ceo_action_contract" in playbook["target_functions"]
+        assert "_write_ceo_dispatch_receipt" in playbook["target_functions"]
+        assert "artifact_coherence" in playbook["test_selectors"]
+        assert "eval_suite" in playbook["test_selectors"]
+
+
+def test_ceo_repair_plan_targets_repair_apply_snapshot_playbook(tmp_path: Path) -> None:
+    plan = ceo_ops.build_ceo_repair_plan(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "blockers": [], "production_effect": "none"},
+        incident_register={
+            "model": "riskflow_ceo_operating_incident_register_v0",
+            "incidents": [
+                {
+                    "incident_key": "replay_issue:missing_before_repair_plan_snapshot_ref",
+                    "severity": "high",
+                    "category": "replay",
+                    "owner_command": "repair_replay_artifacts",
+                    "closure_condition": "ceo_replay no longer reports missing_before_repair_plan_snapshot_ref",
+                    "latest_evidence": {"evidence": "missing_before_repair_plan_snapshot_ref"},
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+    )
+
+    item = plan["repair_items"][0]
+    playbook = item["implementation_playbook"]
+    assert item["command_kind"] == "implementation_required"
+    assert playbook["summary"].startswith("Repair repair-apply replayability")
+    assert "run_ceo_repair_apply" in playbook["target_functions"]
+    assert "_build_repair_apply_checks" in playbook["target_functions"]
+    assert "repair_apply" in playbook["test_selectors"]
+    assert "replay" in playbook["test_selectors"]
 
 
 def test_ceo_repair_plan_counts_only_runnable_cli_as_autonomous(tmp_path: Path) -> None:
@@ -4658,9 +9316,51 @@ def test_ceo_repair_plan_counts_only_runnable_cli_as_autonomous(tmp_path: Path) 
     assert items["blocker:stale_artifacts"]["diagnostic_only"] is True
     assert items["incident:replay_issue:illegal_action_transition"]["command_kind"] == "implementation_required"
     assert items["incident:replay_issue:illegal_action_transition"]["can_execute_autonomously"] is False
+    assert items["incident:replay_issue:illegal_action_transition"]["implementation_playbook"]["test_selectors"] == ["replay", "eval_suite"]
     assert plan["autonomous_repair_count"] == 0
     assert plan["runnable_repair_count"] == 0
     assert plan["diagnostic_refresh_count"] == 1
+    assert "repair-apply" in plan["next_command"]
+    assert "--repair-key blocker:stale_artifacts" in plan["next_command"]
+
+
+def test_ceo_action_board_routes_repair_items_through_repair_apply(tmp_path: Path) -> None:
+    board = ceo_ops.build_ceo_action_board(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        resumption_brief={"resume_status": "blocked_preflight", "next_command": "PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id ceo_test"},
+        dispatch_receipt={"model": "riskflow_ceo_dispatch_receipt_v0", "status": "dispatch_blocked", "safe_to_dispatch": False},
+        blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "status": "blocked", "top_blocker": "stale_artifacts"},
+        repair_plan={
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "repair_plan_ready",
+            "top_repair": "blocker:stale_artifacts",
+            "top_repair_kind": "diagnostic_refresh",
+            "repair_items": [
+                {
+                    "repair_key": "blocker:stale_artifacts",
+                    "source": "blocker_stack",
+                    "command_kind": "diagnostic_refresh",
+                    "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id ceo_test",
+                    "evidence": "artifact stale",
+                    "can_execute_autonomously": False,
+                    "requires_manual_gate": False,
+                    "diagnostic_only": True,
+                    "needs_implementation": False,
+                    "closure_condition": "artifact coherence passes",
+                }
+            ],
+        },
+        executive_kpis={"model": "riskflow_ceo_executive_kpis_v0", "status": "attention_required", "next_action": "refresh_artifact_coherence"},
+    )
+
+    assert board["status"] == "diagnostic_refresh_recommended"
+    primary = board["primary_action"]
+    assert primary["action_id"] == "blocker:stale_artifacts"
+    assert primary["command_kind"] == "diagnostic_refresh"
+    assert "repair-apply" in primary["command"]
+    assert "--repair-key blocker:stale_artifacts" in primary["command"]
+    assert "artifact-coherence" not in primary["command"]
 
 
 def test_ceo_repair_plan_is_diagnostic_only(tmp_path: Path) -> None:
@@ -4680,6 +9380,496 @@ def test_ceo_repair_plan_is_diagnostic_only(tmp_path: Path) -> None:
         assert (root / "action_contract.yaml").read_text(encoding="utf-8") == contract_before
 
 
+def test_ceo_repair_apply_requires_apply(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=False)
+
+    with pytest.raises(ValueError, match="requires --apply"):
+        run_ceo_repair_apply(options, repair_key="blocker:stale_artifacts")
+
+
+def test_ceo_repair_apply_refuses_manual_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    plan = {
+        "model": "riskflow_ceo_repair_plan_v0",
+        "status": "manual_gate_first",
+        "top_repair": "blocker:pending_user_approval",
+        "repair_items": [
+            {
+                "repair_key": "blocker:pending_user_approval",
+                "source": "blocker_stack",
+                "severity": "critical",
+                "command_kind": "manual_gate",
+                "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "requires_manual_gate": True,
+                "needs_implementation": False,
+                "closure_condition": "approval queue clears",
+                "production_effect": "none",
+            }
+        ],
+        "production_effect": "none",
+    }
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plan,
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:pending_user_approval")
+
+    apply_result = result["repair_apply"]
+    assert apply_result["model"] == "riskflow_ceo_repair_apply_v0"
+    assert apply_result["status"] == "blocked_manual_gate"
+    assert apply_result["action_attempted"] is False
+    assert apply_result["action_executed"] is False
+    assert apply_result["repair_closed"] is False
+    ledger_entries = result["paths"]["repair_apply_ledger"].read_text(encoding="utf-8").strip().splitlines()
+    assert len(ledger_entries) == 1
+    assert json.loads(ledger_entries[0])["repair_key"] == "blocker:pending_user_approval"
+    assert result["paths"]["repair_apply"].exists()
+    report = result["paths"]["repair_apply_report"].read_text(encoding="utf-8")
+    assert "Production effect: none." in report
+
+
+def test_ceo_repair_apply_blocks_lower_priority_runnable_when_manual_gate_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    plan = {
+        "model": "riskflow_ceo_repair_plan_v0",
+        "status": "manual_gate_first",
+        "top_repair": "blocker:pending_user_approval",
+        "repair_items": [
+            {
+                "repair_key": "blocker:pending_user_approval",
+                "source": "blocker_stack",
+                "severity": "critical",
+                "command_kind": "manual_gate",
+                "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "requires_manual_gate": True,
+                "needs_implementation": False,
+                "closure_condition": "approval queue clears",
+                "production_effect": "none",
+            },
+            {
+                "repair_key": "blocker:research_infra_patch",
+                "source": "blocker_stack",
+                "severity": "high",
+                "command_kind": "runnable_cli",
+                "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo patch-research-infra --run-id ceo_test --apply",
+                "requires_manual_gate": False,
+                "needs_implementation": False,
+                "closure_condition": "research infra patch executed",
+                "production_effect": "none",
+            },
+        ],
+        "production_effect": "none",
+    }
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plan,
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    def fail_patch_research_infra(_: CeoOpsOptions) -> dict[str, object]:
+        raise AssertionError("repair-apply must not execute lower-priority work behind a manual gate")
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+    monkeypatch.setattr(ceo_ops, "run_ceo_patch_research_infra", fail_patch_research_infra)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:research_infra_patch")
+
+    apply_result = result["repair_apply"]
+    assert apply_result["status"] == "blocked_repair_plan_not_ready"
+    assert apply_result["action_attempted"] is False
+    assert apply_result["action_executed"] is False
+    assert apply_result["repair_closed"] is False
+    assert apply_result["before_plan_status"] == "manual_gate_first"
+    assert apply_result["before_top_repair"] == "blocker:pending_user_approval"
+    ledger_entries = result["paths"]["repair_apply_ledger"].read_text(encoding="utf-8").strip().splitlines()
+    assert len(ledger_entries) == 1
+    assert json.loads(ledger_entries[0])["status"] == "blocked_repair_plan_not_ready"
+
+
+def test_ceo_repair_apply_runs_diagnostic_refresh_without_false_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    calls: list[str] = []
+    plan = {
+        "model": "riskflow_ceo_repair_plan_v0",
+        "status": "repair_plan_ready",
+        "top_repair": "blocker:stale_artifacts",
+        "repair_items": [
+            {
+                "repair_key": "blocker:stale_artifacts",
+                "source": "blocker_stack",
+                "severity": "high",
+                "command_kind": "diagnostic_refresh",
+                "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id ceo_test",
+                "requires_manual_gate": False,
+                "needs_implementation": False,
+                "diagnostic_only": True,
+                "closure_condition": "artifact coherence passes",
+                "production_effect": "none",
+            }
+        ],
+        "production_effect": "none",
+    }
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plan,
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    def fake_artifact_coherence(_: CeoOpsOptions) -> dict[str, object]:
+        calls.append("artifact-coherence")
+        path = root / "artifact_coherence.yaml"
+        return {"coherence": {"status": "fail"}, "paths": {"artifact_coherence": path}}
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+    monkeypatch.setattr(ceo_ops, "run_ceo_artifact_coherence", fake_artifact_coherence)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:stale_artifacts")
+
+    apply_result = result["repair_apply"]
+    assert calls == ["artifact-coherence"]
+    assert apply_result["status"] == "diagnostic_refreshed"
+    assert apply_result["action_attempted"] is True
+    assert apply_result["action_executed"] is True
+    assert apply_result["repair_closed"] is False
+    assert apply_result["command_name"] == "artifact-coherence"
+
+
+def test_ceo_repair_apply_runs_runnable_cli_with_bound_action_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    calls: list[tuple[bool, str, str | None]] = []
+    plans = [
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "repair_plan_ready",
+            "top_repair": "blocker:research_infra_patch",
+            "repair_items": [
+                {
+                    "repair_key": "blocker:research_infra_patch",
+                    "source": "blocker_stack",
+                    "severity": "high",
+                    "command_kind": "runnable_cli",
+                    "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo patch-research-infra --run-id ceo_test --apply",
+                    "requires_manual_gate": False,
+                    "needs_implementation": False,
+                    "diagnostic_only": False,
+                    "closure_condition": "research infra patch executed",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "no_repairs_required",
+            "top_repair": "",
+            "repair_items": [],
+            "production_effect": "none",
+        },
+    ]
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        plan = plans.pop(0) if plans else plans[-1]
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plan,
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    def fake_patch_research_infra(patched_options: CeoOpsOptions) -> dict[str, object]:
+        calls.append((patched_options.apply, patched_options.ceo_context, patched_options.ceo_authorized_action))
+        return {"paths": {"infra_delta": root / "infra_delta.yaml"}}
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+    monkeypatch.setattr(ceo_ops, "run_ceo_patch_research_infra", fake_patch_research_infra)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:research_infra_patch")
+
+    apply_result = result["repair_apply"]
+    assert calls == [(True, "bound_dispatch", "patch-research-infra")]
+    assert apply_result["status"] == "repair_closed"
+    assert apply_result["action_executed"] is True
+    assert apply_result["repair_closed"] is True
+    assert apply_result["command_name"] == "patch-research-infra"
+    assert Path(apply_result["paths"]["before_repair_plan_snapshot"]).parent.name == "repair_apply_plans"
+    assert Path(apply_result["paths"]["after_repair_plan_snapshot"]).exists()
+    assert apply_result["before_repair_plan_snapshot_sha256"] == _sha256(Path(apply_result["paths"]["before_repair_plan_snapshot"]))
+    assert apply_result["after_repair_plan_snapshot_sha256"] == _sha256(Path(apply_result["paths"]["after_repair_plan_snapshot"]))
+    ledger_entry = json.loads(result["paths"]["repair_apply_ledger"].read_text(encoding="utf-8").strip())
+    assert ledger_entry["paths"]["before_repair_plan_snapshot"] == apply_result["paths"]["before_repair_plan_snapshot"]
+    assert ledger_entry["before_repair_plan_snapshot_sha256"] == apply_result["before_repair_plan_snapshot_sha256"]
+
+
+def test_ceo_repair_apply_marks_closed_when_after_plan_clears_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    plans = [
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "repair_plan_ready",
+            "top_repair": "blocker:stale_artifacts",
+            "repair_items": [
+                {
+                    "repair_key": "blocker:stale_artifacts",
+                    "source": "blocker_stack",
+                    "severity": "high",
+                    "command_kind": "diagnostic_refresh",
+                    "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id ceo_test",
+                    "requires_manual_gate": False,
+                    "needs_implementation": False,
+                    "diagnostic_only": True,
+                    "closure_condition": "artifact coherence passes",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "no_repairs_required",
+            "top_repair": "",
+            "repair_items": [],
+            "production_effect": "none",
+        },
+    ]
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plans.pop(0),
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    def fake_artifact_coherence(_: CeoOpsOptions) -> dict[str, object]:
+        path = root / "artifact_coherence.yaml"
+        return {"coherence": {"status": "pass"}, "paths": {"artifact_coherence": path}}
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+    monkeypatch.setattr(ceo_ops, "run_ceo_artifact_coherence", fake_artifact_coherence)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:stale_artifacts")
+
+    apply_result = result["repair_apply"]
+    assert apply_result["status"] == "repair_closed"
+    assert apply_result["action_executed"] is True
+    assert apply_result["repair_closed"] is True
+    assert apply_result["after_plan_status"] == "no_repairs_required"
+    ledger_entries = result["paths"]["repair_apply_ledger"].read_text(encoding="utf-8").strip().splitlines()
+    assert len(ledger_entries) == 1
+    assert json.loads(ledger_entries[0])["status"] == "repair_closed"
+
+
+@pytest.mark.parametrize("after_kind", ["manual_gate", "implementation_required"])
+def test_ceo_repair_apply_does_not_close_same_key_reclassified_to_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after_kind: str,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    plans = [
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "repair_plan_ready",
+            "top_repair": "blocker:stale_artifacts",
+            "repair_items": [
+                {
+                    "repair_key": "blocker:stale_artifacts",
+                    "source": "blocker_stack",
+                    "severity": "high",
+                    "command_kind": "diagnostic_refresh",
+                    "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo artifact-coherence --run-id ceo_test",
+                    "requires_manual_gate": False,
+                    "needs_implementation": False,
+                    "diagnostic_only": True,
+                    "closure_condition": "artifact coherence passes",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "manual_gate_first" if after_kind == "manual_gate" else "implementation_repair_required",
+            "top_repair": "blocker:stale_artifacts",
+            "repair_items": [
+                {
+                    "repair_key": "blocker:stale_artifacts",
+                    "source": "blocker_stack",
+                    "severity": "high",
+                    "command_kind": after_kind,
+                    "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test"
+                    if after_kind == "manual_gate"
+                    else "",
+                    "requires_manual_gate": after_kind == "manual_gate",
+                    "needs_implementation": after_kind == "implementation_required",
+                    "diagnostic_only": False,
+                    "closure_condition": "same key still open",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+    ]
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plans.pop(0),
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    def fake_artifact_coherence(_: CeoOpsOptions) -> dict[str, object]:
+        path = root / "artifact_coherence.yaml"
+        return {"coherence": {"status": "fail"}, "paths": {"artifact_coherence": path}}
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+    monkeypatch.setattr(ceo_ops, "run_ceo_artifact_coherence", fake_artifact_coherence)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:stale_artifacts")
+
+    apply_result = result["repair_apply"]
+    assert apply_result["status"] == "repair_reclassified_not_closed"
+    assert apply_result["action_executed"] is True
+    assert apply_result["repair_closed"] is False
+    assert apply_result["after_repair_kind"] == after_kind
+    assert after_kind in apply_result["reason"]
+
+
+def test_ceo_repair_apply_blocks_unsupported_yaml_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    repair_plan_path = root / "repair_plan.yaml"
+    repair_plan_report_path = root / "repair_plan.md"
+    plan = {
+        "model": "riskflow_ceo_repair_plan_v0",
+        "status": "repair_plan_ready",
+        "top_repair": "blocker:unsafe",
+        "repair_items": [
+            {
+                "repair_key": "blocker:unsafe",
+                "source": "blocker_stack",
+                "severity": "high",
+                "command_kind": "runnable_cli",
+                "recommended_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "requires_manual_gate": False,
+                "needs_implementation": False,
+                "closure_condition": "unsafe closes",
+                "production_effect": "none",
+            }
+        ],
+        "production_effect": "none",
+    }
+
+    def fake_repair_plan(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "repair_plan": plan,
+            "paths": {"repair_plan": repair_plan_path, "repair_plan_report": repair_plan_report_path},
+        }
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_repair_plan", fake_repair_plan)
+
+    result = run_ceo_repair_apply(options, repair_key="blocker:unsafe")
+
+    apply_result = result["repair_apply"]
+    assert apply_result["status"] == "blocked_unsupported_command"
+    assert apply_result["action_attempted"] is True
+    assert apply_result["action_executed"] is False
+    assert "unsupported CEO command" in apply_result["reason"]
+
+
+def test_ceo_cli_repair_apply_dispatches_with_repair_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repair_apply_path = tmp_path / "reports" / "ceo_runs" / "ceo_test" / "repair_apply.yaml"
+    repair_apply_report_path = tmp_path / "reports" / "ceo_runs" / "ceo_test" / "repair_apply.md"
+    calls: list[tuple[bool, str]] = []
+
+    def fake_repair_apply(options: CeoOpsOptions, *, repair_key: str) -> dict[str, object]:
+        calls.append((options.apply, repair_key))
+        return {
+            "repair_apply": {
+                "status": "diagnostic_refreshed",
+                "repair_key": repair_key,
+                "command_kind": "diagnostic_refresh",
+                "action_attempted": True,
+                "action_executed": True,
+                "repair_closed": False,
+                "reason": "refreshed",
+            },
+            "paths": {"repair_apply": repair_apply_path, "repair_apply_report": repair_apply_report_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_repair_apply", fake_repair_apply)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="repair-apply",
+            run_id="ceo_test",
+            lab_run_id="ceo_test_lab",
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+            repair_key="blocker:stale_artifacts",
+            apply=True,
+        )
+    )
+
+    assert status == 0
+    assert calls == [(True, "blocker:stale_artifacts")]
+
+
 def test_ceo_action_board_prioritizes_manual_gate_over_safe_dispatch(tmp_path: Path) -> None:
     board = ceo_ops.build_ceo_action_board(
         ceo_run_id="ceo_test",
@@ -4688,6 +9878,8 @@ def test_ceo_action_board_prioritizes_manual_gate_over_safe_dispatch(tmp_path: P
             "resume_status": "safe_for_one_bound_action",
             "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
             "rationale": "clean gates",
+            "authorized_strategic_route": "run_champion_challenger",
+            "authorized_route_source": "action_contract",
         },
         dispatch_receipt={"model": "riskflow_ceo_dispatch_receipt_v0", "status": "dispatch_allowed", "safe_to_dispatch": True},
         blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "status": "blocked", "top_blocker": "pending_user_approval"},
@@ -4720,7 +9912,15 @@ def test_ceo_action_board_prioritizes_manual_gate_over_safe_dispatch(tmp_path: P
     assert board["primary_action"]["action_id"] == "blocker:pending_user_approval"
     assert board["primary_action"]["requires_manual_gate"] is True
     assert board["counts"]["manual_gates"] == 1
-    assert board["counts"]["runnable_repairs"] == 1
+    assert board["counts"]["runnable_repairs"] == 0
+    assert board["counts"]["blocked_actions"] == 1
+    blocked = board["blocked_actions"][0]
+    assert blocked["action_id"] == "resumption_brief_next_command"
+    assert blocked["can_execute_now"] is False
+    assert blocked["blocked_by_runtime_authority"] == "manual_gate_required"
+    assert blocked["runtime_blocked"] is True
+    assert blocked["authorized_strategic_route"] == "run_champion_challenger"
+    assert blocked["authorized_route_source"] == "action_contract"
     assert board["production_effect"] == "none"
 
 
@@ -4736,13 +9936,78 @@ def test_ceo_action_board_requires_dispatch_safe_for_bounded_action(tmp_path: Pa
         dispatch_receipt={"model": "riskflow_ceo_dispatch_receipt_v0", "status": "dispatch_blocked", "safe_to_dispatch": False},
         blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "status": "clear_for_one_bound_action"},
         repair_plan={"model": "riskflow_ceo_repair_plan_v0", "status": "no_repairs_required", "repair_items": []},
-        executive_kpis={"model": "riskflow_ceo_executive_kpis_v0", "status": "operating_clear", "next_action": "continue_with_bound_action_dispatch"},
+        executive_kpis={"model": "riskflow_ceo_executive_kpis_v0", "status": "operating_clear", "next_action": "defer_to_runtime_authority_surface"},
     )
 
     assert board["status"] == "no_action_available"
     assert board["primary_action"]["action_id"] == "regenerate_action_board"
     assert board["counts"]["runnable_repairs"] == 0
     assert board["counts"]["blocked_actions"] == 1
+
+
+def test_ceo_action_board_rechecks_live_stop_before_using_reused_safe_artifacts(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "stop.request").write_text("user_requested\n", encoding="utf-8")
+    resumption_path = root / "resumption_brief.yaml"
+    repair_path = root / "repair_plan.yaml"
+    receipt_path = root / "dispatch_receipt.yaml"
+    kpi_path = root / "executive_kpis.yaml"
+
+    result = run_ceo_action_board(
+        options,
+        resumption_result={
+            "brief": {
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "resume_status": "safe_for_one_bound_action",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "authorized_strategic_route": "run_champion_challenger",
+                "authorized_route_source": "action_contract",
+                "rationale": "stale safe artifact",
+            },
+            "paths": {"resumption_brief": resumption_path, "resumption_brief_report": root / "resumption_brief.md"},
+        },
+        repair_result={
+            "repair_plan": {
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "no_repairs_required",
+                "repair_items": [],
+            },
+            "paths": {"repair_plan": repair_path, "repair_plan_report": root / "repair_plan.md"},
+        },
+        dispatch_result={
+            "receipt": {
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "dispatch_allowed",
+                "safe_to_dispatch": True,
+            },
+            "paths": {
+                "dispatch_receipt": receipt_path,
+                "dispatch_receipt_report": root / "dispatch_receipt.md",
+                "dispatch_receipt_snapshot": root / "dispatch_receipts" / "safe.yaml",
+            },
+        },
+        kpi_result={
+            "kpis": {
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "operating_clear",
+                "next_action": "defer_to_runtime_authority_surface",
+            },
+            "paths": {"executive_kpis": kpi_path, "executive_kpis_report": root / "executive_kpis.md"},
+        },
+    )
+
+    board = result["action_board"]
+    assert board["status"] == "diagnostic_refresh_recommended"
+    assert board["primary_action"]["command_kind"] == "diagnostic_refresh"
+    assert board["primary_action"]["can_execute_now"] is False
+    assert board["trust_snapshot"]["resumption_status"] == "blocked_stop_requested"
+    assert board["trust_snapshot"]["dispatch_safe_to_dispatch"] is False
 
 
 def test_ceo_action_board_command_writes_operator_surface(tmp_path: Path) -> None:
@@ -4823,16 +10088,18 @@ def test_ceo_operator_step_executes_one_safe_bounded_dispatch(tmp_path: Path, mo
 
     def fake_execute_next(execute_options: CeoOpsOptions) -> dict[str, object]:
         calls.append(execute_options.apply)
+        action_result = {
+            "model": "riskflow_ceo_binding_action_result_v0",
+            "decision": "run_champion_challenger",
+            "action_taken": "champion_challenger",
+            "status": "shadow_comparison_complete",
+            "production_effect": "none",
+        }
+        binding_path.write_text(yaml.safe_dump(action_result), encoding="utf-8")
         return {
             "run_id": "ceo_test",
             "lab_run_id": "ceo_test_lab",
-            "action_result": {
-                "model": "riskflow_ceo_binding_action_result_v0",
-                "decision": "run_champion_challenger",
-                "action_taken": "champion_challenger",
-                "status": "shadow_comparison_complete",
-                "production_effect": "none",
-            },
+            "action_result": action_result,
             "paths": {"binding_action_result": binding_path},
         }
 
@@ -4849,7 +10116,104 @@ def test_ceo_operator_step_executes_one_safe_bounded_dispatch(tmp_path: Path, mo
     assert step["execution_status"] == "shadow_comparison_complete"
     assert step["execution_action_taken"] == "champion_challenger"
     assert step["after_board_status"] == "diagnostic_refresh_recommended"
+    assert step["before_primary_action_id"] == "resumption_brief_next_command"
+    assert step["before_primary_command"].endswith("execute-next --run-id ceo_test --apply")
+    assert result["paths"]["before_action_board_snapshot"].exists()
+    assert result["paths"]["after_action_board_snapshot"].exists()
+    assert step["before_action_board_snapshot_sha256"] == _sha256(result["paths"]["before_action_board_snapshot"])
+    assert step["after_action_board_snapshot_sha256"] == _sha256(result["paths"]["after_action_board_snapshot"])
+    assert step["binding_action_result_sha256"] == _sha256(binding_path)
     assert result["paths"]["operator_step"].exists()
+    assert result["paths"]["operator_step_ledger"].exists()
+    ledger_rows = result["paths"]["operator_step_ledger"].read_text(encoding="utf-8").strip().splitlines()
+    assert len(ledger_rows) == 1
+    ledger_entry = json.loads(ledger_rows[0])
+    assert ledger_entry["before_action_board_snapshot_sha256"] == step["before_action_board_snapshot_sha256"]
+    assert ledger_entry["after_action_board_snapshot_sha256"] == step["after_action_board_snapshot_sha256"]
+    assert ledger_entry["paths"]["before_action_board_snapshot"] == str(result["paths"]["before_action_board_snapshot"])
+    replay = ceo_ops.build_ceo_replay(ceo_run_id="ceo_test", lab_run_id="ceo_test_lab", root=root)
+    assert replay["operator_step_count"] == 1
+    assert replay["operator_step_status"] == "pass"
+    assert replay["operator_step_checks"][0]["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("execution_status", "meaningful_progress", "expected_step_status"),
+    [
+        ("manual_gate", False, "bounded_action_reached_manual_gate"),
+        ("capability_gap", False, "bounded_action_reached_capability_gap"),
+        ("noop_complete", False, "bounded_action_no_meaningful_progress"),
+    ],
+)
+def test_ceo_operator_step_distinguishes_no_progress_execution_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    execution_status: str,
+    meaningful_progress: bool,
+    expected_step_status: str,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    board_path = root / "action_board.yaml"
+    board_report_path = root / "action_board.md"
+    binding_path = root / "binding_action_result.yaml"
+    boards = [
+        {
+            "model": "riskflow_ceo_action_board_v0",
+            "status": "bounded_action_available",
+            "primary_action": {
+                "action_id": "resumption_brief_next_command",
+                "command_kind": "bounded_dispatch",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "can_execute_now": True,
+            },
+            "production_effect": "none",
+        },
+        {
+            "model": "riskflow_ceo_action_board_v0",
+            "status": "diagnostic_refresh_recommended",
+            "primary_action": {"action_id": "refresh", "command_kind": "diagnostic_refresh"},
+            "production_effect": "none",
+        },
+    ]
+
+    def fake_action_board(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "action_board": boards.pop(0),
+            "paths": {"action_board": board_path, "action_board_report": board_report_path},
+        }
+
+    def fake_execute_next(_: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "action_result": {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "decision": "test_decision",
+                "action_taken": "test_action",
+                "status": execution_status,
+                "meaningful_progress": meaningful_progress,
+                "production_effect": "none",
+            },
+            "paths": {"binding_action_result": binding_path},
+        }
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_action_board", fake_action_board)
+    monkeypatch.setattr(ceo_ops, "run_ceo_execute_next", fake_execute_next)
+
+    result = run_ceo_operator_step(options)
+
+    step = result["operator_step"]
+    assert step["status"] == expected_step_status
+    assert step["action_attempted"] is True
+    assert step["action_executed"] is False
+    assert step["execution_status"] == execution_status
+    assert step["execution_meaningful_progress"] is False
+    assert result["paths"]["before_action_board_snapshot"].exists()
+    assert result["paths"]["after_action_board_snapshot"].exists()
 
 
 def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: Path) -> None:
@@ -4865,14 +10229,152 @@ def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: P
     assert brief["model"] == "riskflow_ceo_operator_brief_v0"
     assert brief["status"] == "waiting_on_manual_gate"
     assert "manual gate" in brief["plain_english_summary"]
+    assert brief["current_situation"]["effective_operator_status"] == "manual_gate_required"
+    assert brief["current_situation"]["manual_gate_active"] is True
+    assert brief["current_situation"]["effective_operator_runtime_blocked"] is True
+    assert brief["current_situation"]["effective_operator_runtime_block_reason"].startswith("manual_gate_required:")
+    assert brief["current_situation"]["trace_grade_status"] in {"fail", "warn", "pass"}
+    assert brief["trace_health"]["status"] == brief["current_situation"]["trace_grade_status"]
+    assert "recommended_next_action" in brief["trace_health"]
     assert brief["current_situation"]["primary_kind"] == "manual_gate"
+    assert brief["approval_work"]["status"] == "pending_approvals"
+    assert brief["approval_work"]["pending_count"] == 1
+    assert brief["approval_work"]["top_pending_approval_id"] == "clear_stop_request"
+    assert brief["approval_work"]["approval_record_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed"
+    )
+    assert brief["approval_work"]["approval_apply_command"].endswith(
+        "approval-apply --run-id ceo_test --approval-id clear_stop_request --user-confirmed --apply"
+    )
+    assert brief["specialist_work"]["status"] == "pending_role_tasks"
+    assert brief["specialist_work"]["pending_task_count"] >= 1
+    assert "completed_task_count" in brief["specialist_work"]
+    assert "blocked_task_count" in brief["specialist_work"]
+    assert brief["specialist_work"]["top_pending_task_id"] == "approval_clear_stop_request"
+    assert brief["specialist_work"]["top_pending_role_id"] == "risk_officer"
+    assert brief["specialist_work"]["top_pending_packet_path"].endswith("approval_clear_stop_request.md")
+    assert brief["specialist_work"]["top_pending_result_resolution_mode"] == "manual_gate_blocked_record"
+    assert brief["specialist_work"]["top_pending_requires_manual_gate"] is True
+    assert brief["specialist_work"]["top_pending_closure_command"].endswith(
+        "approval-record --run-id ceo_test --approval-id clear_stop_request --decision <approved|rejected> --user-confirmed"
+    )
+    assert brief["specialist_work"]["top_autonomous_pending_task_id"]
+    assert brief["specialist_work"]["top_autonomous_pending_task_id"] != "approval_clear_stop_request"
+    assert brief["specialist_work"]["top_autonomous_pending_role_id"] in {"data_steward", "research_director", "validation_referee"}
+    assert "role_dispatch_packets/" in brief["specialist_work"]["top_autonomous_pending_packet_path"]
+    assert "--task-id approval_clear_stop_request" in brief["specialist_work"]["next_role_result_command"]
+    assert "--status blocked" in brief["specialist_work"]["next_role_result_command"]
     assert "approval" in brief["refused_actions"][0]
     assert brief["product_language_allowed"] is False
     assert brief["production_effect"] == "none"
     report = result["paths"]["operator_brief_report"].read_text(encoding="utf-8")
     assert "Plain English" in report
+    assert "effective_operator_status" in report
+    assert "manual_gate_active" in report
+    assert "Approval Work" in report
+    assert "Trace Health" in report
+    assert "Manual data import required" in report
+    assert "approval-record --run-id ceo_test --approval-id clear_stop_request" in report
+    assert "Specialist Work" in report
+    assert "Completed:" in report
+    assert "Blocked:" in report
+    assert "Top autonomous task" in report
+    assert "approval_clear_stop_request" in report
     assert "Refused Actions" in report
     assert "Production effect: none." in report
+
+
+def test_ceo_operator_brief_uses_final_refreshed_action_board(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    stale_board = {
+        "model": "riskflow_ceo_action_board_v0",
+        "status": "bounded_action_available",
+        "primary_action": {
+            "action_id": "resumption_brief_next_command",
+            "command_kind": "bounded_dispatch",
+            "can_execute_now": True,
+            "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+        },
+        "production_effect": "none",
+    }
+    final_board = {
+        "model": "riskflow_ceo_action_board_v0",
+        "status": "manual_gate_required",
+        "primary_action": {
+            "action_id": "blocker:stop_requested",
+            "command_kind": "manual_gate",
+            "can_execute_now": False,
+            "requires_manual_gate": True,
+            "command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+        },
+        "production_effect": "none",
+    }
+    final_quality = {
+        "model": "riskflow_ceo_decision_quality_v0",
+        "status": "decision_quality_written",
+        "selected_action": "run_frozen_candidate_validation",
+        "selected_rationale": "manual gate outranks the strategic route",
+        "effective_runtime_action": "blocker:stop_requested",
+        "effective_runtime_command_kind": "manual_gate",
+        "effective_runtime_can_execute_now": False,
+        "runtime_blocked": True,
+        "runtime_block_reason": "manual_gate_required:blocker:stop_requested",
+        "runtime_authority_status": "manual_gate_required",
+        "executable_next_action": "blocker:stop_requested",
+        "executable_next_command_kind": "manual_gate",
+        "selected_action_is_executable_now": False,
+        "selected_action_blocked_by": "manual_gate_required:blocker:stop_requested",
+        "production_effect": "none",
+    }
+
+    def fake_status(_options: CeoOpsOptions) -> dict[str, object]:
+        return {"company_status": {"lab_status": {"status": "stopped", "stop_reason": "user_requested"}}}
+
+    def fake_action_board(_options: CeoOpsOptions) -> dict[str, object]:
+        path = root / "action_board.yaml"
+        path.write_text(yaml.safe_dump(stale_board), encoding="utf-8")
+        return {"action_board": stale_board, "paths": {"action_board": path, "action_board_report": root / "action_board.md"}}
+
+    def fake_decision_quality(
+        _options: CeoOpsOptions,
+        *,
+        action_board_result: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        board_path = root / "action_board.yaml"
+        quality_path = root / "decision_quality.yaml"
+        board_path.write_text(yaml.safe_dump(final_board), encoding="utf-8")
+        quality_path.write_text(yaml.safe_dump(final_quality), encoding="utf-8")
+        return {
+            "decision_quality": final_quality,
+            "paths": {"decision_quality": quality_path, "decision_quality_report": root / "decision_quality.md"},
+        }
+
+    def fake_approval_queue(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "queue": {"status": "pending_approvals", "pending_count": 1},
+            "paths": {"queue": root / "approval_queue.yaml", "approval_status": root / "approval_status.yaml"},
+        }
+
+    def fake_role_queue(_options: CeoOpsOptions) -> dict[str, object]:
+        return {"queue": {"status": "pending_role_tasks", "pending_task_count": 1}, "paths": {"role_task_queue": root / "role_task_queue.yaml"}}
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_status", fake_status)
+    monkeypatch.setattr(ceo_ops, "run_ceo_action_board", fake_action_board)
+    monkeypatch.setattr(ceo_ops, "run_ceo_decision_quality", fake_decision_quality)
+    monkeypatch.setattr(ceo_ops, "run_ceo_approval_queue", fake_approval_queue)
+    monkeypatch.setattr(ceo_ops, "run_ceo_role_queue", fake_role_queue)
+
+    result = run_ceo_operator_brief(options)
+
+    brief = result["operator_brief"]
+    assert brief["status"] == "waiting_on_manual_gate"
+    assert brief["current_situation"]["primary_action"] == "blocker:stop_requested"
+    assert brief["current_situation"]["decision_quality_effective_runtime_action"] == "blocker:stop_requested"
 
 
 def test_ceo_eval_fixtures_cover_transition_policy(tmp_path: Path) -> None:
@@ -4886,6 +10388,8 @@ def test_ceo_eval_fixtures_cover_transition_policy(tmp_path: Path) -> None:
     assert cases["champion_challenger_routes_to_fresh_control"]["observed_transition_status"] == "pass"
     assert cases["champion_challenger_does_not_jump_to_generic_research"]["observed_transition_status"] == "fail"
     assert cases["approval_wait_routes_to_approval_apply"]["observed_transition_status"] == "pass"
+    assert cases["approval_apply_rejects_stale_approval_record"]["observed_status"] == "blocked_stale_approval_record"
+    assert cases["approval_apply_rejects_stale_approval_record"]["stop_files_preserved"] is True
     assert cases["contract_repair_routes_back_to_frozen_candidate_validation"]["observed_transition_status"] == "pass"
     assert "stop_requested" in cases["preflight_blocks_stop_request"]["observed_blockers"]
     assert "true_blocker" in cases["preflight_blocks_true_blocker"]["observed_blockers"]
@@ -4894,6 +10398,12 @@ def test_ceo_eval_fixtures_cover_transition_policy(tmp_path: Path) -> None:
     assert "requires --apply" in cases["withheld_split_manifest_requires_apply"]["observed_error"]
     assert "requires --apply" in cases["fresh_withheld_snapshot_manifest_requires_apply"]["observed_error"]
     assert "requires --apply" in cases["fresh_withheld_snapshot_declare_requires_apply"]["observed_error"]
+    stale_fixture_run_id = cases["approval_apply_rejects_stale_approval_record"]["fixture_run_id"]
+    stale_fixture_path = options.report_root / stale_fixture_run_id / "ceo_eval_fixtures.yaml"
+    stale_nested_fixtures = yaml.safe_load(stale_fixture_path.read_text(encoding="utf-8"))
+    assert stale_nested_fixtures["run_id"] == stale_fixture_run_id
+    assert stale_nested_fixtures["skipped_reason"] == "nested_eval_fixture_run"
+    assert stale_nested_fixtures["case_count"] == 0
     assert fixtures["production_effect"] == "none"
     assert result["paths"]["eval_fixtures"].exists()
     assert result["paths"]["eval_fixtures_report"].exists()
@@ -4918,6 +10428,77 @@ def test_ceo_guardrail_audit_flags_product_language_or_production_effect(tmp_pat
         "product_language_allowed_true",
     }
     assert audit["production_effect"] == "none"
+
+
+def test_ceo_guardrail_audit_scans_nested_trust_snapshots(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    receipt_dir = root / "dispatch_receipts"
+    board_dir = root / "operator_step_boards"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    board_dir.mkdir(parents=True, exist_ok=True)
+    (receipt_dir / "receipt_001.yaml").write_text(
+        yaml.safe_dump({"model": "receipt", "production_effect": "changed_alerts", "product_language_allowed": False}),
+        encoding="utf-8",
+    )
+    (board_dir / "after_board.yaml").write_text(
+        yaml.safe_dump({"model": "board", "production_effect": "none", "product_language_allowed": True}),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_guardrail_audit(options)
+
+    audit = result["guardrail_audit"]
+    violations = {(item["artifact"], item["violation"]) for item in audit["violations"]}
+    assert audit["status"] == "fail"
+    assert ("dispatch_receipts/receipt_001.yaml", "non_none_production_effect") in violations
+    assert ("operator_step_boards/after_board.yaml", "product_language_allowed_true") in violations
+    assert any(item["artifact"] == "dispatch_receipts/receipt_001.yaml" for item in audit["scanned_artifacts"])
+
+
+def test_ceo_guardrail_audit_recurses_nested_payloads_and_jsonl(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "nested_artifact.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "nested",
+                "production_effect": "none",
+                "snapshots": [
+                    {
+                        "candidate": "unsafe_translation",
+                        "product_language_allowed": True,
+                        "promotion_authority": "autonomous",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "event": "unsafe_receipt",
+                "payload": {"production_effect": "changed_rankings", "product_language_allowed": False},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_ceo_guardrail_audit(options)
+
+    audit = result["guardrail_audit"]
+    violations = {(item["artifact"], item["violation"], item["path"]) for item in audit["violations"]}
+    assert audit["status"] == "fail"
+    assert ("nested_artifact.yaml", "product_language_allowed_true", "$.snapshots[0].product_language_allowed") in violations
+    assert ("nested_artifact.yaml", "non_user_promotion_authority", "$.snapshots[0].promotion_authority") in violations
+    assert (
+        "action_ledger.jsonl",
+        "non_none_production_effect",
+        "$action_ledger.jsonl:1.payload.production_effect",
+    ) in violations
 
 
 def test_ceo_preflight_gate_blocks_pending_approval(tmp_path: Path) -> None:
@@ -4977,7 +10558,9 @@ def test_ceo_execute_next_blocks_failed_preflight_guardrail(
     action = result["action_result"]
     assert action["action_taken"] == "blocked_preflight_gate"
     assert action["status"] == "blocked"
-    assert [item["blocker"] for item in action["preflight_blockers"]] == ["guardrail_audit_failed"]
+    blockers = [item["blocker"] for item in action["preflight_blockers"]]
+    assert "guardrail_audit_failed" in blockers
+    assert action.get("action_executed") is not True
     assert result["paths"]["preflight_gate"].exists()
     assert result["paths"]["dispatch_receipt"].exists()
     receipt = yaml.safe_load(result["paths"]["dispatch_receipt"].read_text(encoding="utf-8"))
@@ -4985,7 +10568,7 @@ def test_ceo_execute_next_blocks_failed_preflight_guardrail(
     assert receipt["status"] == "dispatch_blocked"
     assert receipt["safe_to_dispatch"] is False
     assert receipt["decision"] == action["decision"]
-    assert receipt["preflight_blockers"] == ["guardrail_audit_failed"]
+    assert "guardrail_audit_failed" in receipt["preflight_blockers"]
     assert receipt["trust_artifact_fingerprints"]["preflight_gate"]["exists"] is True
     assert receipt["trust_artifact_fingerprints"]["action_contract"]["sha256"]
     assert action["dispatch_receipt"]["path"] == str(result["paths"]["dispatch_receipt_snapshot"])
@@ -5246,7 +10829,13 @@ def test_ceo_preflight_allows_applied_memory_delta() -> None:
         lab_run_id="ceo_test_lab",
         stop_requested=False,
         true_blocker=False,
-        trace_grade={"verdict": "pass"},
+        trace_grade={
+            "verdict": "pass",
+            "score": 91,
+            "recommended_next_action": "continue_with_one_bound_ceo_action",
+            "issues": [],
+            "criteria": {"manual_data_import_required": False},
+        },
         approval_queue={"pending_count": 0},
         replay={"status": "replayable"},
         eval_suite={"status": "pass"},
@@ -5258,6 +10847,71 @@ def test_ceo_preflight_allows_applied_memory_delta() -> None:
     assert gate["status"] == "pass"
     assert gate["safe_to_execute"] is True
     assert gate["blockers"] == []
+    assert gate["source_status"]["trace_verdict"] == "pass"
+    assert gate["source_status"]["trace_score"] == 91
+    assert gate["source_status"]["trace_recommended_next_action"] == "continue_with_one_bound_ceo_action"
+    assert gate["source_status"]["trace_issues"] == []
+    assert gate["source_status"]["trace_manual_data_import_required"] is False
+
+
+def test_ceo_preflight_source_status_infers_legacy_manual_data_issue() -> None:
+    gate = ceo_ops.build_ceo_preflight_gate(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        stop_requested=False,
+        true_blocker=False,
+        trace_grade={
+            "verdict": "fail",
+            "score": 55,
+            "recommended_next_action": "stop_for_manual_data_import",
+            "issues": ["manual_data_import_required"],
+        },
+        approval_queue={"pending_count": 0},
+        replay={"status": "replayable"},
+        eval_suite={"status": "pass"},
+        guardrail_audit={"status": "pass"},
+        memory_delta={"status": "no_memory_delta_required", "memory_delta_required": False, "note_applied": False},
+        heartbeat_budget={"status": "within_time_budget", "budget_elapsed": False},
+    )
+
+    assert gate["status"] == "blocked"
+    assert gate["source_status"]["trace_manual_data_import_required"] is True
+    assert gate["source_status"]["trace_recommended_next_action"] == "stop_for_manual_data_import"
+    report = ceo_ops.render_ceo_preflight_gate(gate)
+    assert "## Source Status" in report
+    assert "Trace score: 55" in report
+    assert "Trace recommended next action: stop_for_manual_data_import" in report
+    assert "Trace manual data import required: True" in report
+    assert "Trace issues: ['manual_data_import_required']" in report
+
+
+def test_ceo_preflight_blocks_failed_artifact_coherence() -> None:
+    gate = ceo_ops.build_ceo_preflight_gate(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        stop_requested=False,
+        true_blocker=False,
+        trace_grade={"verdict": "pass"},
+        approval_queue={"pending_count": 0},
+        replay={"status": "replayable"},
+        eval_suite={"status": "pass"},
+        guardrail_audit={"status": "pass"},
+        artifact_coherence={
+            "status": "fail",
+            "latest_action_generated_at": "2026-06-06T00:00:00+00:00",
+            "latest_action_has_current_transition_evidence": True,
+            "issues": [{"artifact": "dispatch_receipt", "issues": ["dispatch_receipt_decision_mismatch"]}],
+        },
+        memory_delta={"status": "no_memory_delta_required", "memory_delta_required": False, "note_applied": False},
+        heartbeat_budget={"status": "within_time_budget", "budget_elapsed": False},
+    )
+
+    blockers = [item["blocker"] for item in gate["blockers"]]
+    assert gate["status"] == "blocked"
+    assert gate["safe_to_execute"] is False
+    assert "artifact_coherence_failed" in blockers
+    assert "artifact_coherence" in gate["blocker_categories"]
+    assert gate["source_status"]["artifact_coherence_status"] == "fail"
 
 
 def test_ceo_preflight_blocks_stop_request(tmp_path: Path) -> None:
@@ -5537,6 +11191,19 @@ def test_ceo_execute_next_routes_after_source_replay_to_frozen_rerun(
             "next_allowed_actions": ["run_frozen_validation_rerun"],
             "production_effect": "none",
         },
+    )
+    (root / "memory_delta.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_memory_delta_v0",
+                "status": "memory_delta_required",
+                "memory_delta_required": True,
+                "note_applied": True,
+                "computed_for_enforced_preflight": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
     )
 
     def fake_run_frozen_validation_rerun(_options):
@@ -6061,6 +11728,160 @@ def test_ceo_trace_grade_flags_manual_gate_loop_meltdown(tmp_path: Path) -> None
     assert "loop_meltdown_strategy_change_required" in result["grade"]["issues"]
 
 
+def test_ceo_single_manual_data_gate_blocks_resumption_and_action_board(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+    root = options.report_root / "ceo_test"
+    action_result = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-05T00:00:02Z",
+        "decision": "import_or_curate_fresh_ohlcv_data",
+        "action_taken": "blocked_manual_data_import_required",
+        "status": "manual_gate",
+        "meaningful_progress": False,
+        "next_allowed_actions": ["request_fresh_data"],
+        "production_effect": "none",
+    }
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action_result), encoding="utf-8")
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "decision": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "ceo_self_audit.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_self_audit_v0", "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action_result, sort_keys=True) + "\n", encoding="utf-8")
+
+    trace = run_ceo_trace_grade(options)["grade"]
+    assert trace["verdict"] == "fail"
+    assert trace["criteria"]["manual_data_import_required"] is True
+    assert trace["recommended_next_action"] == "stop_for_manual_data_import"
+    assert "manual_data_import_required" in trace["issues"]
+
+    preflight = run_ceo_preflight_gate(options, enforce_memory_delta=True)["preflight_gate"]
+    blockers = [item["blocker"] for item in preflight["blockers"]]
+    assert preflight["safe_to_execute"] is False
+    assert "trace_grade_failed" in blockers
+
+    resumption = run_ceo_resumption_brief(options)["brief"]
+    assert resumption["resume_status"] == "blocked_preflight"
+    assert "execute-next" not in resumption["next_command"]
+
+    action_board = run_ceo_action_board(options)["action_board"]
+    assert action_board["status"] != "bounded_action_available"
+    assert (action_board.get("primary_action", {}) or {}).get("can_execute_now") is not True
+
+    decision_quality = run_ceo_decision_quality(options)["decision_quality"]
+    assert decision_quality["selected_action_is_executable_now"] is False
+    assert decision_quality["effective_runtime_can_execute_now"] is not True
+
+
+def test_ceo_manual_data_import_next_action_blocks_before_first_manual_gate_result(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+    root = options.report_root / "ceo_test"
+    action_result = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-05T00:00:02Z",
+        "decision": "request_fresh_data",
+        "action_taken": "fresh_data_preflight",
+        "status": "blocked_missing_fresh_data",
+        "meaningful_progress": False,
+        "next_allowed_actions": ["import_or_curate_fresh_ohlcv_data"],
+        "production_effect": "none",
+    }
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action_result), encoding="utf-8")
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "decision": "request_fresh_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "ceo_self_audit.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_self_audit_v0", "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action_result, sort_keys=True) + "\n", encoding="utf-8")
+
+    trace = run_ceo_trace_grade(options)["grade"]
+    assert trace["verdict"] == "fail"
+    assert trace["criteria"]["manual_data_import_required"] is True
+    assert trace["manual_next_actions"] == ["import_or_curate_fresh_ohlcv_data"]
+    assert trace["recommended_next_action"] == "stop_for_manual_data_import"
+    assert "manual_data_import_required" in trace["issues"]
+
+    preflight = run_ceo_preflight_gate(options, enforce_memory_delta=True)["preflight_gate"]
+    blockers = [item["blocker"] for item in preflight["blockers"]]
+    assert preflight["safe_to_execute"] is False
+    assert "trace_grade_failed" in blockers
+
+    resumption = run_ceo_resumption_brief(options)["brief"]
+    assert resumption["resume_status"] == "blocked_preflight"
+    assert "execute-next" not in resumption["next_command"]
+
+
+def test_ceo_execute_next_manual_data_import_writes_blocked_receipt_even_if_preflight_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+    root = options.report_root / "ceo_test"
+    previous_action = {
+        "model": "riskflow_ceo_binding_action_result_v0",
+        "generated_at": "2026-06-05T00:00:02Z",
+        "decision": "request_fresh_data",
+        "action_taken": "fresh_data_preflight",
+        "status": "blocked_missing_fresh_data",
+        "meaningful_progress": False,
+        "next_allowed_actions": ["import_or_curate_fresh_ohlcv_data"],
+        "production_effect": "none",
+    }
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(previous_action), encoding="utf-8")
+    (root / "ceo_self_audit.yaml").write_text(
+        yaml.safe_dump({"model": "riskflow_ceo_self_audit_v0", "production_effect": "none"}),
+        encoding="utf-8",
+    )
+
+    def stale_passing_preflight(_options: CeoOpsOptions, *, enforce_memory_delta: bool = False) -> dict[str, object]:
+        return {
+            "preflight_gate": {
+                "model": "riskflow_ceo_preflight_gate_v0",
+                "status": "pass",
+                "safe_to_execute": True,
+                "blockers": [],
+                "production_effect": "none",
+            },
+            "paths": {},
+        }
+
+    monkeypatch.setattr(ceo_ops, "run_ceo_preflight_gate", stale_passing_preflight)
+
+    result = run_ceo_execute_next(options)
+
+    assert result["action_result"]["decision"] == "import_or_curate_fresh_ohlcv_data"
+    assert result["action_result"]["action_taken"] == "blocked_manual_data_import_required"
+    assert result["action_result"]["status"] == "manual_gate"
+    receipt = yaml.safe_load(result["paths"]["dispatch_receipt"].read_text(encoding="utf-8"))
+    assert receipt["status"] == "dispatch_blocked"
+    assert receipt["safe_to_dispatch"] is False
+    assert receipt["reason"] == "manual OHLCV import or curation is required before fresh validation"
+
+
 def test_ceo_trace_grade_flags_action_contract_mismatch(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     _write_lab_artifacts(tmp_path, with_candidate=True)
@@ -6116,10 +11937,17 @@ def test_ceo_flight_dashboard_writes_plain_state_summary(tmp_path: Path) -> None
     assert dashboard["model"] == "riskflow_ceo_flight_dashboard_v0"
     assert dashboard["last_decision"] == "run_champion_challenger"
     assert dashboard["trace_grade"]["product_language_allowed"] is False
+    assert "manual_data_import_required" in dashboard["trace_grade"]
+    assert dashboard["safe_to_continue_scope"] == "flight_dashboard_only_not_dispatch_authority"
+    assert dashboard["dispatch_authority"] == "not_granted_by_flight_dashboard"
+    assert "ceo status" in dashboard["runtime_authority_note"]
     assert dashboard["product_delta"]["product_language_allowed"] is False
     assert dashboard["production_effect"] == "none"
     report = result["paths"]["dashboard_report"].read_text(encoding="utf-8")
     assert "Riskflow CEO Flight Dashboard" in report
+    assert "Manual data import required" in report
+    assert "Safety scope: flight_dashboard_only_not_dispatch_authority" in report
+    assert "Dispatch authority: not_granted_by_flight_dashboard" in report
     assert "This dashboard summarizes CEO process state. It is not product validation." in report
 
 
@@ -6127,6 +11955,30 @@ def test_ceo_operating_dashboard_writes_portfolio_snapshot(tmp_path: Path) -> No
     options = _options(tmp_path, apply=True)
     _write_lab_artifacts(tmp_path, with_candidate=True)
     run_ceo_execute_next(options)
+    root = options.report_root / "ceo_test"
+    (root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "status": "blocked_role_tasks",
+                "task_count": 3,
+                "pending_task_count": 0,
+                "pending_manual_task_count": 0,
+                "pending_autonomous_task_count": 0,
+                "completed_task_count": 2,
+                "blocked_task_count": 1,
+                "top_blocked_task_id": "debt_candidate_a_visual_review_evidence",
+                "top_blocked_role_id": "product_translator",
+                "top_blocked_review_status": "accepted_blocked_result",
+                "top_blocked_result_path": "reports/ceo_runs/ceo_test/specialist_results/debt_candidate_a_visual_review_evidence.yaml",
+                "top_blocked_next_action": "complete_champion_challenger_visual_review",
+                "top_blocked_finding": "Visual review evidence is missing.",
+                "next_action": "complete_champion_challenger_visual_review",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = run_ceo_operating_dashboard(options)
 
@@ -6137,13 +11989,28 @@ def test_ceo_operating_dashboard_writes_portfolio_snapshot(tmp_path: Path) -> No
     assert dashboard["candidate_portfolio"][0]["production_effect"] == "none"
     assert dashboard["product_language_allowed"] is False
     assert dashboard["product_governance"]["product_language_allowed"] is False
+    assert dashboard["safe_to_continue_scope"] == "flight_dashboard_only_not_dispatch_authority"
+    assert dashboard["dispatch_authority"] == "not_granted_by_operating_dashboard"
+    assert "recommended_next_action" in dashboard["trace"]
+    assert "manual_data_import_required" in dashboard["trace"]
+    assert dashboard["role_orchestration"]["status"] == "blocked_role_tasks"
+    assert dashboard["role_orchestration"]["blocked_task_count"] == 1
+    assert dashboard["role_orchestration"]["top_blocked_review_status"] == "accepted_blocked_result"
+    assert dashboard["role_orchestration"]["top_blocked_finding"] == "Visual review evidence is missing."
     assert result["paths"]["dashboard"].exists()
     assert result["paths"]["dashboard_report"].exists()
     report = result["paths"]["dashboard_report"].read_text(encoding="utf-8")
     assert "Riskflow CEO Operating Dashboard" in report
+    assert "Trace score" in report
+    assert "Trace recommended next action" in report
+    assert "Trace manual data import required" in report
     assert "Validation Gate" in report
     assert "Executive KPIs" in report
     assert "Role Orchestration" in report
+    assert "Safety scope: flight_dashboard_only_not_dispatch_authority" in report
+    assert "Dispatch authority: not_granted_by_operating_dashboard" in report
+    assert "Top blocked review: accepted_blocked_result" in report
+    assert "Top blocked finding: Visual review evidence is missing." in report
 
 
 def test_ceo_capability_backlog_writes_standalone_infra_queue(tmp_path: Path) -> None:
@@ -6160,6 +12027,19 @@ def test_ceo_capability_backlog_writes_standalone_infra_queue(tmp_path: Path) ->
     assert backlog["items"][0]["production_effect"] == "none"
     assert result["paths"]["backlog"].exists()
     assert result["paths"]["backlog_report"].exists()
+
+
+def test_ceo_capability_backlog_empty_defers_to_runtime_authority() -> None:
+    backlog = ceo_ops.build_ceo_capability_backlog_artifact(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        backlog=[],
+    )
+
+    assert backlog["status"] == "empty"
+    assert backlog["next_action"] == "defer_to_runtime_authority_surface"
+    assert backlog["next_action"] != "continue_with_bound_action_dispatch"
+    assert backlog["production_effect"] == "none"
 
 
 def test_ceo_capability_backlog_routes_source_replay_to_fresh_executor_gap(tmp_path: Path) -> None:
@@ -6242,6 +12122,9 @@ def test_ceo_decision_quality_explains_selected_action_and_alternatives(tmp_path
     assert quality["expected_artifact"] == "champion_challenger_results.yaml"
     assert quality["confidence"] in {"high", "medium", "low"}
     assert quality["runner_up_action"]
+    assert quality["runtime_authority_status"]
+    assert quality["executable_next_action"]
+    assert quality["selected_action_blocked_by"]
     assert alternatives["run_champion_challenger"]["selected"] is True
     assert alternatives["run_champion_challenger"]["evidence"]["candidate_count"] >= 1
     assert alternatives["broaden_hypothesis_source"]["why_not_selected"]
@@ -6249,8 +12132,256 @@ def test_ceo_decision_quality_explains_selected_action_and_alternatives(tmp_path
     assert result["paths"]["decision_quality"].exists()
     report = result["paths"]["decision_quality_report"].read_text(encoding="utf-8")
     assert "Riskflow CEO Decision Quality" in report
+    assert "Runtime Authority" in report
     assert "## Alternatives" in report
     assert "Production effect: none." in report
+
+
+def test_ceo_decision_quality_separates_selected_route_from_manual_gate_authority(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    run_ceo_review(options)
+    run_ceo_stop(options, reason="user_requested")
+
+    result = run_ceo_decision_quality(options)
+
+    quality = result["decision_quality"]
+    assert quality["runtime_authority_status"] == "manual_gate_required"
+    assert quality["effective_runtime_action"].startswith("blocker:")
+    assert quality["effective_runtime_command_kind"] == "manual_gate"
+    assert quality["effective_runtime_can_execute_now"] is False
+    assert quality["runtime_blocked"] is True
+    assert quality["runtime_block_reason"] == f"manual_gate_required:{quality['executable_next_action']}"
+    assert quality["selected_strategic_route_advisory"] == quality["selected_action"]
+    assert quality["executable_next_action"].startswith("blocker:")
+    assert quality["executable_next_command_kind"] == "manual_gate"
+    assert quality["executable_can_execute_now"] is False
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["selected_action_blocked_by"] == f"manual_gate_required:{quality['executable_next_action']}"
+    assert "manual gate" in quality["selected_action_runtime_note"]
+    report = result["paths"]["decision_quality_report"].read_text(encoding="utf-8")
+    assert "Effective runtime action:" in report
+    assert "Strategic Selection" in report
+    assert f"Selected action blocked by: manual_gate_required:{quality['executable_next_action']}" in report
+
+
+def test_ceo_decision_quality_treats_bounded_execute_next_wrapper_as_selected_route_authority() -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 1, "chart_facing_value_status": "shadow_product_candidate_pipeline"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "run_champion_challenger",
+            "rationale": "Candidates need base-vs-challenger evidence.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": "bounded_action_available",
+            "autonomy_mode": "one_bounded_action_then_reaudit",
+            "primary_action": {
+                "action_id": "resumption_brief_next_command",
+                "command_kind": "bounded_dispatch",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "can_execute_now": True,
+                "authorized_strategic_route": "run_champion_challenger",
+                "authorized_route_source": "action_contract",
+            },
+        },
+    )
+
+    assert quality["runtime_authority_status"] == "bounded_action_available"
+    assert quality["executable_next_action"] == "resumption_brief_next_command"
+    assert quality["runtime_authorized_strategic_route"] == "run_champion_challenger"
+    assert quality["effective_runtime_action"] == "resumption_brief_next_command"
+    assert quality["effective_runtime_can_execute_now"] is True
+    assert quality["runtime_blocked"] is False
+    assert quality["selected_strategic_route_advisory"] == ""
+    assert quality["selected_action_is_executable_now"] is True
+    assert quality["selected_action_blocked_by"] == ""
+    assert "bounded execute-next wrapper" in quality["selected_action_runtime_note"]
+
+
+def test_ceo_decision_quality_does_not_self_authorize_bounded_execute_next_route() -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 1, "chart_facing_value_status": "shadow_product_candidate_pipeline"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "run_champion_challenger",
+            "rationale": "Candidates need base-vs-challenger evidence.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": "bounded_action_available",
+            "autonomy_mode": "one_bounded_action_then_reaudit",
+            "primary_action": {
+                "action_id": "resumption_brief_next_command",
+                "command_kind": "bounded_dispatch",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "can_execute_now": True,
+                "authorized_strategic_route": "run_fresh_withheld_validation_executor",
+                "authorized_route_source": "action_contract",
+            },
+        },
+    )
+
+    assert quality["runtime_authority_status"] == "bounded_action_available"
+    assert quality["runtime_authorized_strategic_route"] == "run_fresh_withheld_validation_executor"
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["selected_action_blocked_by"] == "different_executable_action:resumption_brief_next_command"
+
+
+def test_ceo_decision_quality_rejects_malformed_bounded_wrapper_route() -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 1, "chart_facing_value_status": "shadow_product_candidate_pipeline"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "run_champion_challenger",
+            "rationale": "Candidates need base-vs-challenger evidence.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": "bounded_action_available",
+            "autonomy_mode": "one_bounded_action_then_reaudit",
+            "primary_action": {
+                "action_id": "resumption_brief_next_command",
+                "command_kind": "bounded_dispatch",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "can_execute_now": True,
+                "authorized_strategic_route": "run_champion_challenger",
+                "authorized_route_source": "action_contract",
+            },
+        },
+    )
+
+    assert quality["effective_runtime_can_execute_now"] is True
+    assert quality["runtime_authorized_strategic_route"] == "run_champion_challenger"
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["selected_action_blocked_by"] == "different_executable_action:resumption_brief_next_command"
+
+
+def test_ceo_decision_quality_manual_gate_status_overrides_stale_runnable_wrapper() -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 1, "chart_facing_value_status": "shadow_product_candidate_pipeline"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "run_champion_challenger",
+            "rationale": "Candidates need base-vs-challenger evidence.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": "manual_gate_required",
+            "autonomy_mode": "manual_gate",
+            "primary_action": {
+                "action_id": "resumption_brief_next_command",
+                "command_kind": "bounded_dispatch",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id ceo_test --apply",
+                "can_execute_now": True,
+                "authorized_strategic_route": "run_champion_challenger",
+                "authorized_route_source": "stale_action_contract",
+            },
+        },
+    )
+
+    assert quality["runtime_authority_status"] == "manual_gate_required"
+    assert quality["effective_runtime_action"] == "resumption_brief_next_command"
+    assert quality["effective_runtime_can_execute_now"] is False
+    assert quality["runtime_blocked"] is True
+    assert quality["runtime_block_reason"] == "manual_gate_required:resumption_brief_next_command"
+    assert quality["executable_can_execute_now"] is False
+    assert quality["selected_strategic_route_advisory"] == "run_champion_challenger"
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["selected_action_blocked_by"] == "manual_gate_required:resumption_brief_next_command"
+
+
+@pytest.mark.parametrize(
+    ("board_status", "primary_action", "command_kind", "primary_flags", "expected_blocker_prefix"),
+    [
+        (
+            "diagnostic_refresh_recommended",
+            "regenerate_action_board",
+            "diagnostic_refresh",
+            {"diagnostic_only": True},
+            "diagnostic_refresh_required",
+        ),
+        (
+            "implementation_repair_required",
+            "repair:artifact_coherence_policy",
+            "implementation_required",
+            {"needs_implementation": True},
+            "implementation_repair_required",
+        ),
+    ],
+)
+def test_ceo_decision_quality_names_non_executable_runtime_authority(
+    board_status: str,
+    primary_action: str,
+    command_kind: str,
+    primary_flags: dict[str, bool],
+    expected_blocker_prefix: str,
+) -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 1, "chart_facing_value_status": "shadow_product_candidate_pipeline"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "run_champion_challenger",
+            "rationale": "Candidates need base-vs-challenger evidence.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": board_status,
+            "autonomy_mode": "test_mode",
+            "primary_action": {
+                "action_id": primary_action,
+                "command_kind": command_kind,
+                "command": "PYTHONPATH=src python3 -m riskflow ceo action-board --run-id ceo_test",
+                "can_execute_now": False,
+                **primary_flags,
+            },
+        },
+    )
+
+    assert quality["runtime_authority_status"] == board_status
+    assert quality["executable_next_action"] == primary_action
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["selected_action_blocked_by"] == f"{expected_blocker_prefix}:{primary_action}"
+
+
+def test_effective_operator_status_trusts_action_board_over_stale_executable_decision_quality() -> None:
+    status = ceo_ops._effective_operator_status(
+        action_board={
+            "status": "diagnostic_refresh_recommended",
+            "primary_action": {
+                "action_id": "regenerate_action_board",
+                "command_kind": "diagnostic_refresh",
+                "can_execute_now": False,
+            },
+        },
+        operator_brief={},
+        decision_quality={
+            "runtime_authority_status": "bounded_action_available",
+            "effective_runtime_can_execute_now": True,
+            "executable_can_execute_now": True,
+            "runtime_blocked": False,
+        },
+    )
+
+    assert status["effective_operator_status"] == "diagnostic_refresh_recommended"
+    assert status["runtime_blocked"] is True
+    assert status["runtime_block_reason"] == "diagnostic_refresh_recommended:regenerate_action_board"
 
 
 def test_ceo_decision_quality_uses_previous_next_action_override(tmp_path: Path) -> None:
@@ -6296,6 +12427,8 @@ def test_ceo_decision_quality_includes_specialized_selected_route(tmp_path: Path
     selected = [item for item in quality["alternatives"] if item["selected"]]
     assert quality["selected_action"] == "run_frozen_candidate_validation"
     assert quality["expected_artifact"] == "frozen_candidate_validation_plan.yaml"
+    assert quality["runtime_authority_status"] == "unknown_action_board"
+    assert quality["selected_action_blocked_by"] == "action_board_missing"
     assert selected[0]["action_id"] == "run_frozen_candidate_validation"
     assert selected[0]["expected_artifact"] == "frozen_candidate_validation_plan.yaml"
 
@@ -6329,17 +12462,32 @@ def test_ceo_report_includes_operating_artifacts(tmp_path: Path) -> None:
     assert result["paths"]["executive_kpis_report"].exists()
     assert result["paths"]["role_task_queue_report"].exists()
     assert result["paths"]["role_dispatch_report"].exists()
+    assert result["paths"]["org_progress_score_report"].exists()
     assert result["paths"]["capability_backlog_report"].exists()
     assert result["paths"]["fresh_withheld_validation_contract_report"].exists()
     assert result["paths"]["promotion_proposal_report"].exists()
     assert result["paths"]["evidence_debt_register_report"].exists()
     report = result["paths"]["report"].read_text(encoding="utf-8")
     assert "CEO Operating Snapshot" in report
+    assert "Portfolio allocator" in report
+    assert "Portfolio action scope" in report
+    assert "Portfolio dispatch authority" in report
     assert "Mission score" in report
+    assert "Mission attention action" in report
+    assert "Mission action scope" in report
+    assert "Mission dispatch authority" in report
     assert "Strategy capital dashboard" in report
     assert "Strategy capital bucket" in report
     assert "Strategy capital action" in report
+    assert "Strategy capital safety scope" in report
+    assert "Strategy capital dispatch authority" in report
+    assert "Runtime authority source" in report
+    assert "Flight safety scope" in report
+    assert "Flight dispatch authority" in report
     assert "Decision quality" in report
+    assert "Decision quality effective runtime action" in report
+    assert "Decision quality runtime blocked" in report
+    assert "Decision quality selected strategic route advisory" in report
     assert "Decision quality selected action" in report
     assert "Decision quality confidence" in report
     assert "Decision quality runner-up" in report
@@ -6357,7 +12505,12 @@ def test_ceo_report_includes_operating_artifacts(tmp_path: Path) -> None:
     assert "Operating incident register" in report
     assert "Operating incidents" in report
     assert "Repair plan" in report
+    assert "Repair apply" in report
     assert "Repair plan status" in report
+    assert "Repair apply status" in report
+    assert "Repair apply key" in report
+    assert "Repair apply executed" in report
+    assert "Repair apply closed" in report
     assert "Runnable repairs" in report
     assert "Diagnostic refreshes" in report
     assert "Top repair" in report
@@ -6372,15 +12525,55 @@ def test_ceo_report_includes_operating_artifacts(tmp_path: Path) -> None:
     assert "Operator brief status" in report
     assert "Operator brief summary" in report
     assert "Artifact coherence status" in report
+    assert "Artifact coherence top issue" in report
+    assert "Artifact coherence top issue severity" in report
+    assert "Artifact coherence top issue types" in report
+    assert "Effective operator status" in report
+    assert "Manual gate active" in report
+    assert "Effective operator runtime blocked" in report
+    assert "Effective operator runtime block reason" in report
     assert "Resumption status" in report
     assert "Resumption next command" in report
     assert "Approval queue" in report
     assert "Executive KPIs" in report
     assert "Role task queue" in report
+    assert "Role result validation" in report
+    assert "Role result validation status" in report
+    assert "Role result validation issues" in report
     assert "Role dispatch" in report
     assert "Pending approvals" in report
+    assert "Approval top pending id" in report
+    assert "Approval top pending kind" in report
+    assert "Approval top pending reason" in report
+    assert "Approval top pending source" in report
+    assert "Approval top pending required user decision" in report
+    assert "Approval top pending authority" in report
+    assert "Approval top pending fingerprint" in report
+    assert "Role queue status" in report
     assert "Role tasks" in report
+    assert "Role pending" in report
+    assert "Role pending manual" in report
+    assert "Role pending autonomous" in report
+    assert "Role completed" in report
+    assert "Role blocked" in report
+    assert "Role top pending task" in report
+    assert "Role top pending result mode" in report
+    assert "Role top pending closure command" in report
+    assert "Role top autonomous pending task" in report
+    assert "Role top autonomous result command" in report
+    assert "Role top blocked task" in report
+    assert "Role top blocked result mode" in report
+    assert "Role top blocked validation" in report
+    assert "Role top blocked closure command" in report
+    assert "Role top blocked review status" in report
+    assert "Role top blocked result path" in report
+    assert "Role top blocked next action" in report
+    assert "Role top blocked finding" in report
     assert "Role dispatch packets" in report
+    assert "Org progress score" in report
+    assert "Org fake-progress flags" in report
+    assert "Org completed without merge" in report
+    assert "Org decision deltas" in report
     assert "Fresh/withheld contract status" in report
     assert "Promotion proposal status" in report
     assert "Evidence debt" in report

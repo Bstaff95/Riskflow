@@ -40,6 +40,13 @@ immutable `dispatch_receipts/<receipt_id>.yaml` snapshot path and hash.
 [[CEO Replay]] and [[CEO Eval Suite]] can then audit each historical dispatch
 even after the latest alias changes.
 
+Bound-dispatch and guarded-direct action writers must attach a matching
+immutable receipt snapshot before appending a binding action result. If no
+matching receipt exists, the writer requires a passing [[CEO Preflight Gate]] and
+writes a fresh receipt first; without that, unsafe non-blocked action results
+are refused. Blocked/no-op results can write a blocked receipt from a failed
+preflight so the refusal remains replayable.
+
 ## Boundary
 
 The direct command is diagnostic-only. It does not append

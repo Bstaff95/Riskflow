@@ -89,7 +89,22 @@ the recommended intervention rather than continue generic research. A repeated
 manual gate means stop for manual data import or curation until CSV state
 changes.
 
+A single manual data-import gate is also blocking. If the latest action has
+`status: manual_gate`, the decision is `import_or_curate_fresh_ohlcv_data`, or
+the next action names `import_or_curate_fresh_ohlcv_data`, trace grade should
+fail with `manual_data_import_required` and recommend
+`stop_for_manual_data_import`. That prevents preflight, resumption, action
+board, and decision quality from advertising a safe `execute-next` wrapper for
+manual CSV work. `execute-next` also refuses
+`import_or_curate_fresh_ohlcv_data` directly by writing a blocked dispatch
+receipt and `manual_gate` binding result.
+
 Trace grades also carry `trace_scope: process_only`, `product_evidence_status: not_evaluated`, and `product_language_allowed: false`.
+
+The trace verdict, score, recommended next action, issues, and manual
+data-import requirement are now first-class handoff fields in [[CEO Operator
+Brief]], [[CEO Run Index]], and `ceo status`. A fresh session should not need to
+open raw YAML just to learn why trace blocked dispatch.
 
 ## 2026-06-06 Repair Route Update
 

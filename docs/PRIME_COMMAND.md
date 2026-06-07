@@ -331,11 +331,17 @@ not a production ranking, state, score, or TradingView formula change.
 For 8+ hour heartbeat runs, follow `docs/CEO_HEARTBEAT_AUTONOMY.md`; heartbeat
 prompts should point Codex there as the durable operating contract.
 
-Latest CEO run checkpoint as of 2026-06-05:
+Latest CEO run checkpoint as of 2026-06-07:
 
 - Run id: `ceo_supervised_chain_20260531`.
 - Lab run id: `ceo_supervised_chain_20260531_lab`.
-- The 8-hour heartbeat was stopped for `time_budget_elapsed`; stop files are expected under `reports/ceo_runs/ceo_supervised_chain_20260531/` and `research/lab_loop/autonomous_runs/ceo_supervised_chain_20260531_lab/`.
+- This run is stopped/do-not-resume without explicit user approval.
+- Current stop/lab reason is `governed_recovery_no_supported_specs`; current CEO runtime authority is blocked by a live stop request and pending user-only approval `clear_stop_request`.
+- Current eval-suite score is 85 and `9.9 readiness: not_9_9_ready`; blocking cases are `approval_gate_blocks_red_authority_work` and `runtime_authority_manual_gates_clear`.
+- Current org-progress score is 35 with blocked role work, accepted completions without merge receipts, and completed work without decision deltas.
+- Guardrail audit currently passes; artifact coherence has advisory issues only, not hard issues.
+- Do not resume, clear stop files, mutate runtime queues, or run bound CEO actions on this old run without explicit approval.
+- For indicator work, prefer starting a fresh focused Indicator Evidence Sprint rather than extending this stopped CEO run.
 - Latest binding action completed `run_champion_challenger` with `status: shadow_comparison_complete`.
 - `champion_challenger_results.yaml` had 24 candidates, 0 missing metric sources, and the next allowed action was fresh/control validation for promising shadow challengers.
 - `ceo fresh-control-validation` is now a supported planner for that next action; it writes `fresh_control_validation_plan.yaml` and `.md` without promoting anything.

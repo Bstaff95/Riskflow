@@ -165,6 +165,7 @@ def build_obsidian_scan_report(
         "grammar_relative_weakness_fails_to_accelerate",
         "grammar_clean_chop_quality",
         "grammar_reset_quality_watch",
+        "grammar_constructive_reset_watch",
         "state_tags",
         "setup_tags",
     ]

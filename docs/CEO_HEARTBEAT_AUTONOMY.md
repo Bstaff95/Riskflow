@@ -144,6 +144,12 @@ PYTHONPATH=src python3 -m riskflow ceo operating-dashboard \
 PYTHONPATH=src python3 -m riskflow ceo evidence-debt-register \
   --run-id <run_id>
 
+PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief \
+  --run-id <run_id>
+
+PYTHONPATH=src python3 -m riskflow ceo data-gate-brief \
+  --run-id <run_id>
+
 PYTHONPATH=src python3 -m riskflow ceo approval-queue \
   --run-id <run_id>
 
@@ -226,14 +232,45 @@ command is `ceo resumption-brief`. When `repair_plan.yaml` exists, it also
 prints repair plan status, runnable repair count, diagnostic refresh count, top
 repair, top repair kind, and repair next command. When approvals are pending, it
 prints the top approval kind, reason, source, required user decision, authority,
-fingerprint, and record/apply commands. When `role_task_queue.yaml`
-exists, it also prints role queue status, pending/completed/blocked counts, top
-pending specialist task, top blocked specialist task, top packet paths, blocked
-task closure command, and the next role-result command template. When
+fingerprint, and record/apply commands. When `evidence_debt_register.yaml`
+exists, it prints open debt count, candidate/global debt split, archived
+non-promotional candidate count, next debt action, and report path. When
+`role_task_queue.yaml` exists, it also prints role queue status,
+pending/completed/blocked counts, top pending specialist task, top blocked
+specialist task, top packet paths, blocked task closure command, and the next
+role-result command template. When
 `decision_quality.yaml` exists, it
 also prints the selected strategic action, confidence, runtime authority,
 executable next action, can-execute flag, runtime-authorized strategic route
 behind any safe `execute-next` wrapper, and blocked-by reason.
+
+`ceo heartbeat-status` is also a quick-read command, but it must not overrule
+runtime authority. If the action board, decision-quality, or operator brief
+already declares a manual gate, heartbeat status reports
+`continue_recommended: false`, `manual_gate_active: true`, and the runtime block
+reason even if the older strategic decision packet still recommends continuing.
+When a data-gate brief exists, heartbeat status also surfaces the data-gate
+status, required timeframes, CSV requirement count, candidate unlock count,
+next data action, report path, candidate-unlock table path, import-checklist
+counts/path, and data-gate handoff audit status so operators do not need a
+second command to understand a manual OHLCV gate. When sidecar
+learning and evidence-debt artifacts exist, heartbeat status also surfaces the
+top visual-review candidate, sidecar lead/control/archive/review/blocked split,
+lead/control/archive candidate actions, and evidence-debt candidate/global/archive
+split so nonstop operators can see what was learned and what still blocks
+champion/challenger promotion from the first check. When a
+`sidecar_post_data_validation_playbook.yaml` exists, quick status surfaces also
+print the playbook status, current action, visual-label gate, pre-validation
+blockers, and can-execute candidate count. This keeps post-data
+champion/challenger validation from being mistaken as executable while fresh
+data, visual labels, quality remediation, or shadow guardrails are still open.
+When a `sidecar_visual_label_source_patch_plan.csv` exists, status surfaces also
+print source-cell patch counts, pending cells, blocked cells, source files, and
+source rows so label work can be sized without opening the worksheet.
+`ceo status` and `ceo run-index` use the same manual-data handoff policy: live
+stop requests and pending approvals still take precedence, but a manual OHLCV
+gate with no pending approval routes the default or latest next command to
+`ceo data-gate-brief` instead of another preflight wrapper.
 
 Only run the binding action when the heartbeat and trace grade do not indicate
 `stop_requested`, a true blocker, a production-promotion gate, or an unresolved
@@ -267,8 +304,8 @@ dashboard, decision quality, replay, eval suite, guardrail audit, preflight gate
 receipt, blocker stack, operating incident register, repair plan, action board,
 repair apply, operator brief, artifact coherence, resumption brief,
 approval queue, executive KPIs, capability backlog, fresh/withheld validation
-contract, role dispatch, role result validation, promotion proposal, and
-evidence-debt links/status. It is a handoff report, not approval to change
+contract, role dispatch, role result validation, promotion proposal,
+sidecar evidence brief, and evidence-debt links/status. It is a handoff report, not approval to change
 production behavior. Its role snapshot includes top blocked role review status,
 accepted result path, recommended evidence action, and finding so final handoff
 does not lose accepted blocked specialist context. The report reuses freshly generated trust artifacts inside
@@ -312,7 +349,10 @@ dispatch blocker by itself. It also tracks handoff diagnostics such as
 `role_dispatch.yaml`, `role_result_validation.yaml`, `repair_apply.yaml`,
 `action_board.yaml`, `decision_quality.yaml`, and `operator_brief.yaml`;
 missing or stale versions of these are advisory because they can mislead a
-fresh session, but they are not direct dispatch authority.
+fresh session, but they are not direct dispatch authority. If the current
+repair plan is manual-gated or has zero runnable repairs, missing
+`repair_apply.yaml` is reported as `not_required_by_current_repair_plan`
+instead of as a missing handoff artifact.
 It also checks semantic agreement between action-board, decision-quality, and
 operator-brief. For example, when the action board says `manual_gate_required`,
 decision-quality must show a blocked effective runtime action and
@@ -408,7 +448,227 @@ the independently derived
 `authorized_strategic_route` from the resumption brief. Decision quality only
 marks the selected action executable when it matches that route; it does not
 self-authorize a wrapper by assuming `execute-next` will run the selected
-route. It is diagnostic-only and does not approve execution.
+route. When `sidecar_evidence_brief.yaml` exists, decision quality uses its
+warning/reset sidecar candidate counts, visual-review readiness, fresh-data
+blocked counts, champion, and champion/challenger status in the scored
+alternatives. This prevents sidecar candidates from disappearing when the
+generic product-delta candidate count is empty, but it still leaves runtime
+authority with the action board and manual gates. It is diagnostic-only and
+does not approve execution.
+
+`ceo sidecar-evidence-brief` writes `sidecar_evidence_brief.yaml` / `.md` plus
+`sidecar_evidence_candidates.csv`. The CSV is the compact sortable handoff for
+warning/reset sidecar candidates: candidate id, role, champion/challenger,
+metric summary, visual-review readiness, validation route, evidence-debt
+blockers, promotion ceiling, and production-effect guardrail. It is evidence
+reporting only; it does not run validation, clear data gates, or promote
+product behavior.
+
+The same command also writes `sidecar_visual_review_handoff.csv`. This is the
+operator handoff for chart review: one row per sidecar candidate with review
+questions, required labels, gallery and label-CSV paths, visual priority,
+champion/challenger context, metric summary, same-sample blockers, fresh-data
+gate status, and production guardrails. It helps a fresh session or human
+reviewer inspect the warning/reset candidates without treating visual review as
+fresh validation.
+It also writes `sidecar_visual_label_worklist.csv` / `.md`, a row-level
+candidate-matched checklist for visual examples whose required human labels are
+still blank or incomplete. The worklist is review-only and exposes exact
+variant, family-timeframe, and family-context matches so label completion is not
+confused with validation authority.
+It also writes `sidecar_visual_label_review_batches.csv` / `.md`, a bounded
+batching layer over the pending worklist rows. Batches keep source label row
+numbers, image paths, candidate ids, and match type, and remain review-only.
+It also writes `sidecar_visual_label_progress.csv` / `.md`, a candidate-level
+progress bridge from the worklist and batches into the champion/challenger
+quality audit. It records matched, pending, and completed label rows plus the
+next review batch without treating visual labels as validation.
+It also writes `sidecar_visual_label_next_batch.csv` / `.md`, a focused
+worksheet for the current next review batch. It keeps source label row numbers,
+image paths, blank label fields, and source-update instructions so review work
+can start without scanning the full worklist.
+It also writes `sidecar_visual_label_rubric.yaml` / `.md`, a review-only field
+contract for the current batch. It defines the preferred label values and
+acceptance criteria for completing visual labels without treating the labels as
+validation or promotion authority.
+It also writes `sidecar_visual_label_source_patch_plan.csv` / `.yaml` /
+`.md`, a per-cell expansion of the source-update manifest. Each row identifies
+one missing authoritative source-label cell, the source CSV row, the label
+field, allowed values, image ref, and the after-update verification command. It
+is a human label-entry checklist only; it does not infer labels, write source
+CSVs, validate candidates, promote candidates, or alter production behavior.
+It also writes `sidecar_visual_label_completion_audit.csv` / `.yaml` / `.md`,
+which checks the current next batch against the rubric and reports completed,
+missing, and invalid label rows. The audit is review-quality evidence only; it
+does not validate, promote, or alter production behavior.
+Quick CEO status, heartbeat, and run-index surfaces also print the top
+visual-review candidate, focus, priority, gallery, and label CSV so the next
+chart-review action is visible without opening the raw handoff table.
+
+It also writes `sidecar_champion_challenger_evidence.csv`. This table is the
+compact base-vs-challenger evidence matrix for warning/reset sidecars: champion
+baseline returns and hit rate, role delta, drawdown and MFE/MAE, sample breadth,
+event diversity, matched-null evidence, strict-survivor status, same-sample
+promotion blockers, and the conservative operator evidence decision. It is
+interpretation support only; it does not validate, promote, or change Riskflow
+production behavior.
+
+It also writes `sidecar_champion_challenger_quality_audit.yaml` / `.md`. This
+audit checks champion identity, challenger naming, core metric coverage,
+role-benefit fields, validation status, event-diversity concentration, and
+shadow production guardrails. Hard findings mean the packet is structurally
+unsafe; advisory findings preserve review-only weaknesses such as low event
+diversity or archive/failure-mode metric gaps. Quick operator surfaces summarize
+those hard/advisory findings so the reason for a lead, control, or archived
+sidecar is visible without opening the raw audit YAML.
+
+It also writes `sidecar_quality_remediation_plan.yaml` / `.md`. This plan
+translates champion/challenger quality findings into candidate-specific
+remediation routes: human visual-label work, data-gated diversity/control
+checks, archive-only failure-mode handling, or hard quality repair. The plan is
+a handoff only. It does not clear manual data gates, fabricate labels, validate
+candidates, approve product language, or change production behavior. Quick CEO
+status and heartbeat surfaces print the plan path, status, required action, and
+autonomous/human/diversity/archive counts so quality advisories do not get
+mistaken for either validation proof or runnable autonomous work.
+
+It also writes `sidecar_candidate_decision_cards.md`. This is the human-readable
+candidate-by-candidate handoff that translates the candidate table, visual
+handoff, champion/challenger matrix, frozen-spec review, and evidence debts into
+shadow-only handling, required next action, and product-language guardrails. It
+is an operator translation layer, not product approval.
+
+It also writes `sidecar_shadow_guardrail_audit.yaml` / `.md`. This audit fails
+if a sidecar candidate escapes the shadow ceiling, allows product language,
+claims production effect, or marks validation complete while a manual data gate
+is active. A passing audit only proves shadow guardrails held; it does not prove
+the candidate.
+
+It also writes `sidecar_evidence_source_manifest.csv`. This manifest gives one
+row per sidecar candidate with the exact metric-source, visual-review,
+frozen-spec, validation-plan, and evidence-debt refs needed for fresh-session
+traceability. It is a source map, not validation evidence by itself.
+
+It also writes `sidecar_evidence_source_health.csv` / `.yaml` / `.md`. This
+audit checks whether the metric CSVs, visual-review files, and review-only
+frozen-spec result paths cited by the source manifest exist locally and have
+the expected file or directory shape. It is a source-ref health audit only; it
+does not validate, promote, or alter production behavior.
+
+It also writes `sidecar_evidence_source_fingerprints.csv` / `.yaml` / `.md`.
+This audit records SHA-256 fingerprints, file sizes, CSV row counts, and
+directory file counts for the locally resolved evidence refs. It lets a fresh
+session detect source drift after the sidecar packet was generated. It is a
+provenance audit only; it does not validate, promote, or alter production
+behavior.
+
+It also writes `sidecar_candidate_learning_ledger.csv` / `.yaml` / `.md`. This
+ledger translates the existing sidecar packet into one operator-learning row per
+candidate: lead post-data candidate, diversity control only, archive failure
+mode, review-only candidate, or quality-blocked review-only. It records the
+quality audit status, source-health and fingerprint status, data-gate unlock
+status, validation authority, queue/design status, next allowed action, and
+shadow production guardrails. It is a learning handoff only; it does not
+validate, promote, authorize product language, or alter production behavior.
+Quick CEO status, heartbeat, run-index, and final reports also surface the
+current lead, diversity-control, and archive candidate IDs plus their next
+required or allowed actions from this ledger.
+
+It also writes `sidecar_evidence_gap_matrix.csv`. This matrix expands each
+candidate into one row per required champion/challenger evidence dimension:
+forward relative return, hit rate, drawdown, MFE/MAE, missed-upside and
+avoided-downside, event diversity, lag sensitivity, cooldown sensitivity,
+visual review, frozen-spec governance, fresh/control validation, and shadow
+production guardrails. It is an evidence-readiness checklist, not a promotion
+approval.
+
+It also writes `sidecar_candidate_readiness_summary.csv` / `.md`. This is the
+compact one-row-per-candidate triage view derived from the gap matrix:
+readiness tier, primary blocker, ready/blocker/missing/advisory dimension
+counts, strongest same-sample signal, required next action, and shadow
+production guardrails. It does not validate or promote any sidecar.
+
+It also writes `sidecar_validation_queue.csv` / `.md`. This queue orders the
+shadow candidates for post-data fresh/control validation once OHLCV has been
+imported and preflight passes. While the manual data gate is active, it is only
+a validation-order handoff; it does not run validation, clear blockers, or
+authorize promotion.
+
+It also writes `sidecar_post_data_validation_playbook.yaml` / `.md`. This is
+the guarded runtime handoff for what to do only after pre-validation gates are
+clean. It records the current required action, visual-label completion status,
+visual-label gate, pre-validation blockers, can-execute state, and the required
+sequence through fresh-data preflight, sidecar-evidence refresh, frozen-candidate
+validation, executor, and rerun. Candidate-bearing packets require an explicit
+`visual_label_batch_complete` audit before the visual-label gate passes; a
+missing or no-pending completion audit is not enough to authorize validation.
+The playbook is a handoff only; it does not import data, validate, promote, or
+change production behavior.
+
+It also writes `sidecar_champion_challenger_validation_design.yaml` / `.md`.
+This pre-registers the post-data champion/challenger validation design for each
+warning/reset sidecar candidate: champion, challenger, required metrics,
+controls, acceptance criteria, stop conditions, visual-review refs, frozen-shape
+fields, evidence debts, and shadow authority scope. It is a validation-design
+handoff only; it does not execute validation or promote candidates.
+
+It also writes `sidecar_data_gate_unlock_matrix.csv` / `.yaml` / `.md`. This
+matrix ties each warning/reset sidecar candidate to the fresh-data preflight
+state: required timeframes, blocked timeframes, CSV requirement count, unlock
+status, validation authority, post-unlock action, and stop condition. It is a
+data-gate handoff only; it does not import data, execute validation, or promote
+candidates.
+
+When the data gate is blocked, `ceo data-gate-brief` also writes
+`data_gate_import_checklist.csv` / `.yaml` / `.md`. This checklist expands the
+CSV requirement table into one row per required symbol-timeframe CSV, including
+current preflight status, required action, expected path, manual import
+instruction, next verification command, and a per-row guardrail that import
+completion alone cannot authorize validation. It is a manual OHLCV handoff
+only; it does not write `data/raw`, run validation, promote candidates, or alter
+production Riskflow behavior.
+
+It also writes `data_gate_handoff_audit.yaml` / `.md`. This audit checks that the
+CSV requirement table, import plan, import batches, symbol matrix, and import
+checklist agree on row counts, expected paths, pending import counts, verification
+commands, and handoff-only guardrails. Passing this audit means the manual data
+handoff artifacts are internally consistent; it does not mean data has been
+imported, validation is safe, or any candidate is approved for promotion.
+
+It also writes `sidecar_evidence_consistency_audit.yaml` / `.md`. This audit
+cross-checks the sidecar packet for candidate-ID agreement across the evidence
+brief, validation design, data-gate unlock matrix, shadow guardrail audit,
+candidate learning ledger, post-data playbook, quality-remediation plan, current
+handoff, and decision matrix. It also checks visual-label worksheet/source-update
+alignment, evidence-debt manual-gate handoff, archive-only debt leakage,
+quality-remediation issue counts/status/archive classification, manual-gate
+validation authority, manual-gate remediation autoclear policy, and shadow
+production guardrails. It is a packet-integrity check only; it does not validate
+or promote candidates.
+
+It also writes `sidecar_evidence_packet_index.yaml` / `.md`. This packet index
+lists the sidecar evidence artifacts, existence status, CSV row counts, purpose,
+authority scope, and production-effect guardrail so a fresh session can audit
+the sidecar package quickly. It is an artifact index only, not evidence
+validation.
+
+It also writes `sidecar_current_decision_packet.yaml` / `.md`. This is the
+current executive handoff over the sidecar package, separate from any older
+strategic CEO packet. It records the active hold/continue decision, candidate
+handling decisions, evidence debt state, quality-remediation status/counts, and
+per-candidate remediation findings, required actions, clearance gates, and
+autonomous-clearance flags. It is still a shadow-only handoff: it does not clear
+the manual data gate, validate candidates, authorize product language, or change
+production behavior.
+
+When validation-referee specialist results have captured candidate frozen
+shapes but the governed `frozen_candidate_validation_plan.yaml` is still
+missing, `ceo sidecar-evidence-brief` also writes
+`sidecar_frozen_spec_review.csv`. This table is review-only: it records the
+exact candidate shape, entry lag, cooldown, outcome column, sample size,
+cluster breadth, no-tuning controls, and required metrics. It does not retire
+the official frozen-plan debt, authorize the frozen validator, or substitute
+for fresh/control validation.
 If the action board status is `manual_gate_required`, decision quality must
 force `effective_runtime_can_execute_now: false` even when a stale primary
 action still carries `can_execute_now: true`; manual-gate board status outranks
@@ -434,8 +694,19 @@ product behavior, change formulas, or authorize product language.
 CEO handoff card: current situation, trace health, primary action, recommended next command,
 approval work status, user-confirmed approval record/apply commands, specialist
 work status, completed/blocked role counts, top specialist packet, top blocked
-role packet, blocked-role closure command, next role-result command, why,
-refused actions, and evidence refs.
+role packet, blocked-role closure command, next role-result command, the current
+data-gate import plan, import batches, symbol matrix, candidate unlocks, fresh
+preflight handoff, the current sidecar decision packet state, sidecar
+quality-remediation status/counts, the current sidecar visual-label work batch,
+entry sheet, source-update manifest, rubric, completion audit, why, refused
+actions, and evidence refs.
+It also writes `manual_gate_clearance_packet.yaml` / `.md`, a cross-gate
+decision surface that combines runtime authority, fresh-data readiness,
+visual-label completion, and the post-data validation playbook into one
+`can_start_post_data_validation` field. A blocked packet is expected while
+manual data imports or visual labels are pending. A passing packet only means the
+research validation gate can be considered by governed commands; it does not
+promote candidates, change production behavior, or authorize product language.
 It summarizes status, action-board,
 decision-quality, approval queue, role queue, and the latest operator-step
 without approving execution.
@@ -550,6 +821,17 @@ After source replay, capability backlog and evidence-debt routing should point
 to fresh or withheld validation execution. Do not repeat source replay as if it
 were a passing validation result.
 
+Evidence-debt routing must also respect sidecar candidate-learning classes.
+When `sidecar_candidate_learning_ledger.yaml` marks a candidate as
+`archive_failure_mode`, `ceo evidence-debt-register` should keep it visible as
+archived non-promotional learning rather than queueing fresh-data or validation
+debts for it.
+When a manual fresh-data gate is active, the register must keep the strategic
+evidence-debt action visible while separately naming the current runtime
+handoff, usually `import_or_curate_fresh_ohlcv_data`. Do not treat
+`build_or_run_frozen_validation_executor` as executable while fresh-data
+preflight is not ready.
+
 `ceo approval-queue` is the red-authority holding pen. It records promotion
 approval, stopped-run resume, and clear-stop decisions as pending user approval
 items. `ceo approval-record --approval-id <id> --decision <approved|rejected>
@@ -566,7 +848,8 @@ fingerprint to match the current approval item before honoring the ledger row,
 so stale approval records cannot clear newer stop requests.
 
 `ceo executive-kpis` is the compact CEO scoreboard. It summarizes open
-approvals, evidence debt, candidate count, capability backlog, trace verdict,
+approvals, evidence debt, candidate count, sidecar candidate-learning
+lead/control/archive/review/blocked counts, capability backlog, trace verdict,
 score, recommended next action, issues, manual-data flag, loop/no-progress
 counts, validation threshold status, top blocker, repair lane, role-queue
 readiness, top blocked specialist review/finding/next action, operating
@@ -790,8 +1073,10 @@ status/count, eval-suite score/readiness blockers, artifact-coherence
 status/issue count/top issue/top issue severity/top issue types, approval
 status/top approval record-apply commands, and role-result-validation status,
 role-queue status, pending role counts, top pending role task, top blocked role
-task/closure/review status/result/finding/next action, synthesized effective operator status, and
-manual-gate-active state. It downgrades cached
+task/closure/review status/result/finding/next action, sidecar candidate-learning
+ledger status plus lead/control/archive/review/blocked counts, synthesized
+effective operator status, evidence-debt count plus candidate/global/archive
+split, and manual-gate-active state. It downgrades cached
 "safe" runs to blocked when approval, dispatch, replay, eval, hard
 artifact-coherence, action-board, operator-brief, or decision-quality runtime
 authority disagrees. Read effective operator status before trusting dispatch
@@ -1156,6 +1441,12 @@ Preflight, resumption, action-board, and decision-quality must not convert that
 state into a safe `execute-next` wrapper. `execute-next` itself also refuses
 `import_or_curate_fresh_ohlcv_data` by writing a blocked dispatch receipt and a
 `manual_gate` binding result, even if an upstream diagnostic is stale.
+Use `ceo data-gate-brief` to summarize the exact blocked sidecar candidates,
+required timeframes, CSV import/refresh matrix with expected paths, fresh-data
+role blockers, sidecar learning lead/control/archive/review/blocked counts, a
+candidate-level data-unlock table, and next verification command. That brief is
+diagnostic-only; it does not import data, run validation, or clear the manual
+gate.
 
 Use `ceo trace-grade` when judging whether a heartbeat actually made progress.
 It scores artifact completeness, meaningful progress, repeated decisions,

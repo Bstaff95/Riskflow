@@ -1,0 +1,22 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: sidecar_unstable_reset_warning_current
+    direction: negative
+    detector: signal_grammar_event
+    description: Current registered sidecar event for hot-leader cooloff with unstable reset behavior.
+    parameter_grid:
+      event_id: [grammar_unstable_reset_warning_v0]
+
+  - family_id: sidecar_hot_leader_reset_warning_current
+    direction: negative
+    detector: signal_grammar_event
+    description: Existing broad registered sidecar event for hot-leader reset warnings.
+    parameter_grid:
+      event_id: [grammar_hot_leader_reset_warning_v0]
+
+  - family_id: sidecar_constructive_reset_watch_current
+    direction: positive
+    detector: signal_grammar_event
+    description: Current registered sidecar event for constructive hot-leader reset watch conditions.
+    parameter_grid:
+      event_id: [grammar_constructive_reset_watch_v0]

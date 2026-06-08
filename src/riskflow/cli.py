@@ -25,6 +25,7 @@ from .grammar_search import (
     strict_baseline_referee,
     timeframe_cooldown,
     time_split_validation,
+    write_grammar_review_packet,
 )
 from .indicator_behavior import (
     DEFAULT_CONCEPT_LIBRARY,
@@ -93,6 +94,7 @@ from .ceo_ops import (
     CeoOpsOptions,
     run_ceo_champion_challenger,
     run_ceo_broaden_hypothesis_source,
+    run_ceo_data_gate_brief,
     run_ceo_decision_quality,
     run_ceo_evidence_debt_register,
     run_ceo_execute_next,
@@ -137,6 +139,7 @@ from .ceo_ops import (
     run_ceo_role_result,
     run_ceo_run_block,
     run_ceo_run_index,
+    run_ceo_sidecar_evidence_brief,
     run_ceo_strategy_capital_dashboard,
     run_ceo_status,
     run_ceo_stop,
@@ -199,7 +202,7 @@ from .setup_research import run_setup_research
 from .state_research import run_state_research
 from .states import classify_state_frame
 from .transition_research import run_transition_research
-from .visual_review import VisualReviewSettings, run_visual_review
+from .visual_review import VisualReviewSettings, render_grammar_review_label_gallery, run_visual_review
 
 
 LEADERBOARD_COLUMNS = [
@@ -262,6 +265,7 @@ LEADERBOARD_COLUMNS = [
     "grammar_clean_chop_quality",
     "grammar_chaotic_chop_quality",
     "grammar_reset_quality_watch",
+    "grammar_constructive_reset_watch",
     "opportunity_score",
     "opportunity_score_v0",
     "notes",
@@ -544,6 +548,7 @@ def build_leaderboard(
             "grammar_clean_chop_quality": latest.get("grammar_clean_chop_quality"),
             "grammar_chaotic_chop_quality": latest.get("grammar_chaotic_chop_quality"),
             "grammar_reset_quality_watch": latest.get("grammar_reset_quality_watch"),
+            "grammar_constructive_reset_watch": latest.get("grammar_constructive_reset_watch"),
             "opportunity_score": latest.get("opportunity_score"),
             "opportunity_score_v0": latest.get("opportunity_score_v0"),
             "notes": _latest_notes(latest),
@@ -1295,6 +1300,66 @@ def grammar_search_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def grammar_review_packet_command(args: argparse.Namespace) -> int:
+    try:
+        paths = write_grammar_review_packet(
+            args.queue_csv,
+            args.output_dir,
+            title=args.title,
+            max_cases=args.max_cases,
+            max_cases_per_bucket=args.max_cases_per_bucket,
+        )
+    except Exception as exc:
+        print(f"Grammar review packet failed: {exc}")
+        return 1
+    print(f"Wrote grammar review labels CSV: {paths['labels_csv']}")
+    print(f"Wrote grammar review packet: {paths['packet_md']}")
+    return 0
+
+
+def grammar_review_gallery_command(args: argparse.Namespace) -> int:
+    try:
+        labels = pd.read_csv(args.labels_csv)
+        if labels.empty:
+            timeframes: list[str] = []
+        else:
+            timeframes = sorted({str(value).strip().lower() for value in labels["timeframe"].dropna() if str(value).strip()})
+        universe = load_universe_config(args.config)
+        raw_by_timeframe: dict[str, dict[str, pd.DataFrame]] = {}
+        analysis_by_timeframe: dict[str, dict[str, pd.DataFrame]] = {}
+        warnings: list[str] = []
+        for timeframe in timeframes:
+            raw_frames, load_warnings = load_universe_ohlcv(
+                universe,
+                data_dir=args.data_dir,
+                timeframe=timeframe,
+            )
+            warnings.extend(f"{timeframe}: {warning}" for warning in load_warnings)
+            analysis_frames, _basket, build_warnings = build_analysis_frames(universe, raw_frames)
+            warnings.extend(f"{timeframe}: {warning}" for warning in build_warnings)
+            raw_by_timeframe[timeframe] = raw_frames
+            analysis_by_timeframe[timeframe] = analysis_frames
+        records, paths = render_grammar_review_label_gallery(
+            labels,
+            raw_by_timeframe,
+            analysis_by_timeframe,
+            output_dir=args.output_dir,
+            lookback_bars=args.lookback_bars,
+            forward_bars=args.forward_bars,
+            max_images=args.max_images,
+        )
+    except Exception as exc:
+        print(f"Grammar review gallery failed: {exc}")
+        return 1
+    rendered = int((records["render_status"] == "rendered").sum()) if "render_status" in records else 0
+    print(f"Wrote grammar review labels with images CSV: {paths['labels_with_images_csv']}")
+    print(f"Wrote grammar review gallery: {paths['gallery_md']}")
+    print(f"Rendered images: {rendered}/{len(records)}")
+    if warnings:
+        print(f"Warnings: {len(warnings)}")
+    return 0
+
+
 def indicator_behavior_search_command(args: argparse.Namespace) -> int:
     try:
         universe = load_universe_config(args.config)
@@ -1924,6 +1989,8 @@ def ceo_command(args: argparse.Namespace) -> int:
             "approval-queue",
             "approval-record",
             "executive-kpis",
+            "sidecar-evidence-brief",
+            "data-gate-brief",
             "role-queue",
             "role-dispatch",
             "role-result",
@@ -2116,6 +2183,571 @@ def ceo_command(args: argparse.Namespace) -> int:
                 print(f"Operator brief summary: {operating.get('operator_brief_summary')}")
             if operating.get("operator_brief_next_action"):
                 print(f"Operator brief next action: {operating.get('operator_brief_next_action')}")
+            print(f"Sidecar evidence brief: {operating.get('sidecar_evidence_brief_status')}")
+            if operating.get("sidecar_candidate_count") != "":
+                print(f"Sidecar candidates: {operating.get('sidecar_candidate_count')}")
+                print(f"Sidecar ready visual review: {operating.get('sidecar_ready_visual_review_count')}")
+                print(f"Sidecar fresh-data blocked: {operating.get('sidecar_fresh_data_blocked_count')}")
+                print(f"Sidecar review-only frozen specs: {operating.get('sidecar_review_only_frozen_spec_count')}")
+                print(f"Sidecar official frozen plan exists: {operating.get('sidecar_official_frozen_plan_exists')}")
+                print(f"Sidecar manual data gate active: {operating.get('sidecar_manual_data_gate_active')}")
+                print(f"Sidecar safe to run fresh validation: {operating.get('sidecar_safe_to_run_fresh_validation')}")
+            if operating.get("sidecar_next_action"):
+                print(f"Sidecar next action: {operating.get('sidecar_next_action')}")
+            if operating.get("sidecar_evidence_brief_report"):
+                print(f"Sidecar evidence report: {operating.get('sidecar_evidence_brief_report')}")
+            if operating.get("sidecar_evidence_candidate_table"):
+                print(f"Sidecar candidate table: {operating.get('sidecar_evidence_candidate_table')}")
+            if operating.get("sidecar_visual_review_handoff_table"):
+                print(f"Sidecar visual-review handoff table: {operating.get('sidecar_visual_review_handoff_table')}")
+            if operating.get("sidecar_visual_review_coverage"):
+                print(f"Sidecar visual-review coverage: {operating.get('sidecar_visual_review_coverage')}")
+                print(f"Sidecar visual-review coverage rows: {operating.get('sidecar_visual_review_coverage_row_count')}")
+                print(
+                    "Sidecar visual-review coverage ready/missing/empty-label: "
+                    f"{operating.get('sidecar_visual_review_coverage_ready_count')}/"
+                    f"{operating.get('sidecar_visual_review_coverage_missing_count')}/"
+                    f"{operating.get('sidecar_visual_review_coverage_empty_label_count')}"
+                )
+                print(
+                    "Sidecar visual-review human-review started/pending: "
+                    f"{operating.get('sidecar_visual_review_human_review_started_count')}/"
+                    f"{operating.get('sidecar_visual_review_human_review_pending_count')}"
+                )
+            if operating.get("sidecar_visual_review_coverage_report"):
+                print(f"Sidecar visual-review coverage report: {operating.get('sidecar_visual_review_coverage_report')}")
+            if operating.get("sidecar_visual_label_worklist"):
+                print(f"Sidecar visual-label worklist: {operating.get('sidecar_visual_label_worklist')}")
+                print(f"Sidecar visual-label worklist rows: {operating.get('sidecar_visual_label_worklist_row_count')}")
+                print(f"Sidecar visual-label worklist candidates: {operating.get('sidecar_visual_label_worklist_candidate_count')}")
+                print(
+                    "Sidecar visual-label exact/family-timeframe/context rows: "
+                    f"{operating.get('sidecar_visual_label_worklist_exact_variant_count')}/"
+                    f"{operating.get('sidecar_visual_label_worklist_family_timeframe_count')}/"
+                    f"{operating.get('sidecar_visual_label_worklist_family_context_count')}"
+                )
+            if operating.get("sidecar_visual_label_worklist_report"):
+                print(f"Sidecar visual-label worklist report: {operating.get('sidecar_visual_label_worklist_report')}")
+            if operating.get("sidecar_visual_label_review_batches"):
+                print(f"Sidecar visual-label review batches: {operating.get('sidecar_visual_label_review_batches')}")
+                print(f"Sidecar visual-label review batch rows: {operating.get('sidecar_visual_label_review_batch_row_count')}")
+                print(f"Sidecar visual-label review batch count: {operating.get('sidecar_visual_label_review_batch_count')}")
+                print(
+                    "Sidecar visual-label review batch exact/family-timeframe/context rows: "
+                    f"{operating.get('sidecar_visual_label_review_batch_exact_variant_count')}/"
+                    f"{operating.get('sidecar_visual_label_review_batch_family_timeframe_count')}/"
+                    f"{operating.get('sidecar_visual_label_review_batch_family_context_count')}"
+                )
+            if operating.get("sidecar_visual_label_review_batches_report"):
+                print(
+                    "Sidecar visual-label review batches report: "
+                    f"{operating.get('sidecar_visual_label_review_batches_report')}"
+                )
+            if operating.get("sidecar_visual_label_progress"):
+                print(f"Sidecar visual-label progress: {operating.get('sidecar_visual_label_progress')}")
+                print(
+                    "Sidecar visual-label progress matched/pending/completed rows: "
+                    f"{operating.get('sidecar_visual_label_progress_matched_rows')}/"
+                    f"{operating.get('sidecar_visual_label_progress_pending_rows')}/"
+                    f"{operating.get('sidecar_visual_label_progress_completed_rows')}"
+                )
+                print(
+                    "Sidecar visual-label progress not-started/incomplete/complete candidates: "
+                    f"{operating.get('sidecar_visual_label_progress_not_started_candidates')}/"
+                    f"{operating.get('sidecar_visual_label_progress_incomplete_candidates')}/"
+                    f"{operating.get('sidecar_visual_label_progress_complete_candidates')}"
+                )
+                print(
+                    "Sidecar visual-label progress next batch: "
+                    f"{operating.get('sidecar_visual_label_progress_next_batch_id') or 'none'}"
+                )
+            if operating.get("sidecar_visual_label_progress_report"):
+                print(
+                    "Sidecar visual-label progress report: "
+                    f"{operating.get('sidecar_visual_label_progress_report')}"
+                )
+            if operating.get("sidecar_visual_label_next_batch"):
+                print(f"Sidecar visual-label next batch: {operating.get('sidecar_visual_label_next_batch')}")
+                print(f"Sidecar visual-label next batch id: {operating.get('sidecar_visual_label_next_batch_id')}")
+                print(f"Sidecar visual-label next batch rows: {operating.get('sidecar_visual_label_next_batch_row_count')}")
+                print(
+                    "Sidecar visual-label next batch exact/family-timeframe/context rows: "
+                    f"{operating.get('sidecar_visual_label_next_batch_exact_variant_count')}/"
+                    f"{operating.get('sidecar_visual_label_next_batch_family_timeframe_count')}/"
+                    f"{operating.get('sidecar_visual_label_next_batch_family_context_count')}"
+                )
+            if operating.get("sidecar_visual_label_next_batch_report"):
+                print(
+                    "Sidecar visual-label next batch report: "
+                    f"{operating.get('sidecar_visual_label_next_batch_report')}"
+                )
+            if operating.get("sidecar_visual_label_next_batch_gallery"):
+                print(
+                    "Sidecar visual-label next batch gallery: "
+                    f"{operating.get('sidecar_visual_label_next_batch_gallery')}"
+                )
+            if operating.get("sidecar_visual_label_rubric"):
+                print(f"Sidecar visual-label rubric: {operating.get('sidecar_visual_label_rubric')}")
+                print(f"Sidecar visual-label rubric status: {operating.get('sidecar_visual_label_rubric_status')}")
+                print(f"Sidecar visual-label rubric batch: {operating.get('sidecar_visual_label_rubric_batch_id')}")
+                print(
+                    "Sidecar visual-label rubric required fields: "
+                    f"{operating.get('sidecar_visual_label_rubric_required_fields') or 'none'}"
+                )
+            if operating.get("sidecar_visual_label_rubric_report"):
+                print(f"Sidecar visual-label rubric report: {operating.get('sidecar_visual_label_rubric_report')}")
+            if operating.get("sidecar_visual_label_entry_sheet"):
+                print(f"Sidecar visual-label entry sheet: {operating.get('sidecar_visual_label_entry_sheet')}")
+                print(f"Sidecar visual-label entry sheet batch: {operating.get('sidecar_visual_label_entry_sheet_batch_id')}")
+                print(f"Sidecar visual-label entry sheet rows: {operating.get('sidecar_visual_label_entry_sheet_row_count')}")
+                print(
+                    "Sidecar visual-label entry sheet required fields: "
+                    f"{operating.get('sidecar_visual_label_entry_sheet_required_fields') or 'none'}"
+                )
+                print(
+                    "Sidecar visual-label entry sheet missing required cells: "
+                    f"{operating.get('sidecar_visual_label_entry_sheet_missing_required_cells')}"
+                )
+                print(
+                    "Sidecar visual-label entry sheet source-file/source-row/image gaps: "
+                    f"{operating.get('sidecar_visual_label_entry_sheet_missing_source_files')}/"
+                    f"{operating.get('sidecar_visual_label_entry_sheet_missing_source_rows')}/"
+                    f"{operating.get('sidecar_visual_label_entry_sheet_missing_images')}"
+                )
+            if operating.get("sidecar_visual_label_entry_sheet_report"):
+                print(
+                    "Sidecar visual-label entry sheet report: "
+                    f"{operating.get('sidecar_visual_label_entry_sheet_report')}"
+                )
+            if operating.get("sidecar_visual_label_source_update_manifest"):
+                print(
+                    "Sidecar visual-label source update manifest: "
+                    f"{operating.get('sidecar_visual_label_source_update_manifest')}"
+                )
+                print(
+                    "Sidecar visual-label source update rows/pending/cells: "
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_row_count')}/"
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_pending_update_rows')}/"
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_required_update_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source update source-file/source-row/image gaps: "
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_missing_source_files')}/"
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_missing_source_rows')}/"
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_missing_images')}"
+                )
+            if operating.get("sidecar_visual_label_source_update_manifest_report"):
+                print(
+                    "Sidecar visual-label source update manifest report: "
+                    f"{operating.get('sidecar_visual_label_source_update_manifest_report')}"
+                )
+            if operating.get("sidecar_visual_label_source_patch_plan"):
+                print(
+                    "Sidecar visual-label source patch plan: "
+                    f"{operating.get('sidecar_visual_label_source_patch_plan')}"
+                )
+                print(
+                    "Sidecar visual-label source patch cells/pending/blocked: "
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_cell_count')}/"
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_pending_cells')}/"
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_blocked_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source patch files/rows: "
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_source_files')}/"
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_source_rows')}"
+                )
+            if operating.get("sidecar_visual_label_source_patch_plan_report"):
+                print(
+                    "Sidecar visual-label source patch plan report: "
+                    f"{operating.get('sidecar_visual_label_source_patch_plan_report')}"
+                )
+            if operating.get("sidecar_visual_label_completion_audit"):
+                print(
+                    "Sidecar visual-label completion audit: "
+                    f"{operating.get('sidecar_visual_label_completion_audit')}"
+                )
+                print(
+                    "Sidecar visual-label completion audit status: "
+                    f"{operating.get('sidecar_visual_label_completion_audit_status')}"
+                )
+                print(
+                    "Sidecar visual-label completion audit rows/completed/missing/invalid: "
+                    f"{operating.get('sidecar_visual_label_completion_audit_rows')}/"
+                    f"{operating.get('sidecar_visual_label_completion_audit_completed_rows')}/"
+                    f"{operating.get('sidecar_visual_label_completion_audit_missing_rows')}/"
+                    f"{operating.get('sidecar_visual_label_completion_audit_invalid_rows')}"
+                )
+            if operating.get("sidecar_visual_label_completion_audit_report"):
+                print(
+                    "Sidecar visual-label completion audit report: "
+                    f"{operating.get('sidecar_visual_label_completion_audit_report')}"
+                )
+            if operating.get("sidecar_visual_review_top_candidate"):
+                print(f"Sidecar visual-review top candidate: {operating.get('sidecar_visual_review_top_candidate')}")
+                print(f"Sidecar visual-review top role: {operating.get('sidecar_visual_review_top_product_role') or 'none'}")
+                print(f"Sidecar visual-review top focus: {operating.get('sidecar_visual_review_top_focus') or 'none'}")
+                print(f"Sidecar visual-review top priority: {operating.get('sidecar_visual_review_top_priority')}")
+                if operating.get("sidecar_visual_review_top_question"):
+                    print(f"Sidecar visual-review top question: {operating.get('sidecar_visual_review_top_question')}")
+                if operating.get("sidecar_visual_review_top_gallery"):
+                    print(f"Sidecar visual-review top gallery: {operating.get('sidecar_visual_review_top_gallery')}")
+                if operating.get("sidecar_visual_review_top_labels_with_images"):
+                    print(f"Sidecar visual-review top labels: {operating.get('sidecar_visual_review_top_labels_with_images')}")
+            if operating.get("sidecar_champion_challenger_evidence_table"):
+                print(
+                    "Sidecar champion/challenger evidence table: "
+                    f"{operating.get('sidecar_champion_challenger_evidence_table')}"
+                )
+            if operating.get("sidecar_champion_challenger_quality_audit"):
+                print(
+                    "Sidecar champion/challenger quality audit: "
+                    f"{operating.get('sidecar_champion_challenger_quality_audit')}"
+                )
+                print(
+                    "Sidecar champion/challenger quality audit report: "
+                    f"{operating.get('sidecar_champion_challenger_quality_audit_report')}"
+                )
+                print(
+                    "Sidecar champion/challenger quality status: "
+                    f"{operating.get('sidecar_champion_challenger_quality_status')}"
+                )
+                print(
+                    "Sidecar champion/challenger quality issues: "
+                    f"{operating.get('sidecar_champion_challenger_quality_issue_count')}"
+                )
+                print(
+                    "Sidecar champion/challenger quality hard/advisory issues: "
+                    f"{operating.get('sidecar_champion_challenger_quality_hard_issue_count')}/"
+                    f"{operating.get('sidecar_champion_challenger_quality_advisory_issue_count')}"
+                )
+                if operating.get("sidecar_champion_challenger_quality_advisory_issue_summary"):
+                    print(
+                        "Sidecar champion/challenger quality advisory summary: "
+                        f"{operating.get('sidecar_champion_challenger_quality_advisory_issue_summary')}"
+                    )
+                if operating.get("sidecar_champion_challenger_quality_hard_issue_summary"):
+                    print(
+                        "Sidecar champion/challenger quality hard summary: "
+                        f"{operating.get('sidecar_champion_challenger_quality_hard_issue_summary')}"
+                    )
+            if operating.get("sidecar_quality_remediation_plan"):
+                print(f"Sidecar quality remediation plan: {operating.get('sidecar_quality_remediation_plan')}")
+            if operating.get("sidecar_quality_remediation_plan_report"):
+                print(
+                    "Sidecar quality remediation plan report: "
+                    f"{operating.get('sidecar_quality_remediation_plan_report')}"
+                )
+            if operating.get("sidecar_quality_remediation_plan_status"):
+                print(
+                    "Sidecar quality remediation plan status: "
+                    f"{operating.get('sidecar_quality_remediation_plan_status')}"
+                )
+                print(
+                    "Sidecar quality remediation plan required action: "
+                    f"{operating.get('sidecar_quality_remediation_plan_current_required_action') or 'none'}"
+                )
+                print(
+                    "Sidecar quality remediation autonomous/human/diversity/archive: "
+                    f"{operating.get('sidecar_quality_remediation_plan_autonomous_clearable_now_count')}/"
+                    f"{operating.get('sidecar_quality_remediation_plan_human_visual_remediation_count')}/"
+                    f"{operating.get('sidecar_quality_remediation_plan_diversity_control_remediation_count')}/"
+                    f"{operating.get('sidecar_quality_remediation_plan_archive_only_count')}"
+                )
+            if operating.get("sidecar_evidence_gap_matrix"):
+                print(f"Sidecar evidence gap matrix: {operating.get('sidecar_evidence_gap_matrix')}")
+            if operating.get("sidecar_candidate_readiness_summary"):
+                print(f"Sidecar candidate readiness summary: {operating.get('sidecar_candidate_readiness_summary')}")
+            if operating.get("sidecar_candidate_readiness_summary_report"):
+                print(
+                    "Sidecar candidate readiness summary report: "
+                    f"{operating.get('sidecar_candidate_readiness_summary_report')}"
+                )
+            if operating.get("sidecar_validation_queue"):
+                print(f"Sidecar validation queue: {operating.get('sidecar_validation_queue')}")
+            if operating.get("sidecar_validation_queue_report"):
+                print(f"Sidecar validation queue report: {operating.get('sidecar_validation_queue_report')}")
+            if operating.get("sidecar_champion_challenger_validation_design"):
+                print(
+                    "Sidecar champion/challenger validation design: "
+                    f"{operating.get('sidecar_champion_challenger_validation_design')}"
+                )
+            if operating.get("sidecar_champion_challenger_validation_design_report"):
+                print(
+                    "Sidecar champion/challenger validation design report: "
+                    f"{operating.get('sidecar_champion_challenger_validation_design_report')}"
+                )
+            if operating.get("sidecar_data_gate_unlock_matrix"):
+                print(f"Sidecar data-gate unlock matrix: {operating.get('sidecar_data_gate_unlock_matrix')}")
+            if operating.get("sidecar_data_gate_unlock_matrix_yaml"):
+                print(f"Sidecar data-gate unlock matrix YAML: {operating.get('sidecar_data_gate_unlock_matrix_yaml')}")
+            if operating.get("sidecar_data_gate_unlock_matrix_report"):
+                print(f"Sidecar data-gate unlock matrix report: {operating.get('sidecar_data_gate_unlock_matrix_report')}")
+            if operating.get("sidecar_evidence_consistency_audit"):
+                print(f"Sidecar evidence consistency audit: {operating.get('sidecar_evidence_consistency_audit')}")
+            if operating.get("sidecar_evidence_consistency_audit_report"):
+                print(
+                    "Sidecar evidence consistency audit report: "
+                    f"{operating.get('sidecar_evidence_consistency_audit_report')}"
+                )
+            if operating.get("sidecar_evidence_consistency_audit_status"):
+                print(
+                    "Sidecar evidence consistency audit status: "
+                    f"{operating.get('sidecar_evidence_consistency_audit_status')}"
+                )
+                print(
+                    "Sidecar evidence consistency audit checks/issues: "
+                    f"{operating.get('sidecar_evidence_consistency_audit_check_count')}/"
+                    f"{operating.get('sidecar_evidence_consistency_audit_issue_count')}"
+                )
+            if operating.get("sidecar_evidence_packet_index"):
+                print(f"Sidecar evidence packet index: {operating.get('sidecar_evidence_packet_index')}")
+            if operating.get("sidecar_evidence_packet_index_report"):
+                print(f"Sidecar evidence packet index report: {operating.get('sidecar_evidence_packet_index_report')}")
+            if operating.get("sidecar_candidate_decision_cards"):
+                print(f"Sidecar candidate decision cards: {operating.get('sidecar_candidate_decision_cards')}")
+            if operating.get("sidecar_current_decision_packet"):
+                print(f"Sidecar current decision packet: {operating.get('sidecar_current_decision_packet')}")
+            if operating.get("sidecar_current_decision_packet_report"):
+                print(
+                    "Sidecar current decision packet report: "
+                    f"{operating.get('sidecar_current_decision_packet_report')}"
+                )
+            if operating.get("sidecar_current_decision_packet_status"):
+                print(
+                    "Sidecar current decision packet status: "
+                    f"{operating.get('sidecar_current_decision_packet_status')}"
+                )
+                print(
+                    "Sidecar current decision packet decision: "
+                    f"{operating.get('sidecar_current_decision_packet_decision') or 'none'}"
+                )
+                if operating.get("sidecar_current_decision_packet_quality_remediation_status"):
+                    print(
+                        "Sidecar current decision packet quality remediation status: "
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_status')}"
+                    )
+                    print(
+                        "Sidecar current decision packet quality remediation required action: "
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_required_action')}"
+                    )
+                    print(
+                        "Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count')}/"
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_human_visual_count')}/"
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_diversity_control_count')}/"
+                        f"{operating.get('sidecar_current_decision_packet_quality_remediation_archive_only_count')}"
+                    )
+            if operating.get("sidecar_shadow_guardrail_report"):
+                print(f"Sidecar shadow guardrail: {operating.get('sidecar_shadow_guardrail_status')}")
+                print(f"Sidecar shadow guardrail violations: {operating.get('sidecar_shadow_guardrail_violation_count')}")
+                print(f"Sidecar shadow guardrail report: {operating.get('sidecar_shadow_guardrail_report')}")
+            if operating.get("sidecar_evidence_source_manifest"):
+                print(f"Sidecar evidence source manifest: {operating.get('sidecar_evidence_source_manifest')}")
+            if operating.get("sidecar_evidence_source_health"):
+                print(f"Sidecar evidence source health: {operating.get('sidecar_evidence_source_health')}")
+                print(f"Sidecar evidence source health YAML: {operating.get('sidecar_evidence_source_health_yaml')}")
+                print(f"Sidecar evidence source health report: {operating.get('sidecar_evidence_source_health_report')}")
+                print(f"Sidecar evidence source health status: {operating.get('sidecar_evidence_source_health_status')}")
+                print(f"Sidecar evidence source health issues: {operating.get('sidecar_evidence_source_health_issue_count')}")
+                print(
+                    "Sidecar evidence source health missing required refs: "
+                    f"{operating.get('sidecar_evidence_source_health_missing_required')}"
+                )
+                print(
+                    "Sidecar evidence source health wrong-type required refs: "
+                    f"{operating.get('sidecar_evidence_source_health_wrong_type_required')}"
+                )
+            if operating.get("sidecar_evidence_source_fingerprints"):
+                print(
+                    "Sidecar evidence source fingerprints: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints YAML: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_yaml')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints report: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_report')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints status: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_status')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints issues: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_issue_count')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints files: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_fingerprinted_file_count')}/"
+                    f"{operating.get('sidecar_evidence_source_fingerprints_file_count')}"
+                )
+                print(
+                    "Sidecar evidence source fingerprints CSV row counts: "
+                    f"{operating.get('sidecar_evidence_source_fingerprints_csv_row_count_recorded_count')}/"
+                    f"{operating.get('sidecar_evidence_source_fingerprints_csv_count')}"
+                )
+            if operating.get("sidecar_candidate_learning_ledger"):
+                print(f"Sidecar candidate learning ledger: {operating.get('sidecar_candidate_learning_ledger')}")
+                print(
+                    "Sidecar candidate learning ledger YAML: "
+                    f"{operating.get('sidecar_candidate_learning_ledger_yaml')}"
+                )
+                print(
+                    "Sidecar candidate learning ledger report: "
+                    f"{operating.get('sidecar_candidate_learning_ledger_report')}"
+                )
+                print(f"Sidecar candidate learning ledger status: {operating.get('sidecar_candidate_learning_ledger_status')}")
+                print(
+                    "Sidecar candidate learning ledger lead/control/archive/review/blocked: "
+                    f"{operating.get('sidecar_candidate_learning_ledger_lead_count')}/"
+                    f"{operating.get('sidecar_candidate_learning_ledger_diversity_control_count')}/"
+                    f"{operating.get('sidecar_candidate_learning_ledger_archive_count')}/"
+                    f"{operating.get('sidecar_candidate_learning_ledger_review_only_count')}/"
+                    f"{operating.get('sidecar_candidate_learning_ledger_quality_blocked_count')}"
+                )
+                if operating.get("sidecar_learning_lead_candidate"):
+                    print(f"Sidecar learning lead candidate: {operating.get('sidecar_learning_lead_candidate')}")
+                    print(f"Sidecar learning lead next required: {operating.get('sidecar_learning_lead_next_required_action') or 'none'}")
+                    print(f"Sidecar learning lead authority: {operating.get('sidecar_learning_lead_validation_authority') or 'none'}")
+                if operating.get("sidecar_learning_control_candidate"):
+                    print(f"Sidecar learning control candidate: {operating.get('sidecar_learning_control_candidate')}")
+                    print(f"Sidecar learning control reason: {operating.get('sidecar_learning_control_reason') or 'none'}")
+                    print(f"Sidecar learning control next allowed: {operating.get('sidecar_learning_control_next_allowed_action') or 'none'}")
+                if operating.get("sidecar_learning_archive_candidate"):
+                    print(f"Sidecar learning archive candidate: {operating.get('sidecar_learning_archive_candidate')}")
+                    print(f"Sidecar learning archive reason: {operating.get('sidecar_learning_archive_reason') or 'none'}")
+                    print(f"Sidecar learning archive next allowed: {operating.get('sidecar_learning_archive_next_allowed_action') or 'none'}")
+            if operating.get("sidecar_post_data_validation_playbook"):
+                print(
+                    "Sidecar post-data validation playbook: "
+                    f"{operating.get('sidecar_post_data_validation_playbook')}"
+                )
+                print(
+                    "Sidecar post-data playbook status: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_status') or 'none'}"
+                )
+                print(
+                    "Sidecar post-data required action: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_current_required_action') or 'none'}"
+                )
+                print(
+                    "Sidecar post-data visual-label status/gate: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_visual_label_completion_status') or 'none'}/"
+                    f"{operating.get('sidecar_post_data_validation_playbook_visual_label_gate_passed')}"
+                )
+                print(
+                    "Sidecar post-data blockers: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_pre_validation_blockers') or 'none'}"
+                )
+                print(
+                    "Sidecar post-data can-execute candidates: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_can_execute_count')}"
+                )
+            if operating.get("sidecar_post_data_validation_playbook_report"):
+                print(
+                    "Sidecar post-data validation playbook report: "
+                    f"{operating.get('sidecar_post_data_validation_playbook_report')}"
+                )
+            if operating.get("sidecar_current_handoff"):
+                print(f"Sidecar current handoff: {operating.get('sidecar_current_handoff')}")
+            if operating.get("sidecar_current_handoff_report"):
+                print(f"Sidecar current handoff report: {operating.get('sidecar_current_handoff_report')}")
+            if operating.get("sidecar_candidate_decision_matrix"):
+                print(f"Sidecar candidate decision matrix: {operating.get('sidecar_candidate_decision_matrix')}")
+                print(
+                    "Sidecar candidate decision matrix rows: "
+                    f"{operating.get('sidecar_candidate_decision_matrix_row_count')}"
+                )
+            if operating.get("sidecar_candidate_decision_matrix_report"):
+                print(
+                    "Sidecar candidate decision matrix report: "
+                    f"{operating.get('sidecar_candidate_decision_matrix_report')}"
+                )
+            if operating.get("sidecar_frozen_spec_review_table"):
+                print(f"Sidecar frozen-spec review table: {operating.get('sidecar_frozen_spec_review_table')}")
+            if operating.get("evidence_debt_register_status"):
+                print(f"Evidence debt register: {operating.get('evidence_debt_register_status')}")
+                print(f"Evidence debt count: {operating.get('evidence_debt_count')}")
+                print(
+                    "Evidence debt candidate/global/archive: "
+                    f"{operating.get('evidence_debt_candidate_count')}/"
+                    f"{operating.get('evidence_debt_global_count')}/"
+                    f"{operating.get('evidence_debt_archived_candidate_count')}"
+                )
+                if operating.get("evidence_debt_next_action"):
+                    print(f"Evidence debt next action: {operating.get('evidence_debt_next_action')}")
+                if operating.get("evidence_debt_current_runtime_handoff_action"):
+                    print(
+                        "Evidence debt current handoff: "
+                        f"{operating.get('evidence_debt_current_runtime_handoff_action')}"
+                    )
+                    print(
+                        "Evidence debt handoff status: "
+                        f"{operating.get('evidence_debt_current_runtime_handoff_status')}"
+                    )
+                    print(
+                        "Evidence debt strategic blocked by handoff: "
+                        f"{operating.get('evidence_debt_strategic_blocked_by_current_handoff')}"
+                    )
+                if operating.get("evidence_debt_register_report"):
+                    print(f"Evidence debt report: {operating.get('evidence_debt_register_report')}")
+            print(f"Data gate brief: {operating.get('data_gate_brief_status')}")
+            if operating.get("data_gate_preflight_status"):
+                print(f"Data gate preflight: {operating.get('data_gate_preflight_status')}")
+                print(f"Data gate safe fresh validation: {operating.get('data_gate_safe_to_run_fresh_validation')}")
+                print(f"Data gate manual gate active: {operating.get('data_gate_manual_gate_active')}")
+                print(f"Data gate required timeframes: {operating.get('data_gate_required_timeframes') or []}")
+                print(f"Data gate CSV requirements: {operating.get('data_gate_csv_requirement_count')}")
+                print(f"Data gate blocked candidates: {operating.get('data_gate_blocked_candidate_count')}")
+                print(f"Data gate candidate unlocks: {operating.get('data_gate_candidate_unlock_count')}")
+                print(f"Data gate role blockers: {operating.get('data_gate_role_blocker_count')}")
+            if operating.get("data_gate_next_action"):
+                print(f"Data gate next action: {operating.get('data_gate_next_action')}")
+            if operating.get("data_gate_next_verification_command"):
+                print(f"Data gate next verification: {operating.get('data_gate_next_verification_command')}")
+            if operating.get("data_gate_brief_report"):
+                print(f"Data gate report: {operating.get('data_gate_brief_report')}")
+            if operating.get("data_gate_candidate_unlocks"):
+                print(f"Data gate candidate unlock table: {operating.get('data_gate_candidate_unlocks')}")
+            if operating.get("data_gate_import_plan"):
+                print(f"Data gate import plan: {operating.get('data_gate_import_plan')}")
+            if operating.get("data_gate_import_plan_report"):
+                print(f"Data gate import plan report: {operating.get('data_gate_import_plan_report')}")
+            if operating.get("data_gate_import_batches"):
+                print(f"Data gate import batch table: {operating.get('data_gate_import_batches')}")
+            if operating.get("data_gate_import_checklist"):
+                print(f"Data gate import checklist: {operating.get('data_gate_import_checklist')}")
+                print(
+                    "Data gate import checklist rows/pending/ready: "
+                    f"{operating.get('data_gate_import_checklist_row_count')}/"
+                    f"{operating.get('data_gate_import_checklist_pending_imports')}/"
+                    f"{operating.get('data_gate_import_checklist_complete_ready')}"
+                )
+                print(
+                    "Data gate import checklist missing/stale: "
+                    f"{operating.get('data_gate_import_checklist_missing_count')}/"
+                    f"{operating.get('data_gate_import_checklist_stale_count')}"
+                )
+            if operating.get("data_gate_import_checklist_report"):
+                print(f"Data gate import checklist report: {operating.get('data_gate_import_checklist_report')}")
+            if operating.get("data_gate_handoff_audit"):
+                print(f"Data gate handoff audit: {operating.get('data_gate_handoff_audit')}")
+                print(f"Data gate handoff audit status: {operating.get('data_gate_handoff_audit_status')}")
+                print(
+                    "Data gate handoff audit checks/issues: "
+                    f"{operating.get('data_gate_handoff_audit_check_count')}/"
+                    f"{operating.get('data_gate_handoff_audit_issue_count')}"
+                )
+            if operating.get("data_gate_handoff_audit_report"):
+                print(f"Data gate handoff audit report: {operating.get('data_gate_handoff_audit_report')}")
+            if operating.get("data_gate_symbol_matrix"):
+                print(f"Data gate symbol matrix: {operating.get('data_gate_symbol_matrix')}")
+                print(f"Data gate symbol matrix rows: {operating.get('data_gate_symbol_matrix_row_count')}")
+            if operating.get("data_gate_symbol_matrix_report"):
+                print(f"Data gate symbol matrix report: {operating.get('data_gate_symbol_matrix_report')}")
             print(f"Role queue: {operating.get('role_queue_status')}")
             if operating.get("role_pending_task_count") != "":
                 print(f"Role pending: {operating.get('role_pending_task_count')}")
@@ -2333,6 +2965,458 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Continue recommended: {status.get('continue_recommended')}")
             print(f"Stop requested: {status.get('stop_requested')}")
             print(f"True blocker: {status.get('true_blocker')}")
+            if status.get("manual_gate_active"):
+                print(f"Manual gate active: {status.get('manual_gate_active')}")
+                print(f"Runtime authority: {status.get('runtime_authority_status')}")
+                print(f"Runtime block reason: {status.get('runtime_block_reason')}")
+            if status.get("data_gate_status"):
+                print(f"Data gate: {status.get('data_gate_status')}")
+                print(f"Data gate preflight: {status.get('data_gate_preflight_status')}")
+                print(f"Data gate safe fresh validation: {status.get('data_gate_safe_to_run_fresh_validation')}")
+                print(f"Data gate required timeframes: {status.get('data_gate_required_timeframes') or []}")
+                print(f"Data gate CSV requirements: {status.get('data_gate_csv_requirement_count')}")
+                print(f"Data gate candidate unlocks: {status.get('data_gate_candidate_unlock_count')}")
+                print(f"Data gate next action: {status.get('data_gate_next_action') or 'none'}")
+                if status.get("data_gate_brief_report"):
+                    print(f"Data gate report: {status.get('data_gate_brief_report')}")
+                if status.get("data_gate_candidate_unlocks"):
+                    print(f"Data gate candidate unlock table: {status.get('data_gate_candidate_unlocks')}")
+                if status.get("data_gate_import_plan"):
+                    print(f"Data gate import plan: {status.get('data_gate_import_plan')}")
+                if status.get("data_gate_import_plan_report"):
+                    print(f"Data gate import plan report: {status.get('data_gate_import_plan_report')}")
+                if status.get("data_gate_import_batches"):
+                    print(f"Data gate import batch table: {status.get('data_gate_import_batches')}")
+                if status.get("data_gate_import_checklist"):
+                    print(f"Data gate import checklist: {status.get('data_gate_import_checklist')}")
+                    print(
+                        "Data gate import checklist rows/pending/ready: "
+                        f"{status.get('data_gate_import_checklist_row_count')}/"
+                        f"{status.get('data_gate_import_checklist_pending_imports')}/"
+                        f"{status.get('data_gate_import_checklist_complete_ready')}"
+                    )
+                    print(
+                        "Data gate import checklist missing/stale: "
+                        f"{status.get('data_gate_import_checklist_missing_count')}/"
+                        f"{status.get('data_gate_import_checklist_stale_count')}"
+                    )
+                if status.get("data_gate_import_checklist_report"):
+                    print(f"Data gate import checklist report: {status.get('data_gate_import_checklist_report')}")
+                if status.get("data_gate_handoff_audit"):
+                    print(f"Data gate handoff audit: {status.get('data_gate_handoff_audit')}")
+                    print(f"Data gate handoff audit status: {status.get('data_gate_handoff_audit_status')}")
+                    print(
+                        "Data gate handoff audit checks/issues: "
+                        f"{status.get('data_gate_handoff_audit_check_count')}/"
+                        f"{status.get('data_gate_handoff_audit_issue_count')}"
+                    )
+                if status.get("data_gate_handoff_audit_report"):
+                    print(f"Data gate handoff audit report: {status.get('data_gate_handoff_audit_report')}")
+                if status.get("data_gate_symbol_matrix"):
+                    print(f"Data gate symbol matrix: {status.get('data_gate_symbol_matrix')}")
+                    print(f"Data gate symbol matrix rows: {status.get('data_gate_symbol_matrix_row_count')}")
+                if status.get("data_gate_symbol_matrix_report"):
+                    print(f"Data gate symbol matrix report: {status.get('data_gate_symbol_matrix_report')}")
+            if status.get("sidecar_visual_review_top_candidate"):
+                print(f"Sidecar visual-review top candidate: {status.get('sidecar_visual_review_top_candidate')}")
+                print(f"Sidecar visual-review top role: {status.get('sidecar_visual_review_top_product_role') or 'none'}")
+                print(f"Sidecar visual-review top focus: {status.get('sidecar_visual_review_top_focus') or 'none'}")
+                print(f"Sidecar visual-review top priority: {status.get('sidecar_visual_review_top_priority')}")
+                if status.get("sidecar_visual_review_top_question"):
+                    print(f"Sidecar visual-review top question: {status.get('sidecar_visual_review_top_question')}")
+                if status.get("sidecar_visual_review_top_gallery"):
+                    print(f"Sidecar visual-review top gallery: {status.get('sidecar_visual_review_top_gallery')}")
+                if status.get("sidecar_visual_review_top_labels_with_images"):
+                    print(f"Sidecar visual-review top labels: {status.get('sidecar_visual_review_top_labels_with_images')}")
+            if status.get("sidecar_visual_review_coverage"):
+                print(f"Sidecar visual-review coverage: {status.get('sidecar_visual_review_coverage')}")
+                print(f"Sidecar visual-review coverage rows: {status.get('sidecar_visual_review_coverage_row_count')}")
+                print(
+                    "Sidecar visual-review coverage ready/missing/empty-label: "
+                    f"{status.get('sidecar_visual_review_coverage_ready_count')}/"
+                    f"{status.get('sidecar_visual_review_coverage_missing_count')}/"
+                    f"{status.get('sidecar_visual_review_coverage_empty_label_count')}"
+                )
+                print(
+                    "Sidecar visual-review human-review started/pending: "
+                    f"{status.get('sidecar_visual_review_human_review_started_count')}/"
+                    f"{status.get('sidecar_visual_review_human_review_pending_count')}"
+                )
+            if status.get("sidecar_visual_review_coverage_report"):
+                print(f"Sidecar visual-review coverage report: {status.get('sidecar_visual_review_coverage_report')}")
+            if status.get("sidecar_visual_label_worklist"):
+                print(f"Sidecar visual-label worklist: {status.get('sidecar_visual_label_worklist')}")
+                print(f"Sidecar visual-label worklist rows: {status.get('sidecar_visual_label_worklist_row_count')}")
+                print(f"Sidecar visual-label worklist candidates: {status.get('sidecar_visual_label_worklist_candidate_count')}")
+                print(
+                    "Sidecar visual-label exact/family-timeframe/context rows: "
+                    f"{status.get('sidecar_visual_label_worklist_exact_variant_count')}/"
+                    f"{status.get('sidecar_visual_label_worklist_family_timeframe_count')}/"
+                    f"{status.get('sidecar_visual_label_worklist_family_context_count')}"
+                )
+            if status.get("sidecar_visual_label_worklist_report"):
+                print(f"Sidecar visual-label worklist report: {status.get('sidecar_visual_label_worklist_report')}")
+            if status.get("sidecar_visual_label_review_batches"):
+                print(f"Sidecar visual-label review batches: {status.get('sidecar_visual_label_review_batches')}")
+                print(f"Sidecar visual-label review batch rows: {status.get('sidecar_visual_label_review_batch_row_count')}")
+                print(f"Sidecar visual-label review batch count: {status.get('sidecar_visual_label_review_batch_count')}")
+                print(
+                    "Sidecar visual-label review batch exact/family-timeframe/context rows: "
+                    f"{status.get('sidecar_visual_label_review_batch_exact_variant_count')}/"
+                    f"{status.get('sidecar_visual_label_review_batch_family_timeframe_count')}/"
+                    f"{status.get('sidecar_visual_label_review_batch_family_context_count')}"
+                )
+            if status.get("sidecar_visual_label_review_batches_report"):
+                print(
+                    "Sidecar visual-label review batches report: "
+                    f"{status.get('sidecar_visual_label_review_batches_report')}"
+                )
+            if status.get("sidecar_visual_label_progress"):
+                print(f"Sidecar visual-label progress: {status.get('sidecar_visual_label_progress')}")
+                print(
+                    "Sidecar visual-label progress matched/pending/completed rows: "
+                    f"{status.get('sidecar_visual_label_progress_matched_rows')}/"
+                    f"{status.get('sidecar_visual_label_progress_pending_rows')}/"
+                    f"{status.get('sidecar_visual_label_progress_completed_rows')}"
+                )
+                print(
+                    "Sidecar visual-label progress not-started/incomplete/complete candidates: "
+                    f"{status.get('sidecar_visual_label_progress_not_started_candidates')}/"
+                    f"{status.get('sidecar_visual_label_progress_incomplete_candidates')}/"
+                    f"{status.get('sidecar_visual_label_progress_complete_candidates')}"
+                )
+                print(
+                    "Sidecar visual-label progress next batch: "
+                    f"{status.get('sidecar_visual_label_progress_next_batch_id') or 'none'}"
+                )
+            if status.get("sidecar_visual_label_progress_report"):
+                print(
+                    "Sidecar visual-label progress report: "
+                    f"{status.get('sidecar_visual_label_progress_report')}"
+                )
+            if status.get("sidecar_visual_label_next_batch"):
+                print(f"Sidecar visual-label next batch: {status.get('sidecar_visual_label_next_batch')}")
+                print(f"Sidecar visual-label next batch id: {status.get('sidecar_visual_label_next_batch_id')}")
+                print(f"Sidecar visual-label next batch rows: {status.get('sidecar_visual_label_next_batch_row_count')}")
+                print(
+                    "Sidecar visual-label next batch exact/family-timeframe/context rows: "
+                    f"{status.get('sidecar_visual_label_next_batch_exact_variant_count')}/"
+                    f"{status.get('sidecar_visual_label_next_batch_family_timeframe_count')}/"
+                    f"{status.get('sidecar_visual_label_next_batch_family_context_count')}"
+                )
+            if status.get("sidecar_visual_label_next_batch_report"):
+                print(
+                    "Sidecar visual-label next batch report: "
+                    f"{status.get('sidecar_visual_label_next_batch_report')}"
+                )
+            if status.get("sidecar_visual_label_next_batch_gallery"):
+                print(
+                    "Sidecar visual-label next batch gallery: "
+                    f"{status.get('sidecar_visual_label_next_batch_gallery')}"
+                )
+            if status.get("sidecar_visual_label_decision_context"):
+                print(
+                    "Sidecar visual-label decision context: "
+                    f"{status.get('sidecar_visual_label_decision_context')}"
+                )
+                print(
+                    "Sidecar visual-label decision context status/rows: "
+                    f"{status.get('sidecar_visual_label_decision_context_status')}/"
+                    f"{status.get('sidecar_visual_label_decision_context_row_count')}"
+                )
+                print(
+                    "Sidecar visual-label decision context false/avoided probes: "
+                    f"{status.get('sidecar_visual_label_decision_context_false_warning_probe_count')}/"
+                    f"{status.get('sidecar_visual_label_decision_context_avoided_downside_probe_count')}"
+                )
+                print(
+                    "Sidecar visual-label decision context pending/gaps: "
+                    f"{status.get('sidecar_visual_label_decision_context_pending_entry_cells')}/"
+                    f"{status.get('sidecar_visual_label_decision_context_entry_reference_gaps')}"
+                )
+            if status.get("sidecar_visual_label_decision_context_report"):
+                print(
+                    "Sidecar visual-label decision context report: "
+                    f"{status.get('sidecar_visual_label_decision_context_report')}"
+                )
+            if status.get("sidecar_visual_label_rubric"):
+                print(f"Sidecar visual-label rubric: {status.get('sidecar_visual_label_rubric')}")
+                print(f"Sidecar visual-label rubric status: {status.get('sidecar_visual_label_rubric_status')}")
+                print(f"Sidecar visual-label rubric batch: {status.get('sidecar_visual_label_rubric_batch_id')}")
+                print(
+                    "Sidecar visual-label rubric required fields: "
+                    f"{status.get('sidecar_visual_label_rubric_required_fields') or 'none'}"
+                )
+            if status.get("sidecar_visual_label_rubric_report"):
+                print(f"Sidecar visual-label rubric report: {status.get('sidecar_visual_label_rubric_report')}")
+            if status.get("sidecar_visual_label_entry_sheet"):
+                print(f"Sidecar visual-label entry sheet: {status.get('sidecar_visual_label_entry_sheet')}")
+                print(f"Sidecar visual-label entry sheet batch: {status.get('sidecar_visual_label_entry_sheet_batch_id')}")
+                print(f"Sidecar visual-label entry sheet rows: {status.get('sidecar_visual_label_entry_sheet_row_count')}")
+                print(
+                    "Sidecar visual-label entry sheet required fields: "
+                    f"{status.get('sidecar_visual_label_entry_sheet_required_fields') or 'none'}"
+                )
+                print(
+                    "Sidecar visual-label entry sheet missing required cells: "
+                    f"{status.get('sidecar_visual_label_entry_sheet_missing_required_cells')}"
+                )
+                print(
+                    "Sidecar visual-label entry sheet source-file/source-row/image gaps: "
+                    f"{status.get('sidecar_visual_label_entry_sheet_missing_source_files')}/"
+                    f"{status.get('sidecar_visual_label_entry_sheet_missing_source_rows')}/"
+                    f"{status.get('sidecar_visual_label_entry_sheet_missing_images')}"
+                )
+            if status.get("sidecar_visual_label_entry_sheet_report"):
+                print(
+                    "Sidecar visual-label entry sheet report: "
+                    f"{status.get('sidecar_visual_label_entry_sheet_report')}"
+                )
+            if status.get("sidecar_visual_label_source_update_manifest"):
+                print(
+                    "Sidecar visual-label source update manifest: "
+                    f"{status.get('sidecar_visual_label_source_update_manifest')}"
+                )
+                print(
+                    "Sidecar visual-label source update rows/pending/cells: "
+                    f"{status.get('sidecar_visual_label_source_update_manifest_row_count')}/"
+                    f"{status.get('sidecar_visual_label_source_update_manifest_pending_update_rows')}/"
+                    f"{status.get('sidecar_visual_label_source_update_manifest_required_update_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source update source-file/source-row/image gaps: "
+                    f"{status.get('sidecar_visual_label_source_update_manifest_missing_source_files')}/"
+                    f"{status.get('sidecar_visual_label_source_update_manifest_missing_source_rows')}/"
+                    f"{status.get('sidecar_visual_label_source_update_manifest_missing_images')}"
+                )
+            if status.get("sidecar_visual_label_source_update_manifest_report"):
+                print(
+                    "Sidecar visual-label source update manifest report: "
+                    f"{status.get('sidecar_visual_label_source_update_manifest_report')}"
+                )
+            if status.get("sidecar_visual_label_source_patch_plan"):
+                print(
+                    "Sidecar visual-label source patch plan: "
+                    f"{status.get('sidecar_visual_label_source_patch_plan')}"
+                )
+                print(
+                    "Sidecar visual-label source patch cells/pending/blocked: "
+                    f"{status.get('sidecar_visual_label_source_patch_plan_cell_count')}/"
+                    f"{status.get('sidecar_visual_label_source_patch_plan_pending_cells')}/"
+                    f"{status.get('sidecar_visual_label_source_patch_plan_blocked_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source patch files/rows: "
+                    f"{status.get('sidecar_visual_label_source_patch_plan_source_files')}/"
+                    f"{status.get('sidecar_visual_label_source_patch_plan_source_rows')}"
+                )
+            if status.get("sidecar_visual_label_source_patch_plan_report"):
+                print(
+                    "Sidecar visual-label source patch plan report: "
+                    f"{status.get('sidecar_visual_label_source_patch_plan_report')}"
+                )
+            if status.get("sidecar_visual_label_completion_audit"):
+                print(f"Sidecar visual-label completion audit: {status.get('sidecar_visual_label_completion_audit')}")
+                print(
+                    "Sidecar visual-label completion audit status: "
+                    f"{status.get('sidecar_visual_label_completion_audit_status')}"
+                )
+                print(
+                    "Sidecar visual-label completion audit rows/completed/missing/invalid: "
+                    f"{status.get('sidecar_visual_label_completion_audit_rows')}/"
+                    f"{status.get('sidecar_visual_label_completion_audit_completed_rows')}/"
+                    f"{status.get('sidecar_visual_label_completion_audit_missing_rows')}/"
+                    f"{status.get('sidecar_visual_label_completion_audit_invalid_rows')}"
+                )
+            if status.get("sidecar_visual_label_completion_audit_report"):
+                print(
+                    "Sidecar visual-label completion audit report: "
+                    f"{status.get('sidecar_visual_label_completion_audit_report')}"
+                )
+            if status.get("sidecar_learning_status"):
+                print(f"Sidecar learning ledger: {status.get('sidecar_learning_status')}")
+                print(f"Sidecar learning candidates: {status.get('sidecar_learning_candidate_count')}")
+                print(
+                    "Sidecar learning lead/control/archive/review/blocked: "
+                    f"{status.get('sidecar_learning_lead_count')}/"
+                    f"{status.get('sidecar_learning_control_count')}/"
+                    f"{status.get('sidecar_learning_archive_count')}/"
+                    f"{status.get('sidecar_learning_review_count')}/"
+                    f"{status.get('sidecar_learning_blocked_count')}"
+                )
+                if status.get("sidecar_learning_ledger_report"):
+                    print(f"Sidecar learning report: {status.get('sidecar_learning_ledger_report')}")
+                if status.get("sidecar_learning_lead_candidate"):
+                    print(f"Sidecar learning lead candidate: {status.get('sidecar_learning_lead_candidate')}")
+                    print(f"Sidecar learning lead next required: {status.get('sidecar_learning_lead_next_required_action') or 'none'}")
+                    print(f"Sidecar learning lead authority: {status.get('sidecar_learning_lead_validation_authority') or 'none'}")
+                if status.get("sidecar_learning_control_candidate"):
+                    print(f"Sidecar learning control candidate: {status.get('sidecar_learning_control_candidate')}")
+                    print(f"Sidecar learning control reason: {status.get('sidecar_learning_control_reason') or 'none'}")
+                    print(f"Sidecar learning control next allowed: {status.get('sidecar_learning_control_next_allowed_action') or 'none'}")
+                if status.get("sidecar_learning_archive_candidate"):
+                    print(f"Sidecar learning archive candidate: {status.get('sidecar_learning_archive_candidate')}")
+                    print(f"Sidecar learning archive reason: {status.get('sidecar_learning_archive_reason') or 'none'}")
+                    print(f"Sidecar learning archive next allowed: {status.get('sidecar_learning_archive_next_allowed_action') or 'none'}")
+            if status.get("sidecar_post_data_playbook"):
+                print(f"Sidecar post-data playbook: {status.get('sidecar_post_data_playbook_status') or 'none'}")
+                print(
+                    "Sidecar post-data action: "
+                    f"{status.get('sidecar_post_data_playbook_current_required_action') or 'none'}"
+                )
+                print(f"Sidecar post-data candidates: {status.get('sidecar_post_data_playbook_candidate_count')}")
+                print(
+                    "Sidecar post-data visual-label status/gate: "
+                    f"{status.get('sidecar_post_data_playbook_visual_label_completion_status') or 'none'}/"
+                    f"{status.get('sidecar_post_data_playbook_visual_label_gate_passed')}"
+                )
+                print(
+                    "Sidecar post-data blockers: "
+                    f"{status.get('sidecar_post_data_playbook_pre_validation_blockers') or 'none'}"
+                )
+                print(
+                    "Sidecar post-data can-execute candidates: "
+                    f"{status.get('sidecar_post_data_playbook_can_execute_count')}"
+                )
+                if status.get("sidecar_post_data_playbook_report"):
+                    print(f"Sidecar post-data report: {status.get('sidecar_post_data_playbook_report')}")
+            if status.get("sidecar_current_handoff"):
+                print(f"Sidecar current handoff: {status.get('sidecar_current_handoff')}")
+                if status.get("sidecar_current_handoff_report"):
+                    print(f"Sidecar current handoff report: {status.get('sidecar_current_handoff_report')}")
+                print(f"Sidecar current handoff status: {status.get('sidecar_current_handoff_status') or 'none'}")
+                print(f"Sidecar current handoff candidates: {status.get('sidecar_current_handoff_candidate_count')}")
+                print(
+                    "Sidecar current handoff required action: "
+                    f"{status.get('sidecar_current_handoff_required_action') or 'none'}"
+                )
+                print(
+                    "Sidecar current handoff historical packet only: "
+                    f"{status.get('sidecar_current_handoff_historical_only')}"
+                )
+                print(
+                    "Sidecar current handoff stale product snapshot: "
+                    f"{status.get('sidecar_current_handoff_stale_product_delta_snapshot_detected')}"
+                )
+                if status.get("sidecar_candidate_decision_matrix"):
+                    print(f"Sidecar candidate decision matrix: {status.get('sidecar_candidate_decision_matrix')}")
+                    print(
+                        "Sidecar candidate decision matrix rows: "
+                        f"{status.get('sidecar_candidate_decision_matrix_row_count')}"
+                    )
+                if status.get("sidecar_candidate_decision_matrix_report"):
+                    print(
+                        "Sidecar candidate decision matrix report: "
+                        f"{status.get('sidecar_candidate_decision_matrix_report')}"
+                    )
+            if status.get("sidecar_current_decision_packet"):
+                print(f"Sidecar current decision packet: {status.get('sidecar_current_decision_packet')}")
+                if status.get("sidecar_current_decision_packet_report"):
+                    print(
+                        "Sidecar current decision packet report: "
+                        f"{status.get('sidecar_current_decision_packet_report')}"
+                    )
+                print(
+                    "Sidecar current decision packet status: "
+                    f"{status.get('sidecar_current_decision_packet_status') or 'none'}"
+                )
+                print(
+                    "Sidecar current decision packet decision: "
+                    f"{status.get('sidecar_current_decision_packet_decision') or 'none'}"
+                )
+                if status.get("sidecar_current_decision_packet_quality_remediation_status"):
+                    print(
+                        "Sidecar current decision packet quality remediation status: "
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_status')}"
+                    )
+                    print(
+                        "Sidecar current decision packet quality remediation required action: "
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_required_action')}"
+                    )
+                    print(
+                        "Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count')}/"
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_human_visual_count')}/"
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_diversity_control_count')}/"
+                        f"{status.get('sidecar_current_decision_packet_quality_remediation_archive_only_count')}"
+                    )
+            if status.get("sidecar_evidence_consistency_audit"):
+                print(f"Sidecar evidence consistency audit: {status.get('sidecar_evidence_consistency_audit')}")
+                if status.get("sidecar_evidence_consistency_audit_report"):
+                    print(
+                        "Sidecar evidence consistency audit report: "
+                        f"{status.get('sidecar_evidence_consistency_audit_report')}"
+                    )
+                print(
+                    "Sidecar evidence consistency audit status: "
+                    f"{status.get('sidecar_evidence_consistency_audit_status') or 'none'}"
+                )
+                print(
+                    "Sidecar evidence consistency audit checks/issues: "
+                    f"{status.get('sidecar_evidence_consistency_audit_check_count')}/"
+                    f"{status.get('sidecar_evidence_consistency_audit_issue_count')}"
+                )
+            if status.get("sidecar_quality_status"):
+                print(f"Sidecar quality status: {status.get('sidecar_quality_status')}")
+                print(
+                    "Sidecar quality hard/advisory issues: "
+                    f"{status.get('sidecar_quality_hard_issue_count')}/"
+                    f"{status.get('sidecar_quality_advisory_issue_count')}"
+                )
+                if status.get("sidecar_quality_advisory_issue_summary"):
+                    print(f"Sidecar quality advisory summary: {status.get('sidecar_quality_advisory_issue_summary')}")
+                if status.get("sidecar_quality_hard_issue_summary"):
+                    print(f"Sidecar quality hard summary: {status.get('sidecar_quality_hard_issue_summary')}")
+                if status.get("sidecar_quality_report"):
+                    print(f"Sidecar quality report: {status.get('sidecar_quality_report')}")
+            if status.get("sidecar_quality_remediation_plan"):
+                print(f"Sidecar quality remediation plan: {status.get('sidecar_quality_remediation_plan')}")
+                if status.get("sidecar_quality_remediation_plan_report"):
+                    print(
+                        "Sidecar quality remediation plan report: "
+                        f"{status.get('sidecar_quality_remediation_plan_report')}"
+                    )
+                print(
+                    "Sidecar quality remediation plan status: "
+                    f"{status.get('sidecar_quality_remediation_plan_status') or 'none'}"
+                )
+                print(
+                    "Sidecar quality remediation required action: "
+                    f"{status.get('sidecar_quality_remediation_plan_current_required_action') or 'none'}"
+                )
+                print(
+                    "Sidecar quality remediation autonomous/human/diversity/archive: "
+                    f"{status.get('sidecar_quality_remediation_plan_autonomous_clearable_now_count')}/"
+                    f"{status.get('sidecar_quality_remediation_plan_human_visual_remediation_count')}/"
+                    f"{status.get('sidecar_quality_remediation_plan_diversity_control_remediation_count')}/"
+                    f"{status.get('sidecar_quality_remediation_plan_archive_only_count')}"
+                )
+            if status.get("evidence_debt_status"):
+                print(f"Evidence debt register: {status.get('evidence_debt_status')}")
+                print(f"Evidence debt count: {status.get('evidence_debt_count')}")
+                print(
+                    "Evidence debt candidate/global/archive: "
+                    f"{status.get('evidence_debt_candidate_count')}/"
+                    f"{status.get('evidence_debt_global_count')}/"
+                    f"{status.get('evidence_debt_archived_candidate_count')}"
+                )
+                if status.get("evidence_debt_next_action"):
+                    print(f"Evidence debt next action: {status.get('evidence_debt_next_action')}")
+                if status.get("evidence_debt_current_runtime_handoff_action"):
+                    print(
+                        "Evidence debt current handoff: "
+                        f"{status.get('evidence_debt_current_runtime_handoff_action')}"
+                    )
+                    print(
+                        "Evidence debt handoff status: "
+                        f"{status.get('evidence_debt_current_runtime_handoff_status')}"
+                    )
+                    print(
+                        "Evidence debt strategic blocked by handoff: "
+                        f"{status.get('evidence_debt_strategic_blocked_by_current_handoff')}"
+                    )
+                if status.get("evidence_debt_register_report"):
+                    print(f"Evidence debt report: {status.get('evidence_debt_register_report')}")
             print(f"Next action: {status.get('next_recommended_action')}")
             return 0
         if action == "heartbeat-plan":
@@ -2517,6 +3601,8 @@ def ceo_command(args: argparse.Namespace) -> int:
             situation = brief.get("current_situation", {}) or {}
             print(f"CEO operator brief: {result['paths']['operator_brief']}")
             print(f"CEO operator brief report: {result['paths']['operator_brief_report']}")
+            print(f"Manual gate clearance packet: {result['paths'].get('manual_gate_clearance_packet')}")
+            print(f"Manual gate clearance report: {result['paths'].get('manual_gate_clearance_packet_report')}")
             print(f"Status: {brief.get('status')}")
             print(f"Summary: {brief.get('plain_english_summary')}")
             print(f"Effective operator status: {situation.get('effective_operator_status') or 'unknown_or_diagnostic'}")
@@ -2537,12 +3623,174 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Trace recommended next action: {trace.get('recommended_next_action') or 'none'}")
             print(f"Trace manual data import required: {trace.get('manual_data_import_required') if trace.get('manual_data_import_required') != '' else 'n/a'}")
             print(f"Trace issues: {trace.get('issues') or []}")
+            clearance = brief.get("manual_gate_clearance", {}) or {}
+            if clearance:
+                print(f"Manual gate clearance status: {clearance.get('status')}")
+                print(
+                    "Manual gate clearance can start post-data validation: "
+                    f"{clearance.get('can_start_post_data_validation')}"
+                )
+                print(
+                    "Manual gate clearance blocked gates/count: "
+                    f"{clearance.get('blocked_gates') or 'none'}/"
+                    f"{clearance.get('blocked_gate_count')}"
+                )
+                print(
+                    "Manual gate clearance first blocker/action: "
+                    f"{clearance.get('first_blocking_gate') or 'none'}/"
+                    f"{clearance.get('first_blocking_required_action') or 'none'}"
+                )
+                print(
+                    "Manual gate clearance data/visual/can-execute: "
+                    f"{clearance.get('pending_data_imports')}/"
+                    f"{clearance.get('pending_visual_label_cells')}/"
+                    f"{clearance.get('post_data_can_execute_count')}"
+                )
             approval = brief.get("approval_work", {}) or {}
             print(f"Approval status: {approval.get('status') or 'none'}")
             print(f"Approval pending: {approval.get('pending_count') if approval.get('pending_count') != '' else 'n/a'}")
             print(f"Approval top id: {approval.get('top_pending_approval_id') or 'none'}")
             print(f"Approval record command: {approval.get('approval_record_command') or 'none'}")
             print(f"Approval apply command: {approval.get('approval_apply_command') or 'none'}")
+            sidecar = brief.get("sidecar_current_decision", {}) or {}
+            print(f"Sidecar current decision status: {sidecar.get('status') or 'missing_sidecar_current_decision_packet'}")
+            print(f"Sidecar current decision: {sidecar.get('decision') or 'none'}")
+            print(f"Sidecar current required action: {sidecar.get('required_action') or 'none'}")
+            print(f"Sidecar current candidates: {sidecar.get('candidate_count') if sidecar.get('candidate_count') != '' else 'n/a'}")
+            print(
+                "Sidecar quality remediation status: "
+                f"{sidecar.get('quality_remediation_status') or 'none'}"
+            )
+            print(
+                "Sidecar quality remediation required action: "
+                f"{sidecar.get('quality_remediation_required_action') or 'none'}"
+            )
+            print(
+                "Sidecar quality remediation autonomous/human/diversity/archive: "
+                f"{sidecar.get('quality_remediation_autonomous_clearable_now_count')}/"
+                f"{sidecar.get('quality_remediation_human_visual_count')}/"
+                f"{sidecar.get('quality_remediation_diversity_control_count')}/"
+                f"{sidecar.get('quality_remediation_archive_only_count')}"
+            )
+            data_gate = brief.get("data_gate_work", {}) or {}
+            if data_gate:
+                data_gate_paths = data_gate.get("paths", {}) or {}
+                print(f"Data gate work status: {data_gate.get('status') or 'none'}")
+                print(f"Data gate universe: {data_gate.get('universe') or 'none'}")
+                print(f"Data gate preflight status: {data_gate.get('preflight_status') or 'none'}")
+                print(f"Data gate safe fresh validation: {data_gate.get('safe_to_run_fresh_validation')}")
+                print(f"Data gate required timeframes: {data_gate.get('required_timeframes') or 'none'}")
+                print(f"Data gate timeframe statuses: {data_gate.get('timeframe_statuses') or 'none'}")
+                print(f"Data gate required CSVs: {data_gate.get('required_csv_count')}")
+                print(f"Data gate required batches: {data_gate.get('required_batch_count')}")
+                print(f"Data gate import batch rows: {data_gate.get('import_batch_row_count')}")
+                print(
+                    "Data gate import checklist rows/pending/ready: "
+                    f"{data_gate.get('import_checklist_row_count')}/"
+                    f"{data_gate.get('import_checklist_pending_imports')}/"
+                    f"{data_gate.get('import_checklist_complete_ready')}"
+                )
+                print(
+                    "Data gate import checklist missing/stale: "
+                    f"{data_gate.get('import_checklist_missing_count')}/"
+                    f"{data_gate.get('import_checklist_stale_count')}"
+                )
+                print(
+                    "Data gate handoff audit status/checks/issues: "
+                    f"{data_gate.get('handoff_audit_status') or 'none'}/"
+                    f"{data_gate.get('handoff_audit_check_count')}/"
+                    f"{data_gate.get('handoff_audit_issue_count')}"
+                )
+                print(f"Data gate symbol matrix rows: {data_gate.get('symbol_matrix_row_count')}")
+                print(f"Data gate candidate unlocks: {data_gate.get('candidate_unlock_count')}")
+                print(f"Data gate CSV requirement rows: {data_gate.get('csv_requirement_row_count')}")
+                print(f"Data gate next verification command: {data_gate.get('next_verification_command') or 'none'}")
+                print(f"Data gate import plan: {data_gate_paths.get('import_plan') or 'none'}")
+                print(f"Data gate import batches: {data_gate_paths.get('import_batches') or 'none'}")
+                print(f"Data gate import checklist: {data_gate_paths.get('import_checklist') or 'none'}")
+                print(f"Data gate import checklist report: {data_gate_paths.get('import_checklist_report') or 'none'}")
+                print(f"Data gate handoff audit: {data_gate_paths.get('handoff_audit') or 'none'}")
+                print(f"Data gate handoff audit report: {data_gate_paths.get('handoff_audit_report') or 'none'}")
+                print(f"Data gate symbol matrix: {data_gate_paths.get('symbol_matrix') or 'none'}")
+                print(f"Data gate candidate unlocks file: {data_gate_paths.get('candidate_unlocks') or 'none'}")
+                print(f"Data gate CSV requirements: {data_gate_paths.get('csv_requirements') or 'none'}")
+                print(f"Data gate fresh preflight: {data_gate_paths.get('fresh_data_preflight') or 'none'}")
+            visual_labels = brief.get("sidecar_visual_label_work", {}) or {}
+            if visual_labels:
+                visual_paths = visual_labels.get("paths", {}) or {}
+                print(f"Sidecar visual-label work status: {visual_labels.get('status') or 'none'}")
+                print(f"Sidecar visual-label next batch: {visual_labels.get('next_batch_id') or 'none'}")
+                print(f"Sidecar visual-label required fields: {visual_labels.get('required_fields') or 'none'}")
+                print(
+                    "Sidecar visual-label progress matched/pending/completed rows: "
+                    f"{visual_labels.get('progress_matched_rows')}/"
+                    f"{visual_labels.get('progress_pending_rows')}/"
+                    f"{visual_labels.get('progress_completed_rows')}"
+                )
+                print(f"Sidecar visual-label next batch rows: {visual_labels.get('next_batch_row_count')}")
+                print(
+                    "Sidecar visual-label entry sheet rows/missing cells: "
+                    f"{visual_labels.get('entry_sheet_row_count')}/"
+                    f"{visual_labels.get('entry_sheet_missing_required_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source update rows/pending/cells: "
+                    f"{visual_labels.get('source_update_row_count')}/"
+                    f"{visual_labels.get('source_update_pending_rows')}/"
+                    f"{visual_labels.get('source_update_required_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source patch cells/pending/blocked: "
+                    f"{visual_labels.get('source_patch_plan_cell_count')}/"
+                    f"{visual_labels.get('source_patch_plan_pending_cells')}/"
+                    f"{visual_labels.get('source_patch_plan_blocked_cells')}"
+                )
+                print(
+                    "Sidecar visual-label source patch files/rows: "
+                    f"{visual_labels.get('source_patch_plan_source_files')}/"
+                    f"{visual_labels.get('source_patch_plan_source_rows')}"
+                )
+                print(
+                    "Sidecar visual-label completion audit rows/completed/missing/invalid: "
+                    f"{visual_labels.get('completion_audit_rows')}/"
+                    f"{visual_labels.get('completion_audit_completed_rows')}/"
+                    f"{visual_labels.get('completion_audit_missing_rows')}/"
+                    f"{visual_labels.get('completion_audit_invalid_rows')}"
+                )
+                print(f"Sidecar visual-label next batch file: {visual_paths.get('next_batch') or 'none'}")
+                print(f"Sidecar visual-label next batch gallery: {visual_paths.get('next_batch_gallery') or 'none'}")
+                print(f"Sidecar visual-label entry sheet: {visual_paths.get('entry_sheet') or 'none'}")
+                print(
+                    "Sidecar visual-label source update manifest: "
+                    f"{visual_paths.get('source_update_manifest') or 'none'}"
+                )
+                print(
+                    "Sidecar visual-label source patch plan: "
+                    f"{visual_paths.get('source_patch_plan') or 'none'}"
+                )
+                print(f"Sidecar visual-label rubric: {visual_paths.get('rubric') or 'none'}")
+                print(
+                    "Sidecar visual-label completion audit: "
+                    f"{visual_paths.get('completion_audit_yaml') or visual_paths.get('completion_audit') or 'none'}"
+                )
+            post_data = brief.get("sidecar_post_data_work", {}) or {}
+            if post_data:
+                post_data_paths = post_data.get("paths", {}) or {}
+                print(f"Sidecar post-data playbook status: {post_data.get('status') or 'none'}")
+                print(
+                    "Sidecar post-data required action: "
+                    f"{post_data.get('current_required_action') or 'none'}"
+                )
+                print(f"Sidecar post-data candidates: {post_data.get('candidate_count')}")
+                print(
+                    "Sidecar post-data visual-label status/gate: "
+                    f"{post_data.get('visual_label_completion_status') or 'none'}/"
+                    f"{post_data.get('visual_label_gate_passed')}"
+                )
+                print(f"Sidecar post-data blockers: {post_data.get('pre_validation_blockers') or 'none'}")
+                print(f"Sidecar post-data can-execute candidates: {post_data.get('can_execute_count')}")
+                print(f"Sidecar post-data playbook: {post_data_paths.get('playbook') or 'none'}")
+                print(f"Sidecar post-data playbook report: {post_data_paths.get('playbook_report') or 'none'}")
             specialist = brief.get("specialist_work", {}) or {}
             print(f"Specialist status: {specialist.get('status') or 'none'}")
             print(f"Specialist pending: {specialist.get('pending_task_count') if specialist.get('pending_task_count') != '' else 'n/a'}")
@@ -2614,6 +3862,300 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Debts: {register.get('debt_count')}")
             print(f"Next action: {register.get('next_action')}")
             return 0
+        if action == "sidecar-evidence-brief":
+            result = run_ceo_sidecar_evidence_brief(options)
+            brief = result["brief"]
+            print(f"Sidecar evidence brief: {result['paths']['sidecar_evidence_brief']}")
+            print(f"Sidecar evidence report: {result['paths']['sidecar_evidence_brief_report']}")
+            print(f"Sidecar candidate table: {result['paths']['sidecar_evidence_candidates']}")
+            print(f"Sidecar visual-review handoff table: {result['paths']['sidecar_visual_review_handoff']}")
+            print(f"Sidecar visual-review coverage: {result['paths']['sidecar_visual_review_coverage']}")
+            print(f"Sidecar visual-review coverage report: {result['paths']['sidecar_visual_review_coverage_report']}")
+            print(f"Sidecar visual-label worklist: {result['paths']['sidecar_visual_label_worklist']}")
+            print(f"Sidecar visual-label worklist report: {result['paths']['sidecar_visual_label_worklist_report']}")
+            print(f"Sidecar visual-label review batches: {result['paths']['sidecar_visual_label_review_batches']}")
+            print(
+                "Sidecar visual-label review batches report: "
+                f"{result['paths']['sidecar_visual_label_review_batches_report']}"
+            )
+            print(f"Sidecar visual-label progress: {result['paths']['sidecar_visual_label_progress']}")
+            print(f"Sidecar visual-label progress report: {result['paths']['sidecar_visual_label_progress_report']}")
+            print(f"Sidecar visual-label next batch: {result['paths']['sidecar_visual_label_next_batch']}")
+            print(
+                "Sidecar visual-label next batch report: "
+                f"{result['paths']['sidecar_visual_label_next_batch_report']}"
+            )
+            print(
+                "Sidecar visual-label next batch gallery: "
+                f"{result['paths']['sidecar_visual_label_next_batch_gallery']}"
+            )
+            print(
+                "Sidecar visual-label decision context: "
+                f"{result['paths']['sidecar_visual_label_decision_context']}"
+            )
+            print(
+                "Sidecar visual-label decision context report: "
+                f"{result['paths']['sidecar_visual_label_decision_context_report']}"
+            )
+            decision_context = result.get("visual_label_decision_context", {}) or {}
+            print(
+                "Sidecar visual-label decision context status/rows: "
+                f"{decision_context.get('status')}/"
+                f"{decision_context.get('row_count')}"
+            )
+            print(
+                "Sidecar visual-label decision context false/avoided probes: "
+                f"{decision_context.get('missed_upside_false_warning_probe_count')}/"
+                f"{decision_context.get('avoided_downside_warning_probe_count')}"
+            )
+            print(f"Sidecar visual-label rubric: {result['paths']['sidecar_visual_label_rubric']}")
+            print(f"Sidecar visual-label rubric report: {result['paths']['sidecar_visual_label_rubric_report']}")
+            print(f"Sidecar visual-label entry sheet: {result['paths']['sidecar_visual_label_entry_sheet']}")
+            print(
+                "Sidecar visual-label entry sheet report: "
+                f"{result['paths']['sidecar_visual_label_entry_sheet_report']}"
+            )
+            print(
+                "Sidecar visual-label source update manifest: "
+                f"{result['paths']['sidecar_visual_label_source_update_manifest']}"
+            )
+            print(
+                "Sidecar visual-label source update manifest report: "
+                f"{result['paths']['sidecar_visual_label_source_update_manifest_report']}"
+            )
+            print(
+                "Sidecar visual-label source patch plan: "
+                f"{result['paths']['sidecar_visual_label_source_patch_plan']}"
+            )
+            print(
+                "Sidecar visual-label source patch plan YAML: "
+                f"{result['paths']['sidecar_visual_label_source_patch_plan_yaml']}"
+            )
+            print(
+                "Sidecar visual-label source patch plan report: "
+                f"{result['paths']['sidecar_visual_label_source_patch_plan_report']}"
+            )
+            source_patch_plan = result.get("visual_label_source_patch_plan", {}) or {}
+            print(
+                "Sidecar visual-label source patch cells/pending/blocked: "
+                f"{source_patch_plan.get('source_patch_cell_count')}/"
+                f"{source_patch_plan.get('pending_source_patch_cell_count')}/"
+                f"{source_patch_plan.get('blocked_source_patch_cell_count')}"
+            )
+            print(
+                "Sidecar visual-label source patch files/rows: "
+                f"{source_patch_plan.get('source_file_count')}/"
+                f"{source_patch_plan.get('source_row_count')}"
+            )
+            print(
+                "Sidecar visual-label completion audit: "
+                f"{result['paths']['sidecar_visual_label_completion_audit']}"
+            )
+            print(
+                "Sidecar visual-label completion audit YAML: "
+                f"{result['paths']['sidecar_visual_label_completion_audit_yaml']}"
+            )
+            print(
+                "Sidecar visual-label completion audit report: "
+                f"{result['paths']['sidecar_visual_label_completion_audit_report']}"
+            )
+            print(
+                "Sidecar champion/challenger evidence table: "
+                f"{result['paths']['sidecar_champion_challenger_evidence']}"
+            )
+            print(
+                "Sidecar champion/challenger quality audit: "
+                f"{result['paths']['sidecar_champion_challenger_quality_audit']}"
+            )
+            print(
+                "Sidecar champion/challenger quality audit report: "
+                f"{result['paths']['sidecar_champion_challenger_quality_audit_report']}"
+            )
+            print(f"Sidecar quality remediation plan: {result['paths']['sidecar_quality_remediation_plan']}")
+            print(
+                "Sidecar quality remediation plan report: "
+                f"{result['paths']['sidecar_quality_remediation_plan_report']}"
+            )
+            print(f"Sidecar evidence gap matrix: {result['paths']['sidecar_evidence_gap_matrix']}")
+            print(f"Sidecar candidate readiness summary: {result['paths']['sidecar_candidate_readiness_summary']}")
+            print(
+                "Sidecar candidate readiness summary report: "
+                f"{result['paths']['sidecar_candidate_readiness_summary_report']}"
+            )
+            print(f"Sidecar validation queue: {result['paths']['sidecar_validation_queue']}")
+            print(f"Sidecar validation queue report: {result['paths']['sidecar_validation_queue_report']}")
+            print(
+                "Sidecar champion/challenger validation design: "
+                f"{result['paths']['sidecar_champion_challenger_validation_design']}"
+            )
+            print(
+                "Sidecar champion/challenger validation design report: "
+                f"{result['paths']['sidecar_champion_challenger_validation_design_report']}"
+            )
+            print(f"Sidecar data-gate unlock matrix: {result['paths']['sidecar_data_gate_unlock_matrix']}")
+            print(f"Sidecar data-gate unlock matrix YAML: {result['paths']['sidecar_data_gate_unlock_matrix_yaml']}")
+            print(f"Sidecar data-gate unlock matrix report: {result['paths']['sidecar_data_gate_unlock_matrix_report']}")
+            print(f"Sidecar evidence consistency audit: {result['paths']['sidecar_evidence_consistency_audit']}")
+            print(
+                "Sidecar evidence consistency audit report: "
+                f"{result['paths']['sidecar_evidence_consistency_audit_report']}"
+            )
+            print(f"Sidecar evidence consistency audit status: {result['consistency_audit'].get('status')}")
+            print(
+                "Sidecar evidence consistency audit checks/issues: "
+                f"{result['consistency_audit'].get('check_count')}/"
+                f"{result['consistency_audit'].get('issue_count')}"
+            )
+            print(f"Sidecar evidence packet index: {result['paths']['sidecar_evidence_packet_index']}")
+            print(f"Sidecar evidence packet index report: {result['paths']['sidecar_evidence_packet_index_report']}")
+            print(f"Sidecar candidate decision cards: {result['paths']['sidecar_candidate_decision_cards']}")
+            print(f"Sidecar current decision packet: {result['paths']['sidecar_current_decision_packet']}")
+            print(
+                "Sidecar current decision packet report: "
+                f"{result['paths']['sidecar_current_decision_packet_report']}"
+            )
+            print(f"Sidecar shadow guardrail audit: {result['paths']['sidecar_shadow_guardrail_audit']}")
+            print(f"Sidecar shadow guardrail report: {result['paths']['sidecar_shadow_guardrail_audit_report']}")
+            print(f"Sidecar evidence source manifest: {result['paths']['sidecar_evidence_source_manifest']}")
+            print(f"Sidecar evidence source health: {result['paths']['sidecar_evidence_source_health']}")
+            print(f"Sidecar evidence source health YAML: {result['paths']['sidecar_evidence_source_health_yaml']}")
+            print(f"Sidecar evidence source health report: {result['paths']['sidecar_evidence_source_health_report']}")
+            print(f"Sidecar evidence source fingerprints: {result['paths']['sidecar_evidence_source_fingerprints']}")
+            print(
+                "Sidecar evidence source fingerprints YAML: "
+                f"{result['paths']['sidecar_evidence_source_fingerprints_yaml']}"
+            )
+            print(
+                "Sidecar evidence source fingerprints report: "
+                f"{result['paths']['sidecar_evidence_source_fingerprints_report']}"
+            )
+            print(f"Sidecar candidate learning ledger: {result['paths']['sidecar_candidate_learning_ledger']}")
+            print(
+                "Sidecar candidate learning ledger YAML: "
+                f"{result['paths']['sidecar_candidate_learning_ledger_yaml']}"
+            )
+            print(
+                "Sidecar candidate learning ledger report: "
+                f"{result['paths']['sidecar_candidate_learning_ledger_report']}"
+            )
+            print(
+                "Sidecar post-data validation playbook: "
+                f"{result['paths']['sidecar_post_data_validation_playbook']}"
+            )
+            print(
+                "Sidecar post-data validation playbook report: "
+                f"{result['paths']['sidecar_post_data_validation_playbook_report']}"
+            )
+            post_data_playbook = result.get("post_data_playbook", {}) or {}
+            print(f"Sidecar post-data playbook status: {post_data_playbook.get('status')}")
+            print(
+                "Sidecar post-data required action: "
+                f"{post_data_playbook.get('current_required_action') or 'none'}"
+            )
+            print(
+                "Sidecar post-data visual-label status/gate: "
+                f"{post_data_playbook.get('visual_label_completion_status') or 'none'}/"
+                f"{post_data_playbook.get('visual_label_gate_passed')}"
+            )
+            print(
+                "Sidecar post-data blockers: "
+                f"{'|'.join(str(item) for item in post_data_playbook.get('pre_validation_blockers', []) or []) or 'none'}"
+            )
+            print(
+                "Sidecar post-data can-execute candidates: "
+                f"{sum(1 for candidate in post_data_playbook.get('candidates', []) or [] if candidate.get('can_execute_now') is True)}"
+            )
+            print(f"Sidecar current handoff: {result['paths']['sidecar_current_handoff']}")
+            print(f"Sidecar current handoff report: {result['paths']['sidecar_current_handoff_report']}")
+            print(f"Sidecar candidate decision matrix: {result['paths']['sidecar_candidate_decision_matrix']}")
+            print(
+                "Sidecar candidate decision matrix report: "
+                f"{result['paths']['sidecar_candidate_decision_matrix_report']}"
+            )
+            print(f"Sidecar frozen-spec review table: {result['paths']['sidecar_frozen_spec_review']}")
+            guardrail = result["guardrail_audit"]
+            quality = result["champion_challenger_quality"]
+            source_health = result["source_health"]
+            source_fingerprints = result["source_fingerprints"]
+            candidate_learning_ledger = result["candidate_learning_ledger"]
+            print(f"Status: {brief.get('status')}")
+            print(f"Guardrail status: {guardrail.get('status')}")
+            print(f"Guardrail violations: {guardrail.get('violation_count')}")
+            print(f"Champion/challenger quality status: {quality.get('status')}")
+            print(f"Champion/challenger quality issues: {quality.get('issue_count')}")
+            print(f"Source health status: {source_health.get('status')}")
+            print(f"Source health issues: {source_health.get('issue_count')}")
+            print(f"Source fingerprints status: {source_fingerprints.get('status')}")
+            print(f"Source fingerprints issues: {source_fingerprints.get('issue_count')}")
+            print(f"Candidate learning ledger status: {candidate_learning_ledger.get('status')}")
+            print(
+                "Candidate learning ledger lead/control/archive/review/blocked: "
+                f"{candidate_learning_ledger.get('lead_post_data_candidate_count')}/"
+                f"{candidate_learning_ledger.get('diversity_control_only_count')}/"
+                f"{candidate_learning_ledger.get('archive_failure_mode_count')}/"
+                f"{candidate_learning_ledger.get('review_only_candidate_count')}/"
+                f"{candidate_learning_ledger.get('quality_blocked_review_only_count')}"
+            )
+            print(f"Candidate count: {brief.get('candidate_count')}")
+            print(f"Ready visual review: {brief.get('ready_visual_review_count')}")
+            print(f"Fresh-data blocked: {brief.get('fresh_data_blocked_count')}")
+            print(f"Review-only frozen specs: {brief.get('review_only_frozen_spec_count')}")
+            print(f"Official frozen plan exists: {brief.get('official_frozen_candidate_validation_plan_exists')}")
+            print(f"Manual data gate active: {brief.get('manual_data_gate_active')}")
+            print(f"Next action: {brief.get('next_action')}")
+            return 0
+        if action == "data-gate-brief":
+            result = run_ceo_data_gate_brief(options)
+            brief = result["brief"]
+            print(f"Data gate brief: {result['paths']['data_gate_brief']}")
+            print(f"Data gate report: {result['paths']['data_gate_brief_report']}")
+            print(f"CSV requirement table: {result['paths']['data_gate_csv_requirements']}")
+            print(f"Candidate unlock table: {result['paths']['data_gate_candidate_unlocks']}")
+            print(f"Import plan: {result['paths']['data_gate_import_plan']}")
+            print(f"Import plan report: {result['paths']['data_gate_import_plan_report']}")
+            print(f"Import batch table: {result['paths']['data_gate_import_batches']}")
+            print(f"Import checklist: {result['paths']['data_gate_import_checklist']}")
+            print(f"Import checklist YAML: {result['paths']['data_gate_import_checklist_yaml']}")
+            print(f"Import checklist report: {result['paths']['data_gate_import_checklist_report']}")
+            print(f"Symbol matrix: {result['paths']['data_gate_symbol_matrix']}")
+            print(f"Symbol matrix report: {result['paths']['data_gate_symbol_matrix_report']}")
+            print(f"Handoff audit: {result['paths']['data_gate_handoff_audit']}")
+            print(f"Handoff audit report: {result['paths']['data_gate_handoff_audit_report']}")
+            print(f"Status: {brief.get('status')}")
+            print(f"Preflight status: {brief.get('preflight_status')}")
+            print(f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}")
+            print(f"Manual data gate active: {brief.get('manual_data_gate_active')}")
+            print(f"Required timeframes: {brief.get('required_timeframes') or []}")
+            print(f"CSV requirements: {brief.get('csv_requirement_count')}")
+            print(f"Import batches: {result['import_plan'].get('required_batch_count')}")
+            print(
+                "Import checklist rows/pending/ready: "
+                f"{result['import_checklist'].get('checklist_row_count')}/"
+                f"{result['import_checklist'].get('pending_import_count')}/"
+                f"{result['import_checklist'].get('complete_ready_count')}"
+            )
+            print(f"Handoff audit status: {result['handoff_audit'].get('status')}")
+            print(
+                "Handoff audit checks/issues: "
+                f"{result['handoff_audit'].get('check_count')}/"
+                f"{result['handoff_audit'].get('issue_count')}"
+            )
+            print(f"Symbol matrix rows: {result['symbol_matrix'].get('symbol_count')}")
+            print(f"Blocked candidates: {brief.get('blocked_candidate_count')}")
+            print(f"Candidate unlocks: {brief.get('candidate_unlock_count')}")
+            print(f"Sidecar learning ledger: {brief.get('sidecar_learning_status')}")
+            print(
+                "Sidecar learning lead/control/archive/review/blocked: "
+                f"{brief.get('sidecar_learning_lead_count')}/"
+                f"{brief.get('sidecar_learning_control_count')}/"
+                f"{brief.get('sidecar_learning_archive_count')}/"
+                f"{brief.get('sidecar_learning_review_count')}/"
+                f"{brief.get('sidecar_learning_blocked_count')}"
+            )
+            print(f"Fresh-data role blockers: {brief.get('fresh_data_role_blocker_count')}")
+            print(f"Next action: {brief.get('next_action')}")
+            print(f"Next verification command: {brief.get('next_verification_command')}")
+            return 0
         if action == "approval-queue":
             result = run_ceo_approval_queue(options)
             queue = result["queue"]
@@ -2680,6 +4222,23 @@ def ceo_command(args: argparse.Namespace) -> int:
             print(f"Runtime authority note: {kpis.get('runtime_authority_note') or 'check ceo status before dispatch'}")
             print(f"Open approvals: {values.get('open_approval_count')}")
             print(f"Evidence debt: {values.get('evidence_debt_count')}")
+            print(f"Candidates: {values.get('candidate_count')}")
+            print(
+                "Sidecar learning ledger: "
+                f"{values.get('sidecar_learning_status') or 'missing_sidecar_candidate_learning_ledger'}"
+            )
+            if values.get("sidecar_learning_status") and values.get(
+                "sidecar_learning_status"
+            ) != "missing_sidecar_candidate_learning_ledger":
+                print(f"Sidecar learning candidates: {values.get('sidecar_learning_candidate_count')}")
+                print(
+                    "Sidecar learning lead/control/archive/review/blocked: "
+                    f"{values.get('sidecar_learning_lead_count')}/"
+                    f"{values.get('sidecar_learning_control_count')}/"
+                    f"{values.get('sidecar_learning_archive_count')}/"
+                    f"{values.get('sidecar_learning_review_count')}/"
+                    f"{values.get('sidecar_learning_blocked_count')}"
+                )
             print(f"Trace verdict: {values.get('trace_verdict') or 'none'}")
             print(f"Trace score: {values.get('trace_score') if values.get('trace_score') != '' else 'n/a'}")
             print(f"Trace recommended next action: {values.get('trace_recommended_next_action') or 'none'}")
@@ -2864,6 +4423,114 @@ def ceo_command(args: argparse.Namespace) -> int:
                     "Latest artifact coherence top issue severity: "
                     f"{latest.get('artifact_coherence_top_issue_severity') or 'unknown'}"
                 )
+                print(f"Latest data gate: {latest.get('data_gate_brief_status') or 'missing_data_gate_brief'}")
+                if latest.get("data_gate_brief_status") and latest.get("data_gate_brief_status") != "missing_data_gate_brief":
+                    print(f"Latest data gate safe fresh validation: {latest.get('data_gate_safe_to_run_fresh_validation')}")
+                    print(f"Latest data gate CSV requirements: {latest.get('data_gate_csv_requirement_count')}")
+                    print(f"Latest data gate blocked candidates: {latest.get('data_gate_blocked_candidate_count')}")
+                    print(f"Latest data gate role blockers: {latest.get('data_gate_role_blocker_count')}")
+                    print(f"Latest data gate next action: {latest.get('data_gate_next_action') or 'none'}")
+                    print(f"Latest data gate next verification: {latest.get('data_gate_next_verification_command') or 'none'}")
+                print(
+                    "Latest sidecar learning ledger: "
+                    f"{latest.get('sidecar_learning_status') or 'missing_sidecar_candidate_learning_ledger'}"
+                )
+                if latest.get("sidecar_learning_status") and latest.get(
+                    "sidecar_learning_status"
+                ) != "missing_sidecar_candidate_learning_ledger":
+                    print(f"Latest sidecar learning candidates: {latest.get('sidecar_learning_candidate_count')}")
+                    print(
+                        "Latest sidecar learning lead/control/archive/review/blocked: "
+                        f"{latest.get('sidecar_learning_lead_count')}/"
+                        f"{latest.get('sidecar_learning_control_count')}/"
+                        f"{latest.get('sidecar_learning_archive_count')}/"
+                        f"{latest.get('sidecar_learning_review_count')}/"
+                        f"{latest.get('sidecar_learning_blocked_count')}"
+                    )
+                    if latest.get("sidecar_learning_lead_candidate"):
+                        print(f"Latest sidecar learning lead candidate: {latest.get('sidecar_learning_lead_candidate')}")
+                        print(f"Latest sidecar learning lead next required: {latest.get('sidecar_learning_lead_next_required_action') or 'none'}")
+                        print(f"Latest sidecar learning lead authority: {latest.get('sidecar_learning_lead_validation_authority') or 'none'}")
+                    if latest.get("sidecar_learning_control_candidate"):
+                        print(f"Latest sidecar learning control candidate: {latest.get('sidecar_learning_control_candidate')}")
+                        print(f"Latest sidecar learning control reason: {latest.get('sidecar_learning_control_reason') or 'none'}")
+                        print(f"Latest sidecar learning control next allowed: {latest.get('sidecar_learning_control_next_allowed_action') or 'none'}")
+                    if latest.get("sidecar_learning_archive_candidate"):
+                        print(f"Latest sidecar learning archive candidate: {latest.get('sidecar_learning_archive_candidate')}")
+                        print(f"Latest sidecar learning archive reason: {latest.get('sidecar_learning_archive_reason') or 'none'}")
+                        print(f"Latest sidecar learning archive next allowed: {latest.get('sidecar_learning_archive_next_allowed_action') or 'none'}")
+                if latest.get("sidecar_post_data_playbook_status"):
+                    print(f"Latest sidecar post-data playbook: {latest.get('sidecar_post_data_playbook_status')}")
+                    print(
+                        "Latest sidecar post-data action: "
+                        f"{latest.get('sidecar_post_data_playbook_current_required_action') or 'none'}"
+                    )
+                    print(
+                        "Latest sidecar post-data candidates: "
+                        f"{latest.get('sidecar_post_data_playbook_candidate_count') if latest.get('sidecar_post_data_playbook_candidate_count') != '' else 'n/a'}"
+                    )
+                    print(
+                        "Latest sidecar post-data visual-label status/gate: "
+                        f"{latest.get('sidecar_post_data_playbook_visual_label_completion_status') or 'none'}/"
+                        f"{latest.get('sidecar_post_data_playbook_visual_label_gate_passed')}"
+                    )
+                    print(
+                        "Latest sidecar post-data blockers: "
+                        f"{latest.get('sidecar_post_data_playbook_pre_validation_blockers') or 'none'}"
+                    )
+                    print(
+                        "Latest sidecar post-data can-execute candidates: "
+                        f"{latest.get('sidecar_post_data_playbook_can_execute_count')}"
+                    )
+                    if latest.get("sidecar_post_data_playbook"):
+                        print(f"Latest sidecar post-data playbook path: {latest.get('sidecar_post_data_playbook')}")
+                    if latest.get("sidecar_post_data_playbook_report"):
+                        print(
+                            "Latest sidecar post-data playbook report: "
+                            f"{latest.get('sidecar_post_data_playbook_report')}"
+                        )
+                if latest.get("sidecar_visual_review_top_candidate"):
+                    print(f"Latest sidecar visual-review top candidate: {latest.get('sidecar_visual_review_top_candidate')}")
+                    print(f"Latest sidecar visual-review top role: {latest.get('sidecar_visual_review_top_product_role') or 'none'}")
+                    print(f"Latest sidecar visual-review top focus: {latest.get('sidecar_visual_review_top_focus') or 'none'}")
+                    print(f"Latest sidecar visual-review top priority: {latest.get('sidecar_visual_review_top_priority')}")
+                    if latest.get("sidecar_visual_review_top_gallery"):
+                        print(f"Latest sidecar visual-review top gallery: {latest.get('sidecar_visual_review_top_gallery')}")
+                    if latest.get("sidecar_visual_review_top_labels_with_images"):
+                        print(f"Latest sidecar visual-review top labels: {latest.get('sidecar_visual_review_top_labels_with_images')}")
+                if latest.get("sidecar_quality_status"):
+                    print(f"Latest sidecar quality status: {latest.get('sidecar_quality_status')}")
+                    print(
+                        "Latest sidecar quality hard/advisory issues: "
+                        f"{latest.get('sidecar_quality_hard_issue_count')}/"
+                        f"{latest.get('sidecar_quality_advisory_issue_count')}"
+                    )
+                    if latest.get("sidecar_quality_advisory_issue_summary"):
+                        print(
+                            "Latest sidecar quality advisory summary: "
+                            f"{latest.get('sidecar_quality_advisory_issue_summary')}"
+                        )
+                print(
+                    "Latest evidence debt register: "
+                    f"{latest.get('evidence_debt_status') or 'missing_evidence_debt_register'}"
+                )
+                if latest.get("evidence_debt_status") and latest.get("evidence_debt_status") != "missing_evidence_debt_register":
+                    print(f"Latest evidence debt count: {latest.get('evidence_debt_count')}")
+                    print(
+                        "Latest evidence debt candidate/global/archive: "
+                        f"{latest.get('evidence_debt_candidate_count')}/"
+                        f"{latest.get('evidence_debt_global_count')}/"
+                        f"{latest.get('evidence_debt_archived_candidate_count')}"
+                    )
+                    print(f"Latest evidence debt next action: {latest.get('evidence_debt_next_action') or 'none'}")
+                    print(
+                        "Latest evidence debt current handoff: "
+                        f"{latest.get('evidence_debt_current_runtime_handoff_action') or 'none'}"
+                    )
+                    print(
+                        "Latest evidence debt handoff status: "
+                        f"{latest.get('evidence_debt_current_runtime_handoff_status') or 'none'}"
+                    )
                 print(f"Latest effective operator status: {latest.get('effective_operator_status') or 'unknown_or_diagnostic'}")
                 print(f"Latest manual gate active: {latest.get('manual_gate_active')}")
                 print(f"Latest effective runtime action: {latest.get('decision_quality_effective_runtime_action') or 'none'}")
@@ -3675,6 +5342,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="Random seed for --strict-referee matched-null sampling.",
     )
     grammar_search.set_defaults(func=grammar_search_command)
+
+    grammar_review_packet = subparsers.add_parser(
+        "grammar-review-packet",
+        help="Build a human-review label sheet and packet from grammar-search queue or record rows.",
+    )
+    grammar_review_packet.add_argument(
+        "--queue-csv",
+        default="reports/grammar_search/grammar_search_chart_review_queue.csv",
+        help="Input grammar_search_chart_review_queue.csv or grammar_search_variant_records.csv path.",
+    )
+    grammar_review_packet.add_argument(
+        "--output-dir",
+        default="reports/grammar_search/review_packet",
+        help="Directory for human_review_labels.csv and human_review_packet.md.",
+    )
+    grammar_review_packet.add_argument(
+        "--title",
+        default="Grammar Search Review Packet",
+        help="Markdown title for the generated review packet.",
+    )
+    grammar_review_packet.add_argument(
+        "--max-cases",
+        type=int,
+        default=48,
+        help="Maximum total cases to include in the review packet.",
+    )
+    grammar_review_packet.add_argument(
+        "--max-cases-per-bucket",
+        type=int,
+        default=8,
+        help="Maximum cases to include from each review bucket.",
+    )
+    grammar_review_packet.set_defaults(func=grammar_review_packet_command)
+
+    grammar_review_gallery = subparsers.add_parser(
+        "grammar-review-gallery",
+        help="Render chart images and a gallery from a grammar-review label sheet.",
+    )
+    grammar_review_gallery.add_argument("--config", default="configs/meme_universe.yaml", help="Universe YAML config path.")
+    grammar_review_gallery.add_argument("--data-dir", default="data/raw", help="Directory containing OHLCV CSV files.")
+    grammar_review_gallery.add_argument(
+        "--labels-csv",
+        default="reports/grammar_search/review_packet/human_review_labels.csv",
+        help="Input human_review_labels.csv path from grammar-review-packet.",
+    )
+    grammar_review_gallery.add_argument(
+        "--output-dir",
+        default="reports/grammar_search/review_packet",
+        help="Directory for human_review_labels_with_images.csv, gallery.md, and images/.",
+    )
+    grammar_review_gallery.add_argument(
+        "--lookback-bars",
+        type=int,
+        default=80,
+        help="Bars to show before each reviewed grammar event.",
+    )
+    grammar_review_gallery.add_argument(
+        "--forward-bars",
+        type=int,
+        default=0,
+        help="Bars to show after each reviewed grammar event. Use 0 to match each row's review horizon.",
+    )
+    grammar_review_gallery.add_argument(
+        "--max-images",
+        type=int,
+        default=48,
+        help="Maximum label rows to render into images.",
+    )
+    grammar_review_gallery.set_defaults(func=grammar_review_gallery_command)
 
     indicator_behavior_search = subparsers.add_parser(
         "indicator-behavior-search",
@@ -4579,6 +6315,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_ceo_common(ceo_evidence_debt_register)
     ceo_evidence_debt_register.set_defaults(func=ceo_command)
+
+    ceo_sidecar_evidence_brief = ceo_subparsers.add_parser(
+        "sidecar-evidence-brief",
+        help="Write a compact warning/reset sidecar evidence brief from existing CEO sprint artifacts.",
+    )
+    add_ceo_common(ceo_sidecar_evidence_brief)
+    ceo_sidecar_evidence_brief.set_defaults(func=ceo_command)
+
+    ceo_data_gate_brief = ceo_subparsers.add_parser(
+        "data-gate-brief",
+        help="Write a diagnostic brief for OHLCV data readiness blocking sidecar validation.",
+    )
+    add_ceo_common(ceo_data_gate_brief)
+    ceo_data_gate_brief.set_defaults(func=ceo_command)
 
     ceo_approval_queue = ceo_subparsers.add_parser(
         "approval-queue",

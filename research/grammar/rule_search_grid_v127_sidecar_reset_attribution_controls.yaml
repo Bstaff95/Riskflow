@@ -1,0 +1,43 @@
+model: riskflow_grammar_search_v0
+families:
+  - family_id: sidecar_unstable_reset_warning_current
+    direction: negative
+    detector: signal_grammar_event
+    description: Current registered sidecar event for hot-leader cooloff with unstable reset behavior.
+    parameter_grid:
+      event_id: [grammar_unstable_reset_warning_v0]
+
+  - family_id: sidecar_hot_leader_reset_warning_current
+    direction: negative
+    detector: signal_grammar_event
+    description: Existing broad registered sidecar event for hot-leader reset warnings.
+    parameter_grid:
+      event_id: [grammar_hot_leader_reset_warning_v0]
+
+  - family_id: hot_reset_without_unstable_control
+    direction: negative
+    detector: signal_grammar_event_combo
+    description: Attribution control for broad hot-leader reset warnings after removing unstable-reset rows.
+    parameter_grid:
+      event_ids:
+        - [grammar_hot_leader_reset_warning_v0]
+      exclude_event_ids:
+        - [grammar_unstable_reset_warning_v0]
+
+  - family_id: hot_reset_unstable_overlap_control
+    direction: negative
+    detector: signal_grammar_event_combo
+    description: Overlap control confirming unstable reset is measured inside the broad hot-leader reset context.
+    parameter_grid:
+      event_ids:
+        - [grammar_hot_leader_reset_warning_v0, grammar_unstable_reset_warning_v0]
+
+  - family_id: constructive_reset_without_unstable_control
+    direction: positive
+    detector: signal_grammar_event_combo
+    description: Constructive reset watch after excluding unstable-warning rows.
+    parameter_grid:
+      event_ids:
+        - [grammar_constructive_reset_watch_v0]
+      exclude_event_ids:
+        - [grammar_unstable_reset_warning_v0]

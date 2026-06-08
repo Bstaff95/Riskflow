@@ -38,6 +38,42 @@ PYTHONPATH=src python3 -m riskflow grammar-search \
 - `rule_search_grid_v17_relative_failed_breakout_filter_probe.yaml`: sample-derived false-positive filter probe for the daily relative failed breakout survivor. One filtered variant survived with fewer events and stronger median underperformance; treat as fresh-data validation material only.
 - `rule_search_grid_v18_relative_failed_breakout_refinement_probe.yaml`: broader refinement probe for relative failed breakout. The robust refinement was compression >= 45 plus viscosity-cross-count >= 3, not the more aggressive high-signal/high-gradient filters.
 - `rule_search_grid_v19_relative_failed_breakout_current_candidates.yaml`: compact baseline-versus-refined grid for lag/cooldown stress. Both candidates only survived at lag 1 and 30-bar cooldown, so promotion remains blocked pending fresh-data validation.
+- `rule_search_grid_v126_sidecar_reset_events_current.yaml`: compact direct-event grid for the registered reset sidecars: unstable reset warning, broad hot-leader reset warning, and constructive reset watch. It uses the `signal_grammar_event` detector so sidecar events can run through grammar-search strict referee and champion/challenger evidence paths.
+- `rule_search_grid_v127_sidecar_reset_attribution_controls.yaml`: attribution-control grid for registered reset sidecars. It uses `signal_grammar_event_combo` to test broad hot-leader reset warnings with unstable-reset rows removed, unstable-overlap controls, and constructive reset watches with unstable-warning rows removed.
+
+Build review packets from any grammar-search queue or variant-record CSV with:
+
+```bash
+PYTHONPATH=src python3 -m riskflow grammar-review-packet \
+  --queue-csv reports/<run>/grammar_search_variant_records.csv \
+  --output-dir reports/<run>/visual_review_packet_all_records \
+  --title "Grammar Review Packet"
+```
+
+Render chart images for a review packet with:
+
+```bash
+PYTHONPATH=src python3 -m riskflow grammar-review-gallery \
+  --labels-csv reports/<run>/visual_review_packet_all_records/human_review_labels.csv \
+  --output-dir reports/<run>/visual_review_packet_all_records
+```
+
+## Current Reset-Sidecar Attribution Result
+
+The strict v127 run in `reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/` produced no strict survivors. It still improved the reset-warning interpretation:
+
+- `hot_reset_without_unstable_control` remained useful on `1d` and `4h`, with 71 daily events across 18 symbols and 26 clusters and 49 `4h` events across 19 symbols and 3 clusters.
+- `sidecar_unstable_reset_warning_current` and `hot_reset_unstable_overlap_control` were identical in the current sample, confirming that the unstable reset event is a subset of the broad hot-leader reset event.
+- The broad-minus-unstable daily control passed both median baselines but failed matched-null support (`matched_null_p_value=0.556667`), so it is evidence for shadow review, not product promotion.
+- `constructive_reset_without_unstable_control` stayed fragile or inconclusive and had negative secondary forward-relative medians despite positive direction. Treat constructive reset as misclassification-prone until visual labels explain the failure mode.
+- The generated all-record review packet is `reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/visual_review_packet_all_records/human_review_packet.md`, with labels in `human_review_labels.csv`. It prioritizes constructive-reset misclassification, missed-upside/false-warning cases, avoided-downside examples, and unstable-overlap controls ahead of unknown-outcome tail rows.
+- The generated chart gallery is `reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/visual_review_packet_all_records/gallery.md`, with 60 rendered images and an image-backed `human_review_labels_with_images.csv`.
+- The CEO sidecar packet now derives a candidate-matched human-label checklist at `reports/ceo_runs/ceo_indicator_evidence_sprint_v127_shadow/sidecar_visual_label_worklist.csv` / `.md`, bounded review batches at `sidecar_visual_label_review_batches.csv` / `.md`, candidate progress at `sidecar_visual_label_progress.csv` / `.md`, the current worksheet at `sidecar_visual_label_next_batch.csv` / `.md`, the review-only label rubric at `sidecar_visual_label_rubric.yaml` / `.md`, and the completion audit at `sidecar_visual_label_completion_audit.csv` / `.yaml` / `.md`; use them to complete required labels without treating visual review as validation.
+- Lag sensitivity changed the reset-warning evidence. The v127 lag-0 control produced one strict survivor: `hot_reset_without_unstable_control` on `4h` with 49 events, 19 symbols, 3 clusters, median terminal relative return -0.085585, and matched-null p-value 0.026667. The lag-2 control produced one strict survivor: `sidecar_hot_leader_reset_warning_current` on `1d` with 86 events, 19 symbols, 27 clusters, median terminal relative return -0.189331, and matched-null p-value 0.023333. The default lag-1 control had zero strict survivors. Treat this as lag-sensitive shadow warning evidence requiring visual labels and fresh/control validation, not promotion.
+- Cooldown sensitivity keeps the lag-2 daily survivor in shadow mode. At lag 2, the daily `sidecar_hot_leader_reset_warning_current` survivor appears at 30-day cooldown only; 15-day and 60-day cooldown reruns both produced zero strict survivors. Keep this as a review candidate, not validated warning logic.
+- A standalone CEO shadow comparison packet for the v127 sprint is in `reports/ceo_runs/ceo_indicator_evidence_sprint_v127_shadow/`. It compares three shadow challengers against `core_signal_v0`, marks all three as `needs_fresh_or_control_validation`, writes a ready visual-review queue, and writes a fresh/control validation plan. The packet does not resume the old stopped CEO run and has production effect `none`.
+- Fresh-data preflight for `ceo_indicator_evidence_sprint_v127_shadow` is `not_ready`: all 20 assets are stale across `1d`, `12h`, `4h`, and `1h`, with the local sample ending around 2026-05-24. Fresh/control validation is blocked until OHLCV is refreshed or a withheld snapshot is explicitly declared.
+- Resumption brief for `ceo_indicator_evidence_sprint_v127_shadow` is `blocked_preflight`; trace grade recommends `stop_for_manual_data_import`, and the preflight gate blocks frozen validation. Do not execute further validation on that shadow run until the data import or explicit snapshot authority issue is resolved.
 
 ## Current Fresh-Data Rerun Set
 
@@ -52,6 +88,8 @@ After OHLCV refresh, rerun these under the same strict referee:
 - Relative failed breakout filter probe: `rule_search_grid_v17_relative_failed_breakout_filter_probe.yaml`
 - Relative failed breakout refinement probe: `rule_search_grid_v18_relative_failed_breakout_refinement_probe.yaml`
 - Current relative failed breakout candidates: `rule_search_grid_v19_relative_failed_breakout_current_candidates.yaml`
+- Current reset sidecar events: `rule_search_grid_v126_sidecar_reset_events_current.yaml`
+- Reset sidecar attribution controls: `rule_search_grid_v127_sidecar_reset_attribution_controls.yaml`
 
 Compare the resulting `grammar_search_strict_referee.csv` files against the
 stale-sample references in `reports/grammar_search/learning_loop/autonomous_loop_end_report.md`.

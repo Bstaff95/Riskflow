@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -28,6 +29,7 @@ from riskflow.ceo_ops import (
     run_ceo_broaden_hypothesis_source,
     run_ceo_capability_backlog,
     run_ceo_champion_challenger,
+    run_ceo_data_gate_brief,
     run_ceo_decision_quality,
     run_ceo_dispatch_receipt,
     run_ceo_evidence_debt_register,
@@ -74,6 +76,7 @@ from riskflow.ceo_ops import (
     run_ceo_role_result,
     run_ceo_run_block,
     run_ceo_run_index,
+    run_ceo_sidecar_evidence_brief,
     run_ceo_status,
     run_ceo_strategy_capital_dashboard,
     run_ceo_stop,
@@ -684,6 +687,67 @@ def test_champion_challenger_attaches_metric_sources_from_research_map(tmp_path:
     assert enriched["production_effect"] == "none"
 
 
+def test_champion_challenger_scores_negative_reset_quality_tradeoff(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    lab_run_id = "ceo_test_lab"
+    loop_dir = tmp_path / "reports" / "lab_ops" / lab_run_id / "lab_loop" / "2026-06-01" / "session_a" / "loop_0001"
+    loop_dir.mkdir(parents=True, exist_ok=True)
+    (loop_dir / "bullish_evidence.yaml").write_text(
+        yaml.safe_dump({"hypothesis_id": "root_reset_warning", "contract_tier": "blocker"}),
+        encoding="utf-8",
+    )
+    (loop_dir / "hypothesis.yaml").write_text("families: []\n", encoding="utf-8")
+    (loop_dir / "grammar_search_ranked.csv").write_text(
+        "\n".join(
+            [
+                "variant_id,family_id,direction,timeframe,classification,rank_score,median_forward_relative_return_secondary,hit_rate_forward_relative_return_primary,median_max_drawdown,median_max_favorable_excursion,median_mfe_mae_ratio,sample_size,unique_symbols,unique_event_clusters",
+                "reset_warning_a,family_reset,negative,4h,useful,14.0,-0.10,0.35,-0.18,0.04,0.22,44,13,18",
+                "reset_warning_control,family_reset,negative,4h,fragile,1.0,0.04,0.55,-0.08,0.08,1.0,40,12,17",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    governance = {
+        "research_map": {
+            "nodes": [
+                {
+                    "id": "reset_warning_candidate",
+                    "status": "discovery_survivor",
+                    "setup_class": "hot_leader_reset_warning",
+                    "timeframes": ["4h"],
+                    "root_ids": ["root_reset_warning"],
+                }
+            ]
+        }
+    }
+    action_plan = {
+        "champion": "core_signal_v0",
+        "work_items": [
+            {
+                "belief_id": "reset_warning_candidate",
+                "product_role": "reset_quality",
+                "champion": "core_signal_v0",
+                "challenger": "core_signal_v0_plus_reset_warning_candidate",
+                "required_metrics": ["forward_relative_return_vs_basket"],
+            }
+        ],
+    }
+
+    enriched = attach_metric_sources_to_action_plan(action_plan, governance, options, lab_run_id)
+    results = build_champion_challenger_results(enriched)
+
+    summary = results["results"][0]["metric_summary"]
+    checklist = results["results"][0]["product_metric_checklist"]
+    assert summary["direction"] == "negative"
+    assert summary["role_decision"] == "shadow_challenger_promising"
+    assert summary["avoided_downside_benefit"] == pytest.approx(0.07)
+    assert summary["missed_upside_cost"] == pytest.approx(0.0)
+    assert checklist["complete"] is True
+    assert "avoided_downside_benefit" in checklist["present"]
+    assert results["results"][0]["decision"] == "shadow_challenger_promising_needs_fresh_validation"
+
+
 def test_champion_challenger_results_route_mixed_source_gaps_to_validation_plan() -> None:
     action_plan = {
         "champion": "core_signal_v0",
@@ -811,6 +875,2544 @@ def test_ceo_fresh_control_validation_writes_validation_plan(tmp_path: Path) -> 
     assert result["action_result"]["decision"] == "run_fresh_or_control_validation_for_promising_shadow_challengers"
     assert result["action_result"]["action_taken"] == "fresh_control_validation_plan"
     assert result["action_result"]["production_effect"] == "none"
+
+
+def test_ceo_sidecar_evidence_brief_ties_shadow_evidence_to_manual_data_gate(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "champion_challenger_results.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_champion_challenger_results_v0",
+                "status": "shadow_comparison_complete",
+                "champion": "core_signal_v0",
+                "results": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "product_role": "warning_blocker",
+                        "champion": "core_signal_v0",
+                        "challenger": "core_signal_v0_plus_candidate_warning",
+                        "comparison_status": "ready_for_metric_comparison",
+                        "decision": "needs_fresh_or_control_validation",
+                        "available_metric_sources": [
+                            {
+                                "loop_dir": "reports/lab_ops/run/loop_0001",
+                                "ranked": "reports/lab_ops/run/loop_0001/grammar_search_ranked.csv",
+                                "variant_records": "reports/lab_ops/run/loop_0001/grammar_search_variant_records.csv",
+                                "strict_referee": "reports/lab_ops/run/loop_0001/grammar_search_strict_referee.csv",
+                            }
+                        ],
+                        "product_metric_checklist": {"complete": True, "missing": []},
+                        "metric_summary": {
+                            "best_variant_id": "variant_warning",
+                            "best_family_id": "hot_reset_without_unstable_control",
+                            "timeframe": "4h",
+                            "direction": "negative",
+                            "classification": "useful",
+                            "median_forward_relative_return": -0.08,
+                            "role_delta_vs_champion_baseline": 0.03,
+                            "hit_rate": 0.34,
+                            "champion_baseline_median_forward_relative_return": -0.11,
+                            "champion_baseline_hit_rate": 0.31,
+                            "champion_baseline_method": "same_source_all_ranked_variants_proxy",
+                            "median_max_drawdown": -0.12,
+                            "median_max_favorable_excursion": 0.16,
+                            "mfe_mae_ratio": 1.33,
+                            "sample_size": 49,
+                            "unique_symbols": 19,
+                            "event_diversity": 12,
+                            "missed_upside_cost": 0.0,
+                            "avoided_downside_benefit": 0.03,
+                            "directional_edge_vs_unconditional": 0.03,
+                            "directional_edge_vs_cluster": 0.02,
+                            "matched_null_directional_edge": 0.01,
+                            "matched_null_p_value": 0.04,
+                            "passes_both_baselines": True,
+                            "strict_survivors": 1,
+                            "strict_survivor": True,
+                            "same_sample_promotion_blockers": ["lag_sensitive", "cluster_concentration"],
+                            "source_notes": "Test warning strict survivor; review-only until fresh data.",
+                            "role_decision": "needs_fresh_or_control_validation",
+                        },
+                        "production_effect": "none",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "champion_challenger_visual_review_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_visual_review_queue_v0",
+                "status": "ready",
+                "ready_count": 1,
+                "items": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "review_status": "ready_for_visual_review",
+                        "review_focus": "blocker_false_positive_and_avoided_downside_review",
+                        "review_questions": [
+                            "Was the warning visually legible before the downside move?",
+                            "Would this have blocked too many constructive resets?",
+                        ],
+                        "visual_priority_score": 9.5,
+                        "required_labels": ["visual_readability", "promotion_blocker"],
+                        "visual_review_gallery": "reports/visual_review/gallery.md",
+                        "visual_review_labels_with_images": "reports/visual_review/human_review_labels_with_images.csv",
+                        "evidence_sources": [
+                            {
+                                "loop_dir": "reports/visual_review/source_loop",
+                                "ranked": "reports/visual_review/source_loop/grammar_search_ranked.csv",
+                                "variant_records": "reports/visual_review/source_loop/grammar_search_variant_records.csv",
+                                "strict_referee": "reports/visual_review/source_loop/grammar_search_strict_referee.csv",
+                            }
+                        ],
+                        "production_effect": "none",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "fresh_control_validation_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_fresh_control_validation_plan_v0",
+                "status": "fresh_data_required",
+                "fresh_required_count": 1,
+                "work_items": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "validation_route": "fresh_and_control_validation",
+                        "source_status": "matched",
+                        "source_count": 1,
+                        "required_tests": ["fresh_data_preflight", "lag_sensitivity"],
+                        "validation_completed": False,
+                        "validation_result": "not_run",
+                        "production_effect": "none",
+                    }
+                ],
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "fresh_data_preflight.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_fresh_data_preflight_v0",
+                "overall_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "candidate_debt_count": 1,
+                "global_debt_count": 0,
+                "archived_candidate_count": 0,
+                "archived_candidates": [],
+                "debts": [
+                    {
+                        "debt_id": "candidate_warning__fresh_data_readiness",
+                        "candidate_id": "candidate_warning",
+                        "debt_kind": "fresh_data_readiness",
+                        "blocker_type": "fresh_data_gate_blocked",
+                        "owner_command": "import_or_curate_fresh_ohlcv_data",
+                        "production_effect": "none",
+                    }
+                ],
+                "next_action": "build_or_run_frozen_validation_executor",
+                "strategic_next_action": "build_or_run_frozen_validation_executor",
+                "current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                "current_runtime_handoff_status": "manual_data_gate_required",
+                "strategic_next_action_blocked_by_current_handoff": True,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "trace_grade.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_trace_grade_v0",
+                "verdict": "fail",
+                "score": 50,
+                "issues": ["manual_data_import_required"],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result_dir = root / "specialist_results"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / "candidate_warning__frozen_validation_spec.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_specialist_result_v0",
+                "task_id": "candidate_warning__frozen_validation_spec",
+                "role_id": "validation_referee",
+                "status": "complete",
+                "recommended_next_action": "convert review-only spec through governed frozen-candidate validation",
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+                "frozen_spec": {
+                    "belief_id": "candidate_warning",
+                    "product_role": "warning_blocker",
+                    "champion": "core_signal_v0",
+                    "challenger": "core_signal_v0_plus_candidate_warning",
+                    "variant_id": "variant_warning",
+                    "family_id": "hot_reset_without_unstable_control",
+                    "detector": "signal_grammar_event_combo",
+                    "direction": "negative",
+                    "timeframe": "4h",
+                    "entry_lag_bars": 0,
+                    "cooldown_bars": 120,
+                    "terminal_outcome_column": "forward_relative_return_180",
+                    "sample_size": 49,
+                    "unique_symbols": 19,
+                    "unique_event_clusters": 3,
+                    "same_sample_classification": "useful",
+                    "same_sample_promotion_blockers": ["lag_sensitive", "cluster_concentration"],
+                    "required_metrics": ["forward_relative_return_vs_basket", "hit_rate"],
+                    "required_controls": ["same frozen shape only", "no threshold tuning"],
+                    "validation_status": "spec_only_not_validated",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for rel_path in [
+        "reports/lab_ops/run/loop_0001/grammar_search_ranked.csv",
+        "reports/lab_ops/run/loop_0001/grammar_search_variant_records.csv",
+        "reports/lab_ops/run/loop_0001/grammar_search_strict_referee.csv",
+        "reports/visual_review/source_loop/grammar_search_ranked.csv",
+        "reports/visual_review/source_loop/grammar_search_variant_records.csv",
+        "reports/visual_review/source_loop/grammar_search_strict_referee.csv",
+        "reports/visual_review/human_review_labels_with_images.csv",
+    ]:
+        source_path = tmp_path / rel_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text("id\n", encoding="utf-8")
+    gallery_path = tmp_path / "reports/visual_review/gallery.md"
+    gallery_path.parent.mkdir(parents=True, exist_ok=True)
+    gallery_path.write_text("# Gallery\n", encoding="utf-8")
+
+    result = run_ceo_sidecar_evidence_brief(options)
+
+    brief = result["brief"]
+    assert brief["status"] == "manual_data_gate_blocks_validation"
+    assert brief["candidate_count"] == 1
+    assert brief["ready_visual_review_count"] == 1
+    assert brief["fresh_data_blocked_count"] == 1
+    assert brief["review_only_frozen_spec_count"] == 1
+    assert brief["official_frozen_candidate_validation_plan_exists"] is False
+    assert brief["manual_data_gate_active"] is True
+    assert brief["next_action"] == "import_or_curate_fresh_ohlcv_data"
+    candidate = brief["candidates"][0]
+    assert candidate["evidence_status"] == "shadow_review_ready_fresh_data_blocked"
+    assert candidate["metric_summary"]["best_family_id"] == "hot_reset_without_unstable_control"
+    assert candidate["visual_review"]["focus"] == "blocker_false_positive_and_avoided_downside_review"
+    assert candidate["validation"]["route"] == "fresh_and_control_validation"
+    assert candidate["review_only_frozen_spec"]["status"] == "spec_only_not_validated"
+    assert candidate["review_only_frozen_spec"]["entry_lag_bars"] == 0
+    assert candidate["review_only_frozen_spec"]["cooldown_bars"] == 120
+    assert candidate["evidence_debts"][0]["debt_kind"] == "fresh_data_readiness"
+    assert candidate["product_language_allowed"] is False
+    assert brief["production_effect"] == "none"
+    assert result["paths"]["sidecar_evidence_brief"].exists()
+    assert result["paths"]["sidecar_evidence_candidates"].exists()
+    assert result["paths"]["sidecar_visual_review_handoff"].exists()
+    assert result["paths"]["sidecar_visual_review_coverage"].exists()
+    assert result["paths"]["sidecar_visual_review_coverage_report"].exists()
+    assert result["paths"]["sidecar_visual_label_worklist"].exists()
+    assert result["paths"]["sidecar_visual_label_worklist_report"].exists()
+    assert result["paths"]["sidecar_visual_label_review_batches"].exists()
+    assert result["paths"]["sidecar_visual_label_review_batches_report"].exists()
+    assert result["paths"]["sidecar_visual_label_progress"].exists()
+    assert result["paths"]["sidecar_visual_label_progress_report"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch_report"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch_gallery"].exists()
+    assert result["paths"]["sidecar_visual_label_decision_context"].exists()
+    assert result["paths"]["sidecar_visual_label_decision_context_report"].exists()
+    assert result["paths"]["sidecar_visual_label_rubric"].exists()
+    assert result["paths"]["sidecar_visual_label_rubric_report"].exists()
+    assert result["paths"]["sidecar_visual_label_entry_sheet"].exists()
+    assert result["paths"]["sidecar_visual_label_entry_sheet_report"].exists()
+    assert result["paths"]["sidecar_visual_label_source_update_manifest"].exists()
+    assert result["paths"]["sidecar_visual_label_source_update_manifest_report"].exists()
+    assert result["paths"]["sidecar_visual_label_source_patch_plan"].exists()
+    assert result["paths"]["sidecar_visual_label_source_patch_plan_yaml"].exists()
+    assert result["paths"]["sidecar_visual_label_source_patch_plan_report"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit_yaml"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit_report"].exists()
+    assert result["paths"]["sidecar_champion_challenger_evidence"].exists()
+    assert result["paths"]["sidecar_champion_challenger_quality_audit"].exists()
+    assert result["paths"]["sidecar_champion_challenger_quality_audit_report"].exists()
+    assert result["paths"]["sidecar_quality_remediation_plan"].exists()
+    assert result["paths"]["sidecar_quality_remediation_plan_report"].exists()
+    assert result["paths"]["sidecar_evidence_gap_matrix"].exists()
+    assert result["paths"]["sidecar_candidate_readiness_summary"].exists()
+    assert result["paths"]["sidecar_candidate_readiness_summary_report"].exists()
+    assert result["paths"]["sidecar_validation_queue"].exists()
+    assert result["paths"]["sidecar_validation_queue_report"].exists()
+    assert result["paths"]["sidecar_champion_challenger_validation_design"].exists()
+    assert result["paths"]["sidecar_champion_challenger_validation_design_report"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix_yaml"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix_report"].exists()
+    assert result["paths"]["sidecar_evidence_consistency_audit"].exists()
+    assert result["paths"]["sidecar_evidence_consistency_audit_report"].exists()
+    assert result["paths"]["sidecar_evidence_packet_index"].exists()
+    assert result["paths"]["sidecar_evidence_packet_index_report"].exists()
+    assert result["paths"]["sidecar_candidate_decision_cards"].exists()
+    assert result["paths"]["sidecar_current_decision_packet"].exists()
+    assert result["paths"]["sidecar_current_decision_packet_report"].exists()
+    assert result["paths"]["sidecar_shadow_guardrail_audit"].exists()
+    assert result["paths"]["sidecar_shadow_guardrail_audit_report"].exists()
+    assert result["paths"]["sidecar_evidence_source_manifest"].exists()
+    assert result["paths"]["sidecar_evidence_source_health"].exists()
+    assert result["paths"]["sidecar_evidence_source_health_yaml"].exists()
+    assert result["paths"]["sidecar_evidence_source_health_report"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints_yaml"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints_report"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger_yaml"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger_report"].exists()
+    assert result["paths"]["sidecar_post_data_validation_playbook"].exists()
+    assert result["paths"]["sidecar_post_data_validation_playbook_report"].exists()
+    assert result["paths"]["sidecar_current_handoff"].exists()
+    assert result["paths"]["sidecar_current_handoff_report"].exists()
+    assert result["paths"]["sidecar_candidate_decision_matrix"].exists()
+    assert result["paths"]["sidecar_candidate_decision_matrix_report"].exists()
+    assert result["paths"]["sidecar_frozen_spec_review"].exists()
+    assert result["paths"]["promotion_candidates"].exists()
+    assert result["guardrail_audit"]["status"] == "pass_shadow_only_guardrails"
+    assert result["guardrail_audit"]["violation_count"] == 0
+    assert result["guardrail_audit"]["checks"][0]["guardrail_status"] == "pass_shadow_only"
+    assert result["guardrail_audit"]["checks"][0]["blocking_gates"] == [
+        "manual_data_gate",
+        "missing_official_frozen_candidate_validation_plan",
+        "review_only_frozen_spec_not_validated",
+        "fresh_or_control_validation_not_run",
+    ]
+    rows = list(csv.DictReader(result["paths"]["sidecar_evidence_candidates"].read_text(encoding="utf-8").splitlines()))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["belief_id"] == "candidate_warning"
+    assert row["product_role"] == "warning_blocker"
+    assert row["evidence_status"] == "shadow_review_ready_fresh_data_blocked"
+    assert row["champion"] == "core_signal_v0"
+    assert row["challenger"] == "core_signal_v0_plus_candidate_warning"
+    assert row["best_family_id"] == "hot_reset_without_unstable_control"
+    assert row["timeframe"] == "4h"
+    assert row["direction"] == "negative"
+    assert row["classification"] == "useful"
+    assert row["role_delta_vs_champion_baseline"] == "0.03"
+    assert row["visual_review_status"] == "ready_for_visual_review"
+    assert row["visual_review_focus"] == "blocker_false_positive_and_avoided_downside_review"
+    assert row["required_tests"] == "fresh_data_preflight|lag_sensitivity"
+    assert row["review_only_frozen_spec_status"] == "spec_only_not_validated"
+    assert row["review_only_entry_lag_bars"] == "0"
+    assert row["review_only_cooldown_bars"] == "120"
+    assert row["review_only_promotion_blockers"] == "lag_sensitive|cluster_concentration"
+    assert row["evidence_debt_kinds"] == "fresh_data_readiness"
+    assert row["evidence_debt_owner_commands"] == "import_or_curate_fresh_ohlcv_data"
+    assert row["production_effect"] == "none"
+    handoff_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_review_handoff"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(handoff_rows) == 1
+    handoff_row = handoff_rows[0]
+    assert handoff_row["belief_id"] == "candidate_warning"
+    assert handoff_row["review_status"] == "ready_for_visual_review"
+    assert handoff_row["review_focus"] == "blocker_false_positive_and_avoided_downside_review"
+    assert handoff_row["visual_priority"] == "9.5"
+    assert "Was the warning visually legible before the downside move?" in handoff_row["review_questions"]
+    assert handoff_row["required_labels"] == "visual_readability|promotion_blocker"
+    assert handoff_row["visual_review_gallery"] == "reports/visual_review/gallery.md"
+    assert handoff_row["visual_review_labels_with_images"] == "reports/visual_review/human_review_labels_with_images.csv"
+    assert handoff_row["champion"] == "core_signal_v0"
+    assert handoff_row["challenger"] == "core_signal_v0_plus_candidate_warning"
+    assert handoff_row["comparison_decision"] == "needs_fresh_or_control_validation"
+    assert handoff_row["best_family_id"] == "hot_reset_without_unstable_control"
+    assert handoff_row["same_sample_promotion_blockers"] == "lag_sensitive|cluster_concentration"
+    assert handoff_row["fresh_data_blocked"] == "True"
+    assert handoff_row["product_language_allowed"] == "False"
+    assert handoff_row["production_effect"] == "none"
+    coverage = result["visual_review_coverage"]
+    assert coverage["status"] == "visual_review_assets_have_gaps"
+    assert coverage["candidate_count"] == 1
+    assert coverage["review_assets_ready_count"] == 0
+    assert coverage["missing_asset_count"] == 0
+    assert coverage["empty_label_count"] == 1
+    assert coverage["human_review_started_count"] == 0
+    assert coverage["human_review_pending_count"] == 1
+    coverage_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_review_coverage"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(coverage_rows) == 1
+    coverage_row = coverage_rows[0]
+    assert coverage_row["belief_id"] == "candidate_warning"
+    assert coverage_row["review_status"] == "ready_for_visual_review"
+    assert coverage_row["review_focus"] == "blocker_false_positive_and_avoided_downside_review"
+    assert coverage_row["review_question_count"] == "2"
+    assert coverage_row["required_label_count"] == "2"
+    assert coverage_row["required_labels"] == "visual_readability|promotion_blocker"
+    assert coverage_row["visual_review_gallery"] == "reports/visual_review/gallery.md"
+    assert coverage_row["visual_review_gallery_exists"] == "True"
+    assert coverage_row["visual_review_labels_with_images"] == "reports/visual_review/human_review_labels_with_images.csv"
+    assert coverage_row["visual_review_labels_exists"] == "True"
+    assert coverage_row["label_row_count"] == "0"
+    assert coverage_row["human_review_completed_rows"] == "0"
+    assert coverage_row["suggested_not_visually_reviewed_rows"] == "0"
+    assert coverage_row["rendered_image_rows"] == "0"
+    assert coverage_row["review_completion_status"] == "empty_labels"
+    assert coverage_row["human_label_completion_status"] == "no_label_rows"
+    assert coverage_row["fresh_data_blocked"] == "True"
+    assert coverage_row["product_language_allowed"] == "False"
+    assert coverage_row["production_effect"] == "none"
+    coverage_report = result["paths"]["sidecar_visual_review_coverage_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual-Review Coverage" in coverage_report
+    assert "Status: visual_review_assets_have_gaps" in coverage_report
+    assert "Gallery exists: True" in coverage_report
+    assert "Labels exists: True" in coverage_report
+    assert "Review completion status: empty_labels" in coverage_report
+    assert "Human label completion status: no_label_rows" in coverage_report
+    worklist = result["visual_label_worklist"]
+    assert worklist["status"] == "no_visual_label_source_rows"
+    assert worklist["candidate_count"] == 1
+    assert worklist["source_label_row_count"] == 0
+    assert worklist["pending_label_row_count"] == 0
+    worklist_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_label_worklist"].read_text(encoding="utf-8").splitlines())
+    )
+    assert worklist_rows == []
+    worklist_report = result["paths"]["sidecar_visual_label_worklist_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Worklist" in worklist_report
+    assert "Status: no_visual_label_source_rows" in worklist_report
+    review_batches = result["visual_label_batches"]
+    assert review_batches["status"] == "no_pending_human_visual_review_batches"
+    assert review_batches["batch_count"] == 0
+    assert review_batches["pending_label_row_count"] == 0
+    batch_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_label_review_batches"].read_text(encoding="utf-8").splitlines())
+    )
+    assert batch_rows == []
+    batch_report = result["paths"]["sidecar_visual_label_review_batches_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Review Batches" in batch_report
+    assert "Status: no_pending_human_visual_review_batches" in batch_report
+    visual_label_progress = result["visual_label_progress"]
+    assert visual_label_progress["status"] == "no_visual_label_source_rows"
+    assert visual_label_progress["candidate_count"] == 1
+    assert visual_label_progress["matched_label_row_count"] == 0
+    assert visual_label_progress["pending_label_row_count"] == 0
+    assert visual_label_progress["completed_label_row_count"] == 0
+    assert visual_label_progress["next_action"] == "regenerate_visual_review_label_packet"
+    progress_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_label_progress"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(progress_rows) == 1
+    assert progress_rows[0]["belief_id"] == "candidate_warning"
+    assert progress_rows[0]["human_label_progress_status"] == "no_visual_label_source_rows"
+    progress_report = result["paths"]["sidecar_visual_label_progress_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Progress" in progress_report
+    assert "Status: no_visual_label_source_rows" in progress_report
+    assert "Next action: regenerate_visual_review_label_packet" in progress_report
+    next_batch = result["visual_label_next_batch"]
+    assert next_batch["status"] == "no_pending_human_visual_label_next_batch"
+    assert next_batch["row_count"] == 0
+    assert next_batch["batch_id"] == ""
+    next_batch_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_label_next_batch"].read_text(encoding="utf-8").splitlines())
+    )
+    assert next_batch_rows == []
+    next_batch_report = result["paths"]["sidecar_visual_label_next_batch_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Next Batch" in next_batch_report
+    assert "Status: no_pending_human_visual_label_next_batch" in next_batch_report
+    next_batch_gallery = result["paths"]["sidecar_visual_label_next_batch_gallery"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Next Batch Gallery" in next_batch_gallery
+    assert "Status: no_pending_human_visual_label_next_batch" in next_batch_gallery
+    assert "Source/image reference gaps source-file/source-row/image: 0/0/0" in next_batch_gallery
+    visual_label_rubric = result["visual_label_rubric"]
+    assert visual_label_rubric["status"] == "no_pending_visual_label_rubric_required"
+    assert visual_label_rubric["row_count"] == 0
+    assert visual_label_rubric["required_label_fields"] == []
+    assert visual_label_rubric["product_language_allowed"] is False
+    rubric_report = result["paths"]["sidecar_visual_label_rubric_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Rubric" in rubric_report
+    assert "Status: no_pending_visual_label_rubric_required" in rubric_report
+    entry_sheet = result["visual_label_entry_sheet"]
+    assert entry_sheet["status"] == "no_pending_visual_label_entry_sheet"
+    assert entry_sheet["row_count"] == 0
+    assert entry_sheet["product_language_allowed"] is False
+    entry_sheet_rows = list(
+        csv.DictReader(result["paths"]["sidecar_visual_label_entry_sheet"].read_text(encoding="utf-8").splitlines())
+    )
+    assert entry_sheet_rows == []
+    entry_sheet_report = result["paths"]["sidecar_visual_label_entry_sheet_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Visual Label Entry Sheet" in entry_sheet_report
+    assert "Status: no_pending_visual_label_entry_sheet" in entry_sheet_report
+    source_update_rows = list(
+        csv.DictReader(
+            result["paths"]["sidecar_visual_label_source_update_manifest"]
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    )
+    assert source_update_rows == []
+    source_update_report = result["paths"]["sidecar_visual_label_source_update_manifest_report"].read_text(
+        encoding="utf-8"
+    )
+    assert "Riskflow Sidecar Visual Label Source Update Manifest" in source_update_report
+    assert "Status: no_pending_visual_label_source_update_manifest" in source_update_report
+    completion_audit = result["visual_label_completion_audit"]
+    assert completion_audit["status"] == "no_pending_visual_label_completion_audit"
+    assert completion_audit["row_count"] == 0
+    assert completion_audit["missing_required_row_count"] == 0
+    assert completion_audit["invalid_label_row_count"] == 0
+    completion_audit_report = result["paths"]["sidecar_visual_label_completion_audit_report"].read_text(
+        encoding="utf-8"
+    )
+    assert "Riskflow Sidecar Visual Label Completion Audit" in completion_audit_report
+    assert "Status: no_pending_visual_label_completion_audit" in completion_audit_report
+    evidence_rows = list(
+        csv.DictReader(
+            result["paths"]["sidecar_champion_challenger_evidence"].read_text(encoding="utf-8").splitlines()
+        )
+    )
+    assert len(evidence_rows) == 1
+    evidence_row = evidence_rows[0]
+    assert evidence_row["belief_id"] == "candidate_warning"
+    assert evidence_row["champion"] == "core_signal_v0"
+    assert evidence_row["challenger"] == "core_signal_v0_plus_candidate_warning"
+    assert evidence_row["comparison_status"] == "ready_for_metric_comparison"
+    assert evidence_row["comparison_decision"] == "needs_fresh_or_control_validation"
+    assert evidence_row["champion_baseline_median_forward_relative_return"] == "-0.11"
+    assert evidence_row["champion_baseline_hit_rate"] == "0.31"
+    assert evidence_row["median_max_drawdown"] == "-0.12"
+    assert evidence_row["median_max_favorable_excursion"] == "0.16"
+    assert evidence_row["mfe_mae_ratio"] == "1.33"
+    assert evidence_row["sample_size"] == "49"
+    assert evidence_row["unique_symbols"] == "19"
+    assert evidence_row["directional_edge_vs_unconditional"] == "0.03"
+    assert evidence_row["directional_edge_vs_cluster"] == "0.02"
+    assert evidence_row["matched_null_directional_edge"] == "0.01"
+    assert evidence_row["matched_null_p_value"] == "0.04"
+    assert evidence_row["passes_both_baselines"] == "True"
+    assert evidence_row["strict_survivors"] == "1"
+    assert evidence_row["strict_survivor"] == "True"
+    assert evidence_row["same_sample_promotion_blockers"] == "lag_sensitive|cluster_concentration"
+    assert evidence_row["champion_baseline_method"] == "same_source_all_ranked_variants_proxy"
+    assert evidence_row["source_notes"] == "Test warning strict survivor; review-only until fresh data."
+    assert evidence_row["review_only_frozen_spec_status"] == "spec_only_not_validated"
+    assert evidence_row["validation_route"] == "fresh_and_control_validation"
+    assert evidence_row["validation_result"] == "not_run"
+    assert evidence_row["evidence_status"] == "shadow_review_ready_fresh_data_blocked"
+    assert evidence_row["operator_evidence_decision"] == "cluster_concentrated_review_only"
+    assert evidence_row["product_language_allowed"] == "False"
+    assert evidence_row["production_effect"] == "none"
+    quality_audit = yaml.safe_load(
+        result["paths"]["sidecar_champion_challenger_quality_audit"].read_text(encoding="utf-8")
+    )
+    assert quality_audit["status"] == "pass_with_advisory_quality_findings"
+    assert quality_audit["candidate_count"] == 1
+    assert quality_audit["hard_issue_count"] == 0
+    assert quality_audit["advisory_issue_count"] == 1
+    assert quality_audit["issue_count"] == 1
+    quality_check = quality_audit["checks"][0]
+    assert quality_check["belief_id"] == "candidate_warning"
+    assert quality_check["champion"] == "core_signal_v0"
+    assert quality_check["challenger"] == "core_signal_v0_plus_candidate_warning"
+    assert quality_check["missing_core_metric_fields"] == []
+    assert quality_check["missing_advisory_metric_fields"] == []
+    assert quality_check["hard_findings"] == []
+    assert quality_check["advisory_findings"] == ["human_visual_review_not_started"]
+    assert quality_check["visual_review_asset_status"] == "empty_labels"
+    assert quality_check["human_label_completion_status"] == "no_label_rows"
+    assert quality_check["human_review_completed_rows"] == 0
+    assert quality_check["visual_label_progress_status"] == "no_visual_label_source_rows"
+    assert quality_check["visual_label_matched_rows"] == 0
+    assert quality_check["visual_label_pending_rows"] == 0
+    assert quality_check["visual_label_completed_rows"] == 0
+    assert quality_check["visual_label_next_batch_id"] == ""
+    assert quality_check["visual_label_next_action"] == "regenerate_visual_review_label_packet"
+    quality_report = result["paths"]["sidecar_champion_challenger_quality_audit_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Champion/Challenger Quality Audit" in quality_report
+    assert "Status: pass_with_advisory_quality_findings" in quality_report
+    assert "Issues: 1" in quality_report
+    assert "Human label completion status: no_label_rows" in quality_report
+    assert "Visual-label progress status: no_visual_label_source_rows" in quality_report
+    gap_rows = list(
+        csv.DictReader(result["paths"]["sidecar_evidence_gap_matrix"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(gap_rows) == 11
+    gap_by_dimension = {row["evidence_dimension"]: row for row in gap_rows}
+    assert gap_by_dimension["forward_relative_return_vs_basket"]["same_sample_status"] == "same_sample_present"
+    assert "delta=0.03" in gap_by_dimension["forward_relative_return_vs_basket"]["same_sample_value"]
+    assert gap_by_dimension["missed_upside_and_avoided_downside"]["same_sample_status"] == "same_sample_present"
+    assert gap_by_dimension["event_diversity"]["same_sample_status"] == "same_sample_blocker_cluster_concentrated"
+    assert gap_by_dimension["lag_sensitivity"]["same_sample_status"] == "same_sample_blocker_lag_sensitive"
+    assert gap_by_dimension["cooldown_sensitivity"]["same_sample_status"] == "not_flagged_same_sample"
+    assert gap_by_dimension["fresh_control_validation"]["same_sample_status"] == "blocked_by_manual_data_gate"
+    assert gap_by_dimension["production_guardrail"]["same_sample_status"] == "pass_shadow_only"
+    assert gap_by_dimension["production_guardrail"]["product_language_allowed"] == "False"
+    assert gap_by_dimension["production_guardrail"]["production_effect"] == "none"
+    assert (
+        gap_by_dimension["production_guardrail"]["blocking_gates"]
+        == "manual_data_gate|fresh_or_control_validation_not_run|review_only_frozen_spec_not_validated"
+    )
+    assert (
+        gap_by_dimension["production_guardrail"]["next_required_action"]
+        == "complete visual review and require broader fresh/control evidence before promotion consideration"
+    )
+    readiness_rows = list(
+        csv.DictReader(
+            result["paths"]["sidecar_candidate_readiness_summary"].read_text(encoding="utf-8").splitlines()
+        )
+    )
+    assert len(readiness_rows) == 1
+    readiness_row = readiness_rows[0]
+    assert readiness_row["belief_id"] == "candidate_warning"
+    assert readiness_row["readiness_tier"] == "review_only_cluster_concentrated"
+    assert readiness_row["operator_evidence_decision"] == "cluster_concentrated_review_only"
+    assert readiness_row["primary_blocker"] == "cluster_concentration"
+    assert readiness_row["ready_dimension_count"] == "7"
+    assert readiness_row["blocker_dimension_count"] == "4"
+    assert readiness_row["missing_dimension_count"] == "0"
+    assert readiness_row["ready_dimensions"] == (
+        "forward_relative_return_vs_basket|hit_rate|mfe_mae_drawdown|"
+        "missed_upside_and_avoided_downside|cooldown_sensitivity|visual_review|production_guardrail"
+    )
+    assert readiness_row["blocker_dimensions"] == (
+        "event_diversity|lag_sensitivity|frozen_candidate_spec|fresh_control_validation"
+    )
+    assert readiness_row["fresh_validation_status"] == "blocked_by_manual_data_gate"
+    assert readiness_row["visual_review_status"] == "ready_for_visual_review"
+    assert readiness_row["frozen_spec_status"] == "spec_only_not_validated"
+    assert "role_delta=0.03" in readiness_row["strongest_same_sample_signal"]
+    assert (
+        readiness_row["next_required_action"]
+        == "complete visual review and require broader fresh/control evidence before promotion consideration"
+    )
+    assert readiness_row["product_language_allowed"] == "False"
+    assert readiness_row["production_effect"] == "none"
+    readiness_report = result["paths"]["sidecar_candidate_readiness_summary_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Candidate Readiness Summary" in readiness_report
+    assert "Readiness tier: review_only_cluster_concentrated" in readiness_report
+    assert "Primary blocker: cluster_concentration" in readiness_report
+    assert "Dimension counts: ready=7 blocker=4 missing=0 advisory=0" in readiness_report
+    assert "Next required action: complete visual review and require broader fresh/control evidence before promotion consideration" in readiness_report
+    assert "Production effect: none." in readiness_report
+    queue_rows = list(csv.DictReader(result["paths"]["sidecar_validation_queue"].read_text(encoding="utf-8").splitlines()))
+    assert len(queue_rows) == 1
+    queue_row = queue_rows[0]
+    assert queue_row["queue_rank"] == "1"
+    assert queue_row["belief_id"] == "candidate_warning"
+    assert queue_row["readiness_tier"] == "review_only_cluster_concentrated"
+    assert queue_row["validation_queue_status"] == "review_only_requires_diversity_and_fresh_control"
+    assert queue_row["validation_priority"] == "2"
+    assert queue_row["primary_blocker"] == "cluster_concentration"
+    assert queue_row["validation_route"] == "fresh_and_control_validation"
+    assert queue_row["required_tests"] == "fresh_data_preflight|lag_sensitivity"
+    assert queue_row["required_controls"] == "same frozen shape only|no threshold tuning"
+    assert queue_row["fresh_validation_status"] == "blocked_by_manual_data_gate"
+    assert queue_row["promotion_ceiling"] == "shadow_candidate"
+    assert "diversity check" in queue_row["post_data_validation_command"]
+    assert "cluster-concentrated" in queue_row["stop_condition"]
+    assert queue_row["product_language_allowed"] == "False"
+    assert queue_row["production_effect"] == "none"
+    queue_report = result["paths"]["sidecar_validation_queue_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Validation Queue" in queue_report
+    assert "Queue status: review_only_requires_diversity_and_fresh_control" in queue_report
+    assert "Post-data validation command: rerun fresh/control validation only as a diversity check" in queue_report
+    assert "This queue is inactive while the manual data gate is active." in queue_report
+    validation_design = yaml.safe_load(
+        result["paths"]["sidecar_champion_challenger_validation_design"].read_text(encoding="utf-8")
+    )
+    assert validation_design["status"] == "manual_data_gate_blocks_execution"
+    assert validation_design["candidate_count"] == 1
+    assert validation_design["manual_data_gate_active"] is True
+    assert validation_design["safe_to_run_fresh_validation"] is False
+    assert validation_design["product_language_allowed"] is False
+    assert validation_design["production_effect"] == "none"
+    design_candidate = validation_design["candidates"][0]
+    assert design_candidate["belief_id"] == "candidate_warning"
+    assert design_candidate["champion"] == "core_signal_v0"
+    assert design_candidate["challenger"] == "core_signal_v0_plus_candidate_warning"
+    assert design_candidate["design_status"] == "review_only_diversity_control_design"
+    assert design_candidate["required_metrics"] == [
+        "forward_relative_return_vs_basket",
+        "hit_rate",
+        "mfe_mae_drawdown",
+        "missed_upside_and_avoided_downside",
+        "event_diversity",
+        "lag_sensitivity",
+        "cooldown_sensitivity",
+        "matched_null_control",
+        "shadow_guardrail",
+    ]
+    assert "same frozen shape only" in design_candidate["required_controls"]
+    assert "no threshold tuning" in design_candidate["required_controls"]
+    assert "fresh/control evidence must no longer be cluster-concentrated" in design_candidate["acceptance_criteria"]
+    assert design_candidate["authority_scope"] == "pre_registered_shadow_validation_design_only"
+    assert design_candidate["production_effect"] == "none"
+    validation_design_report = result["paths"]["sidecar_champion_challenger_validation_design_report"].read_text(
+        encoding="utf-8"
+    )
+    assert "Riskflow Sidecar Champion/Challenger Validation Design" in validation_design_report
+    assert "Design status: review_only_diversity_control_design" in validation_design_report
+    assert "Acceptance criteria:" in validation_design_report
+    assert "Product language allowed: False" in validation_design_report
+    unlock_rows = list(
+        csv.DictReader(result["paths"]["sidecar_data_gate_unlock_matrix"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(unlock_rows) == 1
+    unlock_row = unlock_rows[0]
+    assert unlock_row["belief_id"] == "candidate_warning"
+    assert unlock_row["unlock_status"] == "blocked_by_manual_data_gate_for_diversity_check"
+    assert unlock_row["design_status"] == "review_only_diversity_control_design"
+    assert unlock_row["data_gate_preflight_status"] == "not_ready"
+    assert unlock_row["safe_to_run_fresh_validation"] == "False"
+    assert unlock_row["csv_requirement_count"] == "0"
+    assert "fresh-data preflight must be safe" in unlock_row["unlock_criteria"]
+    assert unlock_row["validation_authority"] == "blocked_by_manual_data_gate"
+    assert unlock_row["production_effect"] == "none"
+    unlock_matrix = yaml.safe_load(result["paths"]["sidecar_data_gate_unlock_matrix_yaml"].read_text(encoding="utf-8"))
+    assert unlock_matrix["status"] == "manual_data_gate_blocks_unlock"
+    assert unlock_matrix["candidate_count"] == 1
+    assert unlock_matrix["safe_to_run_fresh_validation"] is False
+    assert unlock_matrix["csv_requirement_count"] == 0
+    unlock_report = result["paths"]["sidecar_data_gate_unlock_matrix_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Data-Gate Unlock Matrix" in unlock_report
+    assert "Unlock status: blocked_by_manual_data_gate_for_diversity_check" in unlock_report
+    assert "Validation authority: blocked_by_manual_data_gate" in unlock_report
+    consistency_audit = yaml.safe_load(result["paths"]["sidecar_evidence_consistency_audit"].read_text(encoding="utf-8"))
+    assert consistency_audit["status"] == "pass_sidecar_consistency"
+    assert consistency_audit["candidate_count"] == 1
+    assert consistency_audit["issue_count"] == 0
+    assert consistency_audit["candidate_ids"] == ["candidate_warning"]
+    consistency_checks = {check["check_id"]: check for check in consistency_audit["checks"]}
+    assert consistency_checks["visual_review_coverage_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["champion_challenger_quality_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["validation_design_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["data_gate_unlock_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["manual_gate_blocks_validation_authority"]["status"] == "pass"
+    assert consistency_checks["candidate_learning_ledger_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["post_data_playbook_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["quality_remediation_plan_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["current_handoff_candidate_role_ids"]["status"] == "pass"
+    assert consistency_checks["candidate_decision_matrix_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["post_data_playbook_handling_classifications"]["status"] == "pass"
+    assert consistency_checks["quality_remediation_plan_handling_classifications"]["status"] == "pass"
+    assert consistency_checks["current_handoff_handling_classifications"]["status"] == "pass"
+    assert consistency_checks["candidate_decision_matrix_handling_classifications"]["status"] == "pass"
+    assert consistency_checks["evidence_debt_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["evidence_debt_candidate_ids"]["actual"] == ["candidate_warning"]
+    assert consistency_checks["evidence_debt_archive_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["evidence_debt_no_archive_validation_debt"]["status"] == "pass"
+    assert consistency_checks["quality_remediation_issue_count"]["status"] == "pass"
+    assert consistency_checks["quality_remediation_status"]["status"] == "pass"
+    assert consistency_checks["quality_remediation_archive_candidate_ids"]["status"] == "pass"
+    assert consistency_checks["evidence_debt_manual_gate_runtime_handoff"]["status"] == "pass"
+    assert consistency_checks["visual_label_source_update_manifest_row_keys"]["status"] == "pass"
+    assert consistency_checks["visual_label_completion_audit_row_keys"]["status"] == "pass"
+    assert consistency_checks["visual_label_required_update_cells"]["status"] == "pass"
+    assert consistency_checks["visual_label_source_patch_plan_row_keys"]["status"] == "pass"
+    assert consistency_checks["visual_label_pending_update_rows"]["status"] == "pass"
+    assert consistency_checks["visual_label_reference_gaps"]["status"] == "pass"
+    assert consistency_checks["manual_gate_blocks_quality_remediation_autoclear"]["status"] == "pass"
+    assert consistency_checks["production_effect_guardrail"]["status"] == "pass"
+    consistency_report = result["paths"]["sidecar_evidence_consistency_audit_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Evidence Consistency Audit" in consistency_report
+    assert "Status: pass_sidecar_consistency" in consistency_report
+    assert "Issues: 0" in consistency_report
+    source_health = yaml.safe_load(result["paths"]["sidecar_evidence_source_health_yaml"].read_text(encoding="utf-8"))
+    assert source_health["status"] == "pass_source_refs_present"
+    assert source_health["candidate_count"] == 1
+    assert source_health["source_ref_count"] == 11
+    assert source_health["required_source_ref_count"] == 11
+    assert source_health["present_required_source_ref_count"] == 11
+    assert source_health["missing_required_source_ref_count"] == 0
+    assert source_health["wrong_type_required_source_ref_count"] == 0
+    assert source_health["missing_evidence_debt_owner_command_count"] == 0
+    assert source_health["issue_count"] == 0
+    assert source_health["candidate_summaries"][0]["belief_id"] == "candidate_warning"
+    assert source_health["candidate_summaries"][0]["status"] == "pass_source_refs_present"
+    source_health_rows = list(
+        csv.DictReader(result["paths"]["sidecar_evidence_source_health"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(source_health_rows) == 11
+    assert {row["status"] for row in source_health_rows} == {"present"}
+    source_health_report = result["paths"]["sidecar_evidence_source_health_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Evidence Source Health" in source_health_report
+    assert "Status: pass_source_refs_present" in source_health_report
+    assert "Issues: 0" in source_health_report
+    source_fingerprints = yaml.safe_load(
+        result["paths"]["sidecar_evidence_source_fingerprints_yaml"].read_text(encoding="utf-8")
+    )
+    assert source_fingerprints["status"] == "pass_source_fingerprints_recorded"
+    assert source_fingerprints["candidate_count"] == 1
+    assert source_fingerprints["source_ref_count"] == 11
+    assert source_fingerprints["file_ref_count"] == 9
+    assert source_fingerprints["fingerprinted_file_count"] == 9
+    assert source_fingerprints["directory_ref_count"] == 2
+    assert source_fingerprints["profiled_directory_count"] == 2
+    assert source_fingerprints["csv_ref_count"] == 7
+    assert source_fingerprints["csv_row_count_recorded_count"] == 7
+    assert source_fingerprints["unavailable_fingerprint_count"] == 0
+    assert source_fingerprints["issue_count"] == 0
+    assert source_fingerprints["candidate_summaries"][0]["belief_id"] == "candidate_warning"
+    assert source_fingerprints["candidate_summaries"][0]["status"] == "pass_source_fingerprints_recorded"
+    source_fingerprint_rows = list(
+        csv.DictReader(
+            result["paths"]["sidecar_evidence_source_fingerprints"].read_text(encoding="utf-8").splitlines()
+        )
+    )
+    assert len(source_fingerprint_rows) == 11
+    assert {row["fingerprint_status"] for row in source_fingerprint_rows} == {
+        "directory_profiled",
+        "file_fingerprinted",
+    }
+    assert all(len(row["sha256"]) == 64 for row in source_fingerprint_rows if row["expected_type"] == "file")
+    source_fingerprint_report = result["paths"]["sidecar_evidence_source_fingerprints_report"].read_text(
+        encoding="utf-8"
+    )
+    assert "Riskflow Sidecar Evidence Source Fingerprints" in source_fingerprint_report
+    assert "Status: pass_source_fingerprints_recorded" in source_fingerprint_report
+    assert "Issues: 0" in source_fingerprint_report
+    candidate_learning_ledger = yaml.safe_load(
+        result["paths"]["sidecar_candidate_learning_ledger_yaml"].read_text(encoding="utf-8")
+    )
+    assert candidate_learning_ledger["status"] == "candidate_learning_ledger_written"
+    assert candidate_learning_ledger["candidate_count"] == 1
+    assert candidate_learning_ledger["lead_post_data_candidate_count"] == 0
+    assert candidate_learning_ledger["diversity_control_only_count"] == 1
+    assert candidate_learning_ledger["archive_failure_mode_count"] == 0
+    assert candidate_learning_ledger["review_only_candidate_count"] == 0
+    assert candidate_learning_ledger["quality_blocked_review_only_count"] == 0
+    ledger_candidate = candidate_learning_ledger["candidates"][0]
+    assert ledger_candidate["belief_id"] == "candidate_warning"
+    assert ledger_candidate["handling_classification"] == "diversity_control_only"
+    assert ledger_candidate["operator_evidence_decision"] == "cluster_concentrated_review_only"
+    assert ledger_candidate["data_gate_unlock_status"] == "blocked_by_manual_data_gate_for_diversity_check"
+    assert ledger_candidate["validation_authority"] == "blocked_by_manual_data_gate"
+    assert ledger_candidate["validation_queue_status"] == "review_only_requires_diversity_and_fresh_control"
+    assert ledger_candidate["validation_design_status"] == "review_only_diversity_control_design"
+    assert ledger_candidate["source_health_status"] == "pass_source_refs_present"
+    assert ledger_candidate["source_fingerprint_status"] == "pass_source_fingerprints_recorded"
+    assert ledger_candidate["product_language_allowed"] is False
+    assert ledger_candidate["production_effect"] == "none"
+    ledger_rows = list(
+        csv.DictReader(result["paths"]["sidecar_candidate_learning_ledger"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(ledger_rows) == 1
+    assert ledger_rows[0]["handling_classification"] == "diversity_control_only"
+    assert ledger_rows[0]["validation_authority"] == "blocked_by_manual_data_gate"
+    ledger_report = result["paths"]["sidecar_candidate_learning_ledger_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Candidate Learning Ledger" in ledger_report
+    assert "Handling classification: diversity_control_only" in ledger_report
+    assert "Lead post-data candidates: 0" in ledger_report
+    post_data_playbook = yaml.safe_load(
+        result["paths"]["sidecar_post_data_validation_playbook"].read_text(encoding="utf-8")
+    )
+    assert post_data_playbook["status"] == "manual_data_gate_blocks_post_data_playbook"
+    assert post_data_playbook["candidate_count"] == 1
+    assert post_data_playbook["manual_data_gate_active"] is True
+    assert post_data_playbook["current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert post_data_playbook["visual_label_completion_status"] == "pending_required_visual_labels"
+    assert post_data_playbook["visual_label_gate_passed"] is False
+    assert "fresh_data_preflight_not_safe" in post_data_playbook["pre_validation_blockers"]
+    assert "visual_label_completion_audit_not_passed" in post_data_playbook["pre_validation_blockers"]
+    playbook_candidate = post_data_playbook["candidates"][0]
+    assert playbook_candidate["belief_id"] == "candidate_warning"
+    assert playbook_candidate["handling_classification"] == "diversity_control_only"
+    assert playbook_candidate["validation_authority"] == "blocked_by_manual_data_gate"
+    assert playbook_candidate["visual_label_gate_passed"] is False
+    assert playbook_candidate["visual_label_completion_status"] == "pending_required_visual_labels"
+    assert "visual_label_completion_audit_not_passed" in playbook_candidate["pre_validation_blockers"]
+    assert playbook_candidate["can_execute_now"] is False
+    assert playbook_candidate["run_when_manual_gate_active"] is False
+    assert "sidecar-evidence-brief --run-id ceo_test" in "|".join(playbook_candidate["post_data_sequence"])
+    assert "frozen-validation-rerun --run-id ceo_test" in "|".join(playbook_candidate["post_data_sequence"])
+    assert "do not promote from cluster-concentrated evidence" in "|".join(playbook_candidate["post_data_sequence"])
+    playbook_report = result["paths"]["sidecar_post_data_validation_playbook_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Post-Data Validation Playbook" in playbook_report
+    assert "Visual-label gate passed: False" in playbook_report
+    assert "visual_label_completion_audit_not_passed" in playbook_report
+    assert "Handling classification: diversity_control_only" in playbook_report
+    assert "Can execute now: False" in playbook_report
+    assert "Promotion authority: none" in playbook_report
+    current_handoff = yaml.safe_load(result["paths"]["sidecar_current_handoff"].read_text(encoding="utf-8"))
+    assert current_handoff["model"] == "riskflow_ceo_sidecar_current_handoff_v0"
+    assert current_handoff["status"] == "manual_data_gate_current_handoff"
+    assert current_handoff["candidate_count"] == 1
+    assert current_handoff["manual_data_gate_active"] is True
+    assert current_handoff["safe_to_run_fresh_validation"] is False
+    assert current_handoff["current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert current_handoff["product_language_allowed"] is False
+    assert current_handoff["promotion_authority"] == "none"
+    assert current_handoff["production_effect"] == "none"
+    current_role = current_handoff["candidate_roles"][0]
+    assert current_role["belief_id"] == "candidate_warning"
+    assert current_role["handling_classification"] == "diversity_control_only"
+    assert current_role["operator_evidence_decision"] == "cluster_concentrated_review_only"
+    assert current_role["readiness_tier"] == "review_only_cluster_concentrated"
+    assert current_role["primary_blocker"] == "cluster_concentration"
+    assert current_role["role_delta_vs_champion_baseline"] == 0.03
+    assert current_role["matched_null_p_value"] == 0.04
+    assert current_role["strict_survivor"] is True
+    assert current_role["event_diversity"] == 12
+    assert current_role["sample_size"] == 49
+    assert current_role["unique_symbols"] == 19
+    assert current_role["data_gate_unlock_status"] == "blocked_by_manual_data_gate_for_diversity_check"
+    assert current_role["validation_authority"] == "blocked_by_manual_data_gate"
+    assert current_role["product_language_allowed"] is False
+    assert current_role["promotion_authority"] == "none"
+    assert current_role["production_effect"] == "none"
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_evidence_packet_index"].endswith(
+        "sidecar_evidence_packet_index.yaml"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_current_decision_packet"].endswith(
+        "sidecar_current_decision_packet.yaml"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_current_decision_packet_report"].endswith(
+        "sidecar_current_decision_packet.md"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_quality_remediation_plan"].endswith(
+        "sidecar_quality_remediation_plan.yaml"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_quality_remediation_plan_report"].endswith(
+        "sidecar_quality_remediation_plan.md"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_evidence_source_manifest"].endswith(
+        "sidecar_evidence_source_manifest.csv"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_evidence_source_health"].endswith(
+        "sidecar_evidence_source_health.yaml"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_evidence_source_fingerprints"].endswith(
+        "sidecar_evidence_source_fingerprints.yaml"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_candidate_decision_matrix"].endswith(
+        "sidecar_candidate_decision_matrix.csv"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_candidate_decision_matrix_report"].endswith(
+        "sidecar_candidate_decision_matrix.md"
+    )
+    assert current_handoff["authoritative_current_artifacts"]["sidecar_visual_label_next_batch_gallery"].endswith(
+        "sidecar_visual_label_next_batch_gallery.md"
+    )
+    assert current_handoff["authoritative_current_artifacts"][
+        "sidecar_visual_label_source_update_manifest"
+    ].endswith("sidecar_visual_label_source_update_manifest.csv")
+    source_integrity = current_handoff["source_integrity"]
+    assert source_integrity["source_health_status"] == "pass_source_refs_present"
+    assert source_integrity["source_health_issue_count"] == 0
+    assert source_integrity["required_source_ref_count"] == 11
+    assert source_integrity["present_required_source_ref_count"] == 11
+    assert source_integrity["missing_required_source_ref_count"] == 0
+    assert source_integrity["wrong_type_required_source_ref_count"] == 0
+    assert source_integrity["source_fingerprint_status"] == "pass_source_fingerprints_recorded"
+    assert source_integrity["source_fingerprint_issue_count"] == 0
+    assert source_integrity["file_ref_count"] == 9
+    assert source_integrity["fingerprinted_file_count"] == 9
+    assert source_integrity["csv_ref_count"] == 7
+    assert source_integrity["csv_row_count_recorded_count"] == 7
+    assert source_integrity["unavailable_fingerprint_count"] == 0
+    historical_boundary = current_handoff["historical_decision_packet_boundary"]
+    assert historical_boundary["historical_only"] is True
+    assert historical_boundary["stale_product_delta_snapshot_detected"] is False
+    assert historical_boundary["current_state_source"] == (
+        "sidecar_current_decision_packet plus sidecar_evidence_packet_index plus "
+        "sidecar_candidate_learning_ledger plus sidecar_quality_remediation_plan"
+    )
+    current_handoff_report = result["paths"]["sidecar_current_handoff_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Current Handoff" in current_handoff_report
+    assert "Evidence decision: cluster_concentrated_review_only" in current_handoff_report
+    assert "Role delta / p / strict / diversity: 0.03 / 0.04 / True / 12" in current_handoff_report
+    assert "Quality findings: hard=none advisory=human_visual_review_not_started" in current_handoff_report
+    assert (
+        "Visual-label batch: not_in_current_visual_label_batch batch=none rows=0 "
+        "missing_cells=0 refs=0/0/0 completion=not_in_current_visual_label_batch "
+        "completed/missing/invalid=0/0/0"
+    ) in current_handoff_report
+    assert "Data-gate unlock: blocked_by_manual_data_gate_for_diversity_check" in current_handoff_report
+    assert "Source Integrity" in current_handoff_report
+    assert "Source health: pass_source_refs_present issues=0" in current_handoff_report
+    assert "Required source refs present: 11/11" in current_handoff_report
+    assert "Source fingerprints: pass_source_fingerprints_recorded issues=0" in current_handoff_report
+    assert "Files fingerprinted: 9/9" in current_handoff_report
+    assert "CSV row counts recorded: 7/7" in current_handoff_report
+    assert "Historical Packet Boundary" in current_handoff_report
+    assert "Promotion authority: none." in current_handoff_report
+    decision_matrix_rows = list(
+        csv.DictReader(result["paths"]["sidecar_candidate_decision_matrix"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(decision_matrix_rows) == 1
+    decision_matrix_row = decision_matrix_rows[0]
+    assert decision_matrix_row["belief_id"] == "candidate_warning"
+    assert decision_matrix_row["handling_classification"] == "diversity_control_only"
+    assert decision_matrix_row["operator_evidence_decision"] == "cluster_concentrated_review_only"
+    assert decision_matrix_row["role_delta_vs_champion_baseline"] == "0.03"
+    assert decision_matrix_row["matched_null_p_value"] == "0.04"
+    assert decision_matrix_row["strict_survivor"] == "True"
+    assert decision_matrix_row["event_diversity"] == "12"
+    assert decision_matrix_row["visual_label_entry_status"] == "not_in_current_visual_label_batch"
+    assert decision_matrix_row["visual_label_batch_id"] == ""
+    assert decision_matrix_row["visual_label_entry_rows"] == "0"
+    assert decision_matrix_row["visual_label_missing_required_cells"] == "0"
+    assert decision_matrix_row["visual_label_reference_gaps"] == "0/0/0"
+    assert decision_matrix_row["visual_label_completion_status"] == "not_in_current_visual_label_batch"
+    assert decision_matrix_row["visual_label_completed_rows"] == "0"
+    assert decision_matrix_row["visual_label_missing_required_rows"] == "0"
+    assert decision_matrix_row["visual_label_invalid_rows"] == "0"
+    assert decision_matrix_row["data_gate_unlock_status"] == "blocked_by_manual_data_gate_for_diversity_check"
+    assert decision_matrix_row["product_language_allowed"] == "False"
+    assert decision_matrix_row["promotion_authority"] == "none"
+    assert decision_matrix_row["production_effect"] == "none"
+    decision_matrix_report = result["paths"]["sidecar_candidate_decision_matrix_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Candidate Decision Matrix" in decision_matrix_report
+    assert "This matrix is a shadow decision handoff only" in decision_matrix_report
+    assert "Evidence decision: cluster_concentrated_review_only" in decision_matrix_report
+    assert "Role delta / p / strict / diversity: 0.03 / 0.04 / True / 12" in decision_matrix_report
+    assert (
+        "Visual-label batch: not_in_current_visual_label_batch batch=none rows=0 "
+        "missing_cells=0 refs=0/0/0 completion=not_in_current_visual_label_batch "
+        "completed/missing/invalid=0/0/0"
+    ) in decision_matrix_report
+    packet_index = yaml.safe_load(result["paths"]["sidecar_evidence_packet_index"].read_text(encoding="utf-8"))
+    assert packet_index["status"] == "complete"
+    assert packet_index["candidate_count"] == 1
+    assert packet_index["guardrail_status"] == "pass_shadow_only_guardrails"
+    assert packet_index["artifact_count"] == 69
+    assert packet_index["missing_artifacts"] == []
+    indexed = {artifact["artifact_id"]: artifact for artifact in packet_index["artifacts"]}
+    assert indexed["sidecar_evidence_candidates"]["row_count"] == 1
+    assert indexed["sidecar_visual_review_coverage"]["row_count"] == 1
+    assert indexed["sidecar_visual_review_coverage"]["authority_scope"] == "visual-review coverage audit only"
+    assert indexed["sidecar_visual_review_coverage_report"]["authority_scope"] == "visual-review coverage audit only"
+    assert indexed["sidecar_visual_label_worklist"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_worklist"]["authority_scope"] == "human visual-label worklist only"
+    assert indexed["sidecar_visual_label_worklist_report"]["authority_scope"] == "human visual-label worklist only"
+    assert indexed["sidecar_visual_label_review_batches"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_review_batches"]["authority_scope"] == "human visual-label batching only"
+    assert indexed["sidecar_visual_label_review_batches_report"]["authority_scope"] == "human visual-label batching only"
+    assert indexed["sidecar_visual_label_progress"]["row_count"] == 1
+    assert indexed["sidecar_visual_label_progress"]["authority_scope"] == "human visual-label progress only"
+    assert indexed["sidecar_visual_label_progress_report"]["authority_scope"] == "human visual-label progress only"
+    assert indexed["sidecar_visual_label_next_batch"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_next_batch"]["authority_scope"] == "human visual-label next-batch worksheet only"
+    assert indexed["sidecar_visual_label_next_batch_report"]["authority_scope"] == "human visual-label next-batch worksheet only"
+    assert indexed["sidecar_visual_label_next_batch_gallery"]["authority_scope"] == "human visual-label gallery only"
+    assert indexed["sidecar_visual_label_decision_context"]["authority_scope"] == (
+        "human visual-label decision context only"
+    )
+    assert indexed["sidecar_visual_label_decision_context_report"]["authority_scope"] == (
+        "human visual-label decision context only"
+    )
+    assert indexed["sidecar_visual_label_rubric"]["authority_scope"] == "human visual-label rubric only"
+    assert indexed["sidecar_visual_label_rubric_report"]["authority_scope"] == "human visual-label rubric only"
+    assert indexed["sidecar_visual_label_entry_sheet"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_entry_sheet"]["authority_scope"] == (
+        "human visual-label entry worksheet only"
+    )
+    assert indexed["sidecar_visual_label_entry_sheet_report"]["authority_scope"] == (
+        "human visual-label entry worksheet only"
+    )
+    assert indexed["sidecar_visual_label_source_update_manifest"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_source_update_manifest"]["authority_scope"] == (
+        "human source-update checklist only"
+    )
+    assert indexed["sidecar_visual_label_source_update_manifest_report"]["authority_scope"] == (
+        "human source-update checklist only"
+    )
+    assert indexed["sidecar_visual_label_source_patch_plan"]["row_count"] == 0
+    assert indexed["sidecar_visual_label_source_patch_plan"]["authority_scope"] == (
+        "human source-cell patch checklist only"
+    )
+    assert indexed["sidecar_visual_label_source_patch_plan_yaml"]["authority_scope"] == (
+        "human source-cell patch checklist only"
+    )
+    assert indexed["sidecar_visual_label_source_patch_plan_report"]["authority_scope"] == (
+        "human source-cell patch checklist only"
+    )
+    assert indexed["sidecar_visual_label_completion_audit"]["authority_scope"] == (
+        "human visual-label completion audit only"
+    )
+    assert indexed["sidecar_visual_label_completion_audit_yaml"]["authority_scope"] == (
+        "human visual-label completion audit only"
+    )
+    assert indexed["sidecar_visual_label_completion_audit_report"]["authority_scope"] == (
+        "human visual-label completion audit only"
+    )
+    assert indexed["sidecar_evidence_gap_matrix"]["row_count"] == 11
+    assert indexed["sidecar_validation_queue"]["row_count"] == 1
+    assert indexed["sidecar_validation_queue"]["authority_scope"] == "inactive while manual data gate is active"
+    assert indexed["sidecar_champion_challenger_validation_design"]["authority_scope"] == "shadow validation design only"
+    assert indexed["sidecar_champion_challenger_quality_audit"]["authority_scope"] == "quality audit only"
+    assert indexed["sidecar_champion_challenger_quality_audit_report"]["authority_scope"] == "quality audit only"
+    assert indexed["sidecar_quality_remediation_plan"]["authority_scope"] == "quality remediation handoff only"
+    assert indexed["sidecar_quality_remediation_plan_report"]["authority_scope"] == (
+        "quality remediation handoff only"
+    )
+    assert indexed["sidecar_data_gate_unlock_matrix"]["row_count"] == 1
+    assert indexed["sidecar_data_gate_unlock_matrix"]["authority_scope"] == "data-gate handoff only"
+    assert indexed["sidecar_evidence_consistency_audit"]["authority_scope"] == "consistency audit only"
+    assert indexed["sidecar_evidence_source_manifest"]["row_count"] == 1
+    assert indexed["sidecar_evidence_source_health"]["row_count"] == 11
+    assert indexed["sidecar_evidence_source_health"]["authority_scope"] == "source-ref health audit only"
+    assert indexed["sidecar_evidence_source_health_yaml"]["authority_scope"] == "source-ref health audit only"
+    assert indexed["sidecar_evidence_source_health_report"]["authority_scope"] == "source-ref health audit only"
+    assert indexed["sidecar_evidence_source_fingerprints"]["row_count"] == 11
+    assert indexed["sidecar_evidence_source_fingerprints"]["authority_scope"] == "source fingerprint audit only"
+    assert indexed["sidecar_evidence_source_fingerprints_yaml"]["authority_scope"] == "source fingerprint audit only"
+    assert indexed["sidecar_evidence_source_fingerprints_report"]["authority_scope"] == "source fingerprint audit only"
+    assert indexed["sidecar_candidate_learning_ledger"]["row_count"] == 1
+    assert indexed["sidecar_candidate_learning_ledger"]["authority_scope"] == "candidate learning handoff only"
+    assert indexed["sidecar_candidate_learning_ledger_yaml"]["authority_scope"] == "candidate learning handoff only"
+    assert indexed["sidecar_candidate_learning_ledger_report"]["authority_scope"] == "candidate learning handoff only"
+    assert indexed["sidecar_post_data_validation_playbook"]["authority_scope"] == "post-data handoff only"
+    assert indexed["sidecar_post_data_validation_playbook_report"]["authority_scope"] == "post-data handoff only"
+    assert indexed["sidecar_current_handoff"]["authority_scope"] == "current sidecar handoff only"
+    assert indexed["sidecar_current_handoff_report"]["authority_scope"] == "current sidecar handoff only"
+    assert indexed["sidecar_current_decision_packet"]["authority_scope"] == "current sidecar decision packet only"
+    assert indexed["sidecar_current_decision_packet_report"]["authority_scope"] == "current sidecar decision packet only"
+    assert indexed["sidecar_candidate_decision_matrix"]["row_count"] == 1
+    assert indexed["sidecar_candidate_decision_matrix"]["authority_scope"] == "shadow decision matrix only"
+    assert indexed["sidecar_candidate_decision_matrix_report"]["authority_scope"] == "shadow decision matrix only"
+    assert indexed["promotion_candidates"]["authority_scope"] == (
+        "promotion handoff only; no approval or execution authority"
+    )
+    packet_index_report = result["paths"]["sidecar_evidence_packet_index_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Evidence Packet Index" in packet_index_report
+    assert "Missing artifacts: none" in packet_index_report
+    assert "### sidecar_visual_review_coverage" in packet_index_report
+    assert "### sidecar_visual_label_worklist" in packet_index_report
+    assert "### sidecar_visual_label_review_batches" in packet_index_report
+    assert "### sidecar_visual_label_progress" in packet_index_report
+    assert "### sidecar_visual_label_next_batch" in packet_index_report
+    assert "### sidecar_visual_label_next_batch_gallery" in packet_index_report
+    assert "### sidecar_visual_label_decision_context" in packet_index_report
+    assert "### sidecar_visual_label_rubric" in packet_index_report
+    assert "### sidecar_visual_label_entry_sheet" in packet_index_report
+    assert "### sidecar_visual_label_source_update_manifest" in packet_index_report
+    assert "### sidecar_visual_label_completion_audit" in packet_index_report
+    assert "### sidecar_validation_queue" in packet_index_report
+    assert "### sidecar_champion_challenger_validation_design" in packet_index_report
+    assert "### sidecar_champion_challenger_quality_audit" in packet_index_report
+    assert "### sidecar_quality_remediation_plan" in packet_index_report
+    assert "### sidecar_data_gate_unlock_matrix" in packet_index_report
+    assert "### sidecar_evidence_consistency_audit" in packet_index_report
+    assert "### sidecar_evidence_source_health" in packet_index_report
+    assert "### sidecar_evidence_source_fingerprints" in packet_index_report
+    assert "### sidecar_candidate_learning_ledger" in packet_index_report
+    assert "### sidecar_post_data_validation_playbook" in packet_index_report
+    assert "### sidecar_current_handoff" in packet_index_report
+    assert "### sidecar_current_decision_packet" in packet_index_report
+    assert "### sidecar_candidate_decision_matrix" in packet_index_report
+    assert "### promotion_candidates" in packet_index_report
+    assert "Format: csv rows=1" in packet_index_report
+    spec_rows = list(csv.DictReader(result["paths"]["sidecar_frozen_spec_review"].read_text(encoding="utf-8").splitlines()))
+    assert len(spec_rows) == 1
+    spec_row = spec_rows[0]
+    assert spec_row["belief_id"] == "candidate_warning"
+    assert spec_row["variant_id"] == "variant_warning"
+    assert spec_row["entry_lag_bars"] == "0"
+    assert spec_row["cooldown_bars"] == "120"
+    assert spec_row["validation_status"] == "spec_only_not_validated"
+    assert spec_row["official_frozen_plan_exists"] == "False"
+    assert spec_row["required_controls"] == "same frozen shape only|no threshold tuning"
+    report = result["paths"]["sidecar_evidence_brief_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Evidence Brief" in report
+    assert "shadow_review_ready_fresh_data_blocked" in report
+    assert "Review-only frozen specs: 1" in report
+    assert "Review questions: Was the warning visually legible before the downside move?" in report
+    assert "Required visual labels: visual_readability|promotion_blocker" in report
+    assert "Visual review gallery: reports/visual_review/gallery.md" in report
+    assert "Visual review labels with images: reports/visual_review/human_review_labels_with_images.csv" in report
+    decision_cards = result["paths"]["sidecar_candidate_decision_cards"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Candidate Decision Cards" in decision_cards
+    assert "## candidate_warning" in decision_cards
+    assert "Current handling: shadow-only" in decision_cards
+    assert "Learning classification: diversity_control_only" in decision_cards
+    assert "Learning reason: useful as a diversity/fragility control" in decision_cards
+    assert "Learning next allowed action: after data unlock, run only diversity/fragility control validation" in decision_cards
+    assert "Validation authority: blocked_by_manual_data_gate" in decision_cards
+    assert "Data-gate unlock status: blocked_by_manual_data_gate_for_diversity_check" in decision_cards
+    assert "Readiness tier: review_only_cluster_concentrated" in decision_cards
+    assert "Primary blocker: cluster_concentration" in decision_cards
+    assert "Validation queue status: review_only_requires_diversity_and_fresh_control" in decision_cards
+    assert "Operator evidence decision: cluster_concentrated_review_only" in decision_cards
+    remediation_plan = yaml.safe_load(
+        result["paths"]["sidecar_quality_remediation_plan"].read_text(encoding="utf-8")
+    )
+    assert remediation_plan["model"] == "riskflow_ceo_sidecar_quality_remediation_plan_v0"
+    assert remediation_plan["status"] == "manual_gate_quality_remediation_plan"
+    assert remediation_plan["candidate_count"] == 1
+    assert remediation_plan["quality_issue_count"] == 1
+    assert remediation_plan["autonomous_clearable_now_count"] == 0
+    assert remediation_plan["human_visual_remediation_count"] == 1
+    assert remediation_plan["diversity_control_remediation_count"] == 0
+    assert remediation_plan["archive_only_count"] == 0
+    assert remediation_plan["current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    remediation_candidate = remediation_plan["candidates"][0]
+    assert remediation_candidate["belief_id"] == "candidate_warning"
+    assert remediation_candidate["remediation_status"] == "human_visual_review_required"
+    assert remediation_candidate["remediation_items"][0]["finding"] == "human_visual_review_not_started"
+    assert remediation_candidate["remediation_items"][0]["owner"] == "human_visual_reviewer"
+    assert remediation_candidate["remediation_items"][0]["autonomous_can_clear_now"] is False
+    remediation_report = result["paths"]["sidecar_quality_remediation_plan_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Quality Remediation Plan" in remediation_report
+    assert "Status: manual_gate_quality_remediation_plan" in remediation_report
+    assert "human_visual_review_not_started: action=complete_champion_challenger_visual_review_labels" in (
+        remediation_report
+    )
+    current_packet = yaml.safe_load(result["paths"]["sidecar_current_decision_packet"].read_text(encoding="utf-8"))
+    assert current_packet["model"] == "riskflow_ceo_sidecar_current_decision_packet_v0"
+    assert current_packet["status"] == "manual_gate_current_decision_packet"
+    assert current_packet["executive_decision"] == "hold_validation_at_manual_data_gate"
+    assert current_packet["candidate_count"] == 1
+    assert current_packet["quality_remediation_status"] == "manual_gate_quality_remediation_plan"
+    assert current_packet["quality_remediation_issue_count"] == 1
+    assert current_packet["quality_remediation_autonomous_clearable_now_count"] == 0
+    assert current_packet["quality_remediation_human_visual_remediation_count"] == 1
+    assert current_packet["quality_remediation_diversity_control_remediation_count"] == 0
+    assert current_packet["quality_remediation_archive_only_count"] == 0
+    assert current_packet["quality_remediation_current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert current_packet["candidate_decisions"][0]["belief_id"] == "candidate_warning"
+    assert current_packet["candidate_decisions"][0]["executive_candidate_decision"] == (
+        "diversity_control_after_manual_data_gate"
+    )
+    assert current_packet["candidate_decisions"][0]["validation_allowed_now"] is False
+    assert current_packet["candidate_decisions"][0]["promotion_allowed_now"] is False
+    assert current_packet["candidate_decisions"][0]["quality_remediation_status"] == (
+        "human_visual_review_required"
+    )
+    assert current_packet["candidate_decisions"][0]["quality_remediation_item_count"] == 1
+    assert current_packet["candidate_decisions"][0]["quality_remediation_findings"] == [
+        "human_visual_review_not_started"
+    ]
+    assert current_packet["candidate_decisions"][0]["quality_remediation_required_actions"] == [
+        "complete_champion_challenger_visual_review_labels"
+    ]
+    assert current_packet["candidate_decisions"][0]["quality_remediation_clearance_gates"] == [
+        "required_human_visual_labels"
+    ]
+    assert current_packet["candidate_decisions"][0]["quality_remediation_autonomous_can_clear_now"] is False
+    current_packet_report = result["paths"]["sidecar_current_decision_packet_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Current Decision Packet" in current_packet_report
+    assert "Executive decision: hold_validation_at_manual_data_gate" in current_packet_report
+    assert "Executive candidate decision: diversity_control_after_manual_data_gate" in current_packet_report
+    assert "Quality remediation status/issues hard/advisory: manual_gate_quality_remediation_plan/1/0/1" in (
+        current_packet_report
+    )
+    assert "Quality remediation autonomous/human/diversity/archive: 0/1/0/0" in current_packet_report
+    assert "Quality remediation: human_visual_review_required items=1 clear_now=False batch=none" in (
+        current_packet_report
+    )
+    assert (
+        "Quality remediation findings/actions/gates: "
+        "human_visual_review_not_started / "
+        "complete_champion_challenger_visual_review_labels / "
+        "required_human_visual_labels"
+    ) in current_packet_report
+    assert (
+        "Visual-label batch: not_in_current_visual_label_batch batch=none rows=0 "
+        "missing_cells=0 refs=0/0/0 completion=not_in_current_visual_label_batch "
+        "completed/missing/invalid=0/0/0"
+    ) in decision_cards
+    assert "Required next action: complete visual review and require broader fresh/control evidence before promotion consideration" in decision_cards
+    assert "Product language allowed: False" in decision_cards
+    assert "Production effect: none" in decision_cards
+    promotion_candidates = result["paths"]["promotion_candidates"].read_text(encoding="utf-8")
+    assert "Riskflow Promotion Candidates" in promotion_candidates
+    assert "Sidecar Shadow Candidates" in promotion_candidates
+    assert "candidate_warning role=warning_blocker handling=diversity_control_only" in promotion_candidates
+    assert "promotion_ceiling=shadow_candidate" in promotion_candidates
+    assert "Promotion eligibility: blocked until safe fresh/control validation" in promotion_candidates
+    assert "Product language allowed: False" in promotion_candidates
+    assert "Production effect: none." in promotion_candidates
+    guardrail_report = result["paths"]["sidecar_shadow_guardrail_audit_report"].read_text(encoding="utf-8")
+    assert "Riskflow Sidecar Shadow Guardrail Audit" in guardrail_report
+    assert "Status: pass_shadow_only_guardrails" in guardrail_report
+    assert "Violations: 0" in guardrail_report
+    assert "Blocking gates: manual_data_gate|missing_official_frozen_candidate_validation_plan|review_only_frozen_spec_not_validated|fresh_or_control_validation_not_run" in guardrail_report
+    assert "Production effect: none." in guardrail_report
+    source_rows = list(
+        csv.DictReader(result["paths"]["sidecar_evidence_source_manifest"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(source_rows) == 1
+    source_row = source_rows[0]
+    assert source_row["belief_id"] == "candidate_warning"
+    assert source_row["metric_source_dirs"] == "reports/lab_ops/run/loop_0001"
+    assert source_row["ranked_csvs"] == "reports/lab_ops/run/loop_0001/grammar_search_ranked.csv"
+    assert source_row["variant_record_csvs"] == "reports/lab_ops/run/loop_0001/grammar_search_variant_records.csv"
+    assert source_row["strict_referee_csvs"] == "reports/lab_ops/run/loop_0001/grammar_search_strict_referee.csv"
+    assert source_row["visual_review_gallery"] == "reports/visual_review/gallery.md"
+    assert source_row["visual_review_labels_with_images"] == "reports/visual_review/human_review_labels_with_images.csv"
+    assert source_row["visual_evidence_source_dirs"] == "reports/visual_review/source_loop"
+    assert source_row["visual_ranked_csvs"] == "reports/visual_review/source_loop/grammar_search_ranked.csv"
+    assert source_row["frozen_spec_source_result_path"].endswith("candidate_warning__frozen_validation_spec.yaml")
+    assert source_row["validation_route"] == "fresh_and_control_validation"
+    assert source_row["validation_result"] == "not_run"
+    assert source_row["evidence_debt_ids"] == "candidate_warning__fresh_data_readiness"
+    assert source_row["evidence_debt_kinds"] == "fresh_data_readiness"
+    assert source_row["evidence_debt_owner_commands"] == "import_or_curate_fresh_ohlcv_data"
+    assert source_row["product_language_allowed"] == "False"
+    assert source_row["production_effect"] == "none"
+
+
+def test_sidecar_visual_label_worklist_tracks_candidate_matched_pending_rows(tmp_path: Path) -> None:
+    labels_path = tmp_path / "reports" / "visual_review" / "human_review_labels_with_images.csv"
+    labels_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "review_bucket": "lead_false_warning",
+            "symbol": "AAA",
+            "date": "2026-01-01 00:00:00",
+            "timeframe": "1d",
+            "event_cluster_id": "2026-01",
+            "family_id": "family_lead",
+            "variant_id": "variant_lead_exact",
+            "direction": "negative",
+            "review_outcome_column": "forward_relative_return_30",
+            "review_outcome": "1.5",
+            "review_abs_outcome": "1.5",
+            "forward_return": "2.0",
+            "max_drawdown": "-0.1",
+            "max_favorable_excursion": "2.2",
+            "suggested_labels": "not_visually_reviewed|false_warning_candidate",
+            "human_label": "",
+            "visual_readability": "",
+            "product_role_match": "",
+            "false_positive_shape": "",
+            "promotion_blocker": "",
+            "image_path": "images/lead_exact.png",
+            "render_status": "rendered",
+        },
+        {
+            "review_bucket": "lead_context",
+            "symbol": "BBB",
+            "date": "2026-01-02 00:00:00",
+            "timeframe": "4h",
+            "event_cluster_id": "2026-01",
+            "family_id": "family_lead",
+            "variant_id": "variant_lead_context",
+            "direction": "negative",
+            "review_outcome_column": "forward_relative_return_180",
+            "review_outcome": "-0.4",
+            "review_abs_outcome": "0.4",
+            "forward_return": "-0.2",
+            "max_drawdown": "-0.3",
+            "max_favorable_excursion": "0.1",
+            "suggested_labels": "not_visually_reviewed|avoided_downside",
+            "human_label": "",
+            "visual_readability": "clear",
+            "product_role_match": "",
+            "false_positive_shape": "",
+            "promotion_blocker": "",
+            "image_path": "images/lead_context.png",
+            "render_status": "rendered",
+        },
+        {
+            "review_bucket": "control_warning",
+            "symbol": "CCC",
+            "date": "2026-01-03 00:00:00",
+            "timeframe": "4h",
+            "event_cluster_id": "2026-01",
+            "family_id": "family_control",
+            "variant_id": "variant_control",
+            "direction": "negative",
+            "review_outcome_column": "forward_relative_return_180",
+            "review_outcome": "0.8",
+            "review_abs_outcome": "0.8",
+            "forward_return": "0.9",
+            "max_drawdown": "-0.1",
+            "max_favorable_excursion": "1.1",
+            "suggested_labels": "not_visually_reviewed|false_warning_candidate",
+            "human_label": "",
+            "visual_readability": "",
+            "product_role_match": "",
+            "false_positive_shape": "",
+            "promotion_blocker": "",
+            "image_path": "images/control.png",
+            "render_status": "rendered",
+        },
+        {
+            "review_bucket": "unmatched_context",
+            "symbol": "DDD",
+            "date": "2026-01-04 00:00:00",
+            "timeframe": "1d",
+            "event_cluster_id": "2026-01",
+            "family_id": "family_unmatched",
+            "variant_id": "variant_unmatched",
+            "direction": "negative",
+            "review_outcome_column": "forward_relative_return_30",
+            "review_outcome": "0.1",
+            "review_abs_outcome": "0.1",
+            "forward_return": "0.2",
+            "max_drawdown": "-0.1",
+            "max_favorable_excursion": "0.3",
+            "suggested_labels": "not_visually_reviewed",
+            "human_label": "",
+            "visual_readability": "",
+            "product_role_match": "",
+            "false_positive_shape": "",
+            "promotion_blocker": "",
+            "image_path": "images/unmatched.png",
+            "render_status": "rendered",
+        },
+        {
+            "review_bucket": "lead_completed",
+            "symbol": "EEE",
+            "date": "2026-01-05 00:00:00",
+            "timeframe": "1d",
+            "event_cluster_id": "2026-01",
+            "family_id": "family_lead",
+            "variant_id": "variant_lead_done",
+            "direction": "negative",
+            "review_outcome_column": "forward_relative_return_30",
+            "review_outcome": "-0.7",
+            "review_abs_outcome": "0.7",
+            "forward_return": "-0.8",
+            "max_drawdown": "-0.4",
+            "max_favorable_excursion": "0.1",
+            "suggested_labels": "avoided_downside",
+            "human_label": "reviewed",
+            "visual_readability": "clear",
+            "product_role_match": "fits_warning",
+            "false_positive_shape": "none",
+            "promotion_blocker": "no",
+            "image_path": "images/lead_done.png",
+            "render_status": "rendered",
+        },
+    ]
+    with labels_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    brief = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "candidates": [
+            {
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "metric_summary": {
+                    "best_family_id": "family_lead",
+                    "timeframe": "1d",
+                    "best_variant_id": "variant_lead_exact",
+                },
+                "visual_review": {
+                    "focus": "blocker_false_positive_and_avoided_downside_review",
+                    "priority": 9.5,
+                    "required_labels": ["visual_readability", "promotion_blocker"],
+                    "labels_with_images": "reports/visual_review/human_review_labels_with_images.csv",
+                },
+            },
+            {
+                "belief_id": "control",
+                "product_role": "warning_blocker",
+                "metric_summary": {
+                    "best_family_id": "family_control",
+                    "timeframe": "4h",
+                    "best_variant_id": "variant_control_best",
+                },
+                "visual_review": {
+                    "focus": "blocker_false_positive_and_avoided_downside_review",
+                    "priority": 2.0,
+                    "required_labels": ["visual_readability", "promotion_blocker"],
+                    "labels_with_images": "reports/visual_review/human_review_labels_with_images.csv",
+                },
+            },
+        ],
+    }
+    worklist = ceo_ops.build_sidecar_visual_label_worklist(
+        brief=brief,
+        visual_review_coverage={
+            "rows": [
+                {"belief_id": "lead", "human_label_completion_status": "human_review_in_progress"},
+                {"belief_id": "control", "human_label_completion_status": "human_review_not_started"},
+            ]
+        },
+        source_root=tmp_path,
+        run_root=tmp_path / "reports" / "ceo_runs" / "ceo_test",
+    )
+
+    assert worklist["status"] == "pending_human_visual_review_labels"
+    assert worklist["candidate_count"] == 2
+    assert worklist["source_label_file_count"] == 1
+    assert worklist["source_label_row_count"] == 5
+    assert worklist["candidate_matched_source_row_count"] == 4
+    assert worklist["unmatched_source_row_count"] == 1
+    assert worklist["pending_label_row_count"] == 3
+    assert worklist["coverage_human_label_statuses"] == "human_review_in_progress|human_review_not_started"
+    summaries = {row["belief_id"]: row for row in worklist["candidate_summaries"]}
+    assert summaries["lead"]["matched_label_rows"] == 3
+    assert summaries["lead"]["pending_label_rows"] == 2
+    assert summaries["lead"]["exact_variant_pending_rows"] == 1
+    assert summaries["lead"]["family_context_pending_rows"] == 1
+    assert summaries["control"]["matched_label_rows"] == 1
+    assert summaries["control"]["pending_label_rows"] == 1
+    result_rows = worklist["rows"]
+    assert [row["belief_id"] for row in result_rows] == ["lead", "lead", "control"]
+    assert result_rows[0]["row_match"] == "exact_variant"
+    assert result_rows[0]["human_label_status"] == "human_review_not_started"
+    assert result_rows[0]["missing_required_labels"] == "visual_readability|promotion_blocker"
+    assert result_rows[1]["row_match"] == "family_context"
+    assert result_rows[1]["human_label_status"] == "human_review_incomplete"
+    assert result_rows[1]["missing_required_labels"] == "promotion_blocker"
+    assert result_rows[2]["row_match"] == "family_timeframe"
+    report = ceo_ops.render_sidecar_visual_label_worklist(worklist)
+    assert "Riskflow Sidecar Visual Label Worklist" in report
+    assert "Pending label rows: 3" in report
+    assert "Exact/family-timeframe/context pending: 1/0/1" in report
+
+
+def test_sidecar_visual_label_review_batches_partition_pending_worklist_rows() -> None:
+    worklist = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "status": "pending_human_visual_review_labels",
+        "rows": [
+            {
+                "worklist_rank": 1,
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "review_focus": "warning_review",
+                "visual_priority": 9.5,
+                "row_match": "exact_variant",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 10,
+                "review_bucket": "missed_upside",
+                "symbol": "AAA",
+                "date": "2026-01-01",
+                "row_timeframe": "1d",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_lead",
+                "variant_id": "variant_lead",
+                "review_outcome_column": "forward_relative_return_30",
+                "review_outcome": "1.2",
+                "forward_return": "2.0",
+                "max_drawdown": "-0.1",
+                "max_favorable_excursion": "2.2",
+                "suggested_labels": "missed_upside",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "human_label_status": "human_review_not_started",
+                "image_path": "images/a.png",
+                "render_status": "rendered",
+            },
+            {
+                "worklist_rank": 2,
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "review_focus": "warning_review",
+                "visual_priority": 9.5,
+                "row_match": "family_context",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 11,
+                "review_bucket": "avoided_downside",
+                "symbol": "BBB",
+                "date": "2026-01-02",
+                "row_timeframe": "4h",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_lead",
+                "variant_id": "variant_context",
+                "review_outcome_column": "forward_relative_return_180",
+                "review_outcome": "-0.5",
+                "forward_return": "-0.2",
+                "max_drawdown": "-0.3",
+                "max_favorable_excursion": "0.2",
+                "suggested_labels": "avoided_downside",
+                "missing_required_labels": "promotion_blocker",
+                "human_label_status": "human_review_incomplete",
+                "image_path": "images/b.png",
+                "render_status": "rendered",
+            },
+            {
+                "worklist_rank": 3,
+                "belief_id": "control",
+                "product_role": "warning_blocker",
+                "review_focus": "control_review",
+                "visual_priority": 2.0,
+                "row_match": "family_timeframe",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 12,
+                "review_bucket": "control",
+                "symbol": "CCC",
+                "date": "2026-01-03",
+                "row_timeframe": "4h",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_control",
+                "variant_id": "variant_control",
+                "review_outcome_column": "forward_relative_return_180",
+                "review_outcome": "0.8",
+                "forward_return": "0.9",
+                "max_drawdown": "-0.1",
+                "max_favorable_excursion": "1.1",
+                "suggested_labels": "false_warning_candidate",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "human_label_status": "human_review_not_started",
+                "image_path": "images/c.png",
+                "render_status": "rendered",
+            },
+        ],
+    }
+
+    batches = ceo_ops.build_sidecar_visual_label_review_batches(worklist=worklist, batch_size=2)
+
+    assert batches["status"] == "pending_human_visual_review_batches"
+    assert batches["batch_size"] == 2
+    assert batches["batch_count"] == 2
+    assert batches["pending_label_row_count"] == 3
+    assert batches["candidate_count"] == 2
+    assert batches["candidate_ids"] == "control|lead"
+    assert batches["next_action"] == "complete_next_visual_label_review_batch"
+    first_batch = batches["batches"][0]
+    assert first_batch["batch_id"] == "visual_label_batch_01"
+    assert first_batch["batch_focus"] == "lead_warning_review"
+    assert first_batch["row_count"] == 2
+    assert first_batch["worklist_rank_start"] == 1
+    assert first_batch["worklist_rank_end"] == 2
+    assert first_batch["exact_variant_count"] == 1
+    assert first_batch["family_context_count"] == 1
+    assert first_batch["missing_required_labels"] == "promotion_blocker|visual_readability"
+    second_batch = batches["batches"][1]
+    assert second_batch["batch_focus"] == "control_warning_review"
+    assert second_batch["family_timeframe_count"] == 1
+    assert [row["batch_id"] for row in batches["rows"]] == [
+        "visual_label_batch_01",
+        "visual_label_batch_01",
+        "visual_label_batch_02",
+    ]
+    assert batches["rows"][0]["batch_row_index"] == 1
+    assert batches["rows"][2]["batch_row_index"] == 1
+    report = ceo_ops.render_sidecar_visual_label_review_batches(batches)
+    assert "Riskflow Sidecar Visual Label Review Batches" in report
+    assert "Batches: 2" in report
+    assert "### visual_label_batch_01" in report
+    assert "Exact/family-timeframe/context rows: 1/0/1" in report
+
+
+def test_sidecar_visual_label_progress_tracks_next_batch_and_completion() -> None:
+    worklist = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "status": "pending_human_visual_review_labels",
+        "next_action": "complete_candidate_matched_human_visual_labels",
+        "candidate_summaries": [
+            {
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "review_focus": "warning_review",
+                "visual_priority": 9.5,
+                "required_labels": "visual_readability|promotion_blocker",
+                "matched_label_rows": 3,
+                "pending_label_rows": 2,
+                "exact_variant_pending_rows": 1,
+                "family_timeframe_pending_rows": 0,
+                "family_context_pending_rows": 1,
+            },
+            {
+                "belief_id": "archive",
+                "product_role": "reset_quality",
+                "review_focus": "reset_quality_review",
+                "visual_priority": -1.0,
+                "required_labels": "visual_readability|promotion_blocker",
+                "matched_label_rows": 2,
+                "pending_label_rows": 0,
+                "exact_variant_pending_rows": 0,
+                "family_timeframe_pending_rows": 0,
+                "family_context_pending_rows": 0,
+            },
+        ],
+    }
+    batches = {
+        "batch_count": 1,
+        "batches": [
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "row_count": 2,
+                "worklist_rank_start": 1,
+                "worklist_rank_end": 2,
+            }
+        ],
+        "rows": [
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "batch_row_index": 1,
+                "belief_id": "lead",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+            },
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "batch_row_index": 2,
+                "belief_id": "lead",
+                "missing_required_labels": "promotion_blocker",
+            },
+        ],
+    }
+
+    progress = ceo_ops.build_sidecar_visual_label_progress(worklist=worklist, batches=batches)
+
+    assert progress["status"] == "pending_human_visual_label_progress"
+    assert progress["candidate_count"] == 2
+    assert progress["matched_label_row_count"] == 5
+    assert progress["pending_label_row_count"] == 2
+    assert progress["completed_label_row_count"] == 3
+    assert progress["not_started_candidate_count"] == 0
+    assert progress["incomplete_candidate_count"] == 1
+    assert progress["complete_candidate_count"] == 1
+    assert progress["next_batch_id"] == "visual_label_batch_01"
+    rows = {row["belief_id"]: row for row in progress["rows"]}
+    assert rows["lead"]["human_label_progress_status"] == "human_visual_review_incomplete"
+    assert rows["lead"]["next_action"] == "complete_visual_label_batch_01"
+    assert rows["lead"]["next_batch_row_count"] == 2
+    assert rows["lead"]["missing_required_labels"] == "promotion_blocker|visual_readability"
+    assert rows["archive"]["human_label_progress_status"] == "human_visual_review_labels_populated"
+    assert rows["archive"]["next_batch_id"] == ""
+    report = ceo_ops.render_sidecar_visual_label_progress(progress)
+    assert "Riskflow Sidecar Visual Label Progress" in report
+    assert "Pending label rows: 2" in report
+    assert "Next batch: visual_label_batch_01" in report
+    assert "Status: human_visual_review_incomplete" in report
+
+
+def test_sidecar_visual_label_next_batch_packet_extracts_focused_worksheet(tmp_path: Path) -> None:
+    worklist = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "status": "pending_human_visual_review_labels",
+        "rows": [
+            {
+                "worklist_rank": 1,
+                "human_label": "",
+                "visual_readability": "",
+                "product_role_match": "",
+                "false_positive_shape": "",
+                "promotion_blocker": "",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 10,
+            },
+            {
+                "worklist_rank": 2,
+                "human_label": "partial",
+                "visual_readability": "clear",
+                "product_role_match": "",
+                "false_positive_shape": "",
+                "promotion_blocker": "",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 11,
+            },
+            {
+                "worklist_rank": 3,
+                "human_label": "",
+                "visual_readability": "",
+                "product_role_match": "",
+                "false_positive_shape": "",
+                "promotion_blocker": "",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 12,
+            },
+        ],
+    }
+    batches = {
+        "next_action": "complete_next_visual_label_review_batch",
+        "batches": [
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "batch_focus": "lead_warning_review",
+                "row_count": 2,
+                "worklist_rank_start": 1,
+                "worklist_rank_end": 2,
+                "missing_required_labels": "promotion_blocker|visual_readability",
+            },
+            {
+                "batch_id": "visual_label_batch_02",
+                "batch_rank": 2,
+                "batch_focus": "control_warning_review",
+                "row_count": 1,
+                "worklist_rank_start": 3,
+                "worklist_rank_end": 3,
+                "missing_required_labels": "promotion_blocker|visual_readability",
+            },
+        ],
+        "rows": [
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "batch_focus": "lead_warning_review",
+                "batch_row_index": 1,
+                "worklist_rank": 1,
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "review_focus": "warning_review",
+                "visual_priority": 9.5,
+                "row_match": "exact_variant",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 10,
+                "review_bucket": "missed_upside",
+                "symbol": "AAA",
+                "date": "2026-01-01",
+                "row_timeframe": "1d",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_lead",
+                "variant_id": "variant_lead",
+                "review_outcome_column": "forward_relative_return_30",
+                "review_outcome": "1.2",
+                "forward_return": "2.0",
+                "max_drawdown": "-0.1",
+                "max_favorable_excursion": "2.2",
+                "suggested_labels": "missed_upside",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "human_label_status": "human_review_not_started",
+                "image_path": "images/a.png",
+                "render_status": "rendered",
+            },
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_rank": 1,
+                "batch_focus": "lead_warning_review",
+                "batch_row_index": 2,
+                "worklist_rank": 2,
+                "belief_id": "lead",
+                "product_role": "warning_blocker",
+                "review_focus": "warning_review",
+                "visual_priority": 9.5,
+                "row_match": "family_context",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 11,
+                "review_bucket": "avoided_downside",
+                "symbol": "BBB",
+                "date": "2026-01-02",
+                "row_timeframe": "4h",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_lead",
+                "variant_id": "variant_context",
+                "review_outcome_column": "forward_relative_return_180",
+                "review_outcome": "-0.5",
+                "forward_return": "-0.2",
+                "max_drawdown": "-0.3",
+                "max_favorable_excursion": "0.2",
+                "suggested_labels": "avoided_downside",
+                "missing_required_labels": "promotion_blocker",
+                "human_label_status": "human_review_incomplete",
+                "image_path": "images/b.png",
+                "render_status": "rendered",
+            },
+            {
+                "batch_id": "visual_label_batch_02",
+                "batch_rank": 2,
+                "batch_focus": "control_warning_review",
+                "batch_row_index": 1,
+                "worklist_rank": 3,
+                "belief_id": "control",
+                "product_role": "warning_blocker",
+                "review_focus": "control_review",
+                "visual_priority": 2.0,
+                "row_match": "family_timeframe",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 12,
+                "review_bucket": "control",
+                "symbol": "CCC",
+                "date": "2026-01-03",
+                "row_timeframe": "4h",
+                "event_cluster_id": "2026-01",
+                "family_id": "family_control",
+                "variant_id": "variant_control",
+                "review_outcome_column": "forward_relative_return_180",
+                "review_outcome": "0.8",
+                "forward_return": "0.9",
+                "max_drawdown": "-0.1",
+                "max_favorable_excursion": "1.1",
+                "suggested_labels": "false_warning_candidate",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "human_label_status": "human_review_not_started",
+                "image_path": "images/c.png",
+                "render_status": "rendered",
+            },
+        ],
+    }
+    progress = {
+        "next_batch_id": "visual_label_batch_01",
+    }
+
+    packet = ceo_ops.build_sidecar_visual_label_next_batch_packet(
+        worklist=worklist,
+        batches=batches,
+        progress=progress,
+    )
+
+    assert packet["status"] == "pending_human_visual_label_next_batch"
+    assert packet["batch_id"] == "visual_label_batch_01"
+    assert packet["row_count"] == 2
+    assert packet["candidate_count"] == 1
+    assert packet["candidate_ids"] == "lead"
+    assert packet["source_label_file_count"] == 1
+    assert packet["source_label_files"] == "labels.csv"
+    assert packet["missing_required_labels"] == "promotion_blocker|visual_readability"
+    assert packet["next_action"] == "complete_this_visual_label_batch"
+    assert [row["worklist_rank"] for row in packet["rows"]] == [1, 2]
+    assert packet["rows"][0]["source_update_instruction"] == "fill_required_labels_in_source_row:labels.csv#10"
+    assert packet["rows"][1]["human_label"] == "partial"
+    assert packet["rows"][1]["visual_readability"] == "clear"
+    report = ceo_ops.render_sidecar_visual_label_next_batch(packet)
+    assert "Riskflow Sidecar Visual Label Next Batch" in report
+    assert "Batch: visual_label_batch_01" in report
+    assert "Source update: fill_required_labels_in_source_row:labels.csv#10" in report
+    assert "Image: images/a.png" in report
+    rubric = ceo_ops.build_sidecar_visual_label_rubric(
+        next_batch=packet,
+        progress={"next_batch_id": "visual_label_batch_01"},
+    )
+    (tmp_path / "images").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "images" / "a.png").write_bytes(b"png")
+    (tmp_path / "images" / "b.png").write_bytes(b"png")
+    (tmp_path / "labels.csv").write_text(
+        "symbol,visual_readability,product_role_match,false_positive_shape,promotion_blocker\n"
+        + "\n".join(f"AAA{i},,,," for i in range(1, 12))
+        + "\n",
+        encoding="utf-8",
+    )
+    entry_sheet = ceo_ops.build_sidecar_visual_label_entry_sheet(
+        next_batch=packet,
+        rubric=rubric,
+        source_root=tmp_path,
+    )
+    gallery = ceo_ops.render_sidecar_visual_label_next_batch_gallery(
+        packet,
+        rubric=rubric,
+        gallery_path=Path("reports/ceo_runs/ceo_test/sidecar_visual_label_next_batch_gallery.md"),
+        entry_sheet=entry_sheet,
+    )
+    assert "Riskflow Sidecar Visual Label Next Batch Gallery" in gallery
+    assert "Entry sheet status: ready_for_visual_label_entry" in gallery
+    assert "Source/image reference gaps source-file/source-row/image: 0/0/0" in gallery
+    assert "![AAA 2026-01-01](../../../images/a.png)" in gallery
+    assert "Image exists: True" in gallery
+    assert "Source refs: file_exists=True row_exists=True entry_status=ready_for_label_entry" in gallery
+    assert "Source update: fill_required_labels_in_source_row:labels.csv#10" in gallery
+    assert "visual_readability: clear_before_event|ambiguous|not_legible|chart_or_image_missing" in gallery
+
+
+def test_sidecar_visual_label_rubric_defines_batch_completion_contract() -> None:
+    next_batch = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "batch_id": "visual_label_batch_01",
+        "batch_focus": "lead_warning_review",
+        "rows": [
+            {
+                "belief_id": "lead",
+                "source_label_file": "labels.csv",
+                "source_update_instruction": "fill_required_labels_in_source_row:labels.csv#10",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+            },
+            {
+                "belief_id": "lead",
+                "source_label_file": "labels.csv",
+                "source_update_instruction": "fill_required_labels_in_source_row:labels.csv#11",
+                "missing_required_labels": "product_role_match|false_positive_shape",
+            },
+        ],
+    }
+    progress = {"next_batch_id": "visual_label_batch_01"}
+
+    rubric = ceo_ops.build_sidecar_visual_label_rubric(next_batch=next_batch, progress=progress)
+
+    assert rubric["model"] == ceo_ops.CEO_SIDECAR_VISUAL_LABEL_RUBRIC_MODEL
+    assert rubric["status"] == "ready_for_human_visual_label_review"
+    assert rubric["batch_id"] == "visual_label_batch_01"
+    assert rubric["row_count"] == 2
+    assert rubric["candidate_count"] == 1
+    assert rubric["candidate_ids"] == ["lead"]
+    assert rubric["source_label_files"] == ["labels.csv"]
+    assert rubric["required_label_fields"] == [
+        "false_positive_shape",
+        "product_role_match",
+        "promotion_blocker",
+        "visual_readability",
+    ]
+    assert rubric["source_update_instruction_count"] == 2
+    assert rubric["product_language_allowed"] is False
+    assert rubric["production_effect"] == "none"
+    fields = {field["field"]: field for field in rubric["field_contracts"]}
+    assert "visual_readability" in fields
+    assert "clear_before_event" in fields["visual_readability"]["preferred_values"]
+    assert "promotion_blocker" in fields
+    assert "human_label" in fields
+    assert fields["human_label"]["required"] is False
+    report = ceo_ops.render_sidecar_visual_label_rubric(rubric)
+    assert "Riskflow Sidecar Visual Label Rubric" in report
+    assert "Batch: visual_label_batch_01" in report
+    assert "Required label fields: false_positive_shape|product_role_match|promotion_blocker|visual_readability" in report
+    assert "fill_required_labels_in_source_row:labels.csv#10" in report
+
+
+def test_sidecar_visual_label_completion_audit_checks_required_and_rubric_values(tmp_path: Path) -> None:
+    labels_path = tmp_path / "labels.csv"
+    labels_path.write_text(
+        "symbol,visual_readability,promotion_blocker\n"
+        + "\n".join(f"AAA{i},," for i in range(1, 13))
+        + "\n",
+        encoding="utf-8",
+    )
+    for image_name in ("row_1.png", "row_2.png", "row_3.png"):
+        (tmp_path / image_name).write_bytes(b"png")
+    next_batch = {
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "batch_id": "visual_label_batch_01",
+        "batch_focus": "lead_warning_review",
+        "rows": [
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_row_index": 1,
+                "worklist_rank": 1,
+                "belief_id": "lead",
+                "symbol": "AAA",
+                "date": "2026-01-01",
+                "row_timeframe": "1d",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 10,
+                "image_path": "row_1.png",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "visual_readability": "clear_before_event",
+                "promotion_blocker": "none",
+                "human_label": "warning_confirmed",
+                "source_update_instruction": "fill_required_labels_in_source_row:labels.csv#10",
+            },
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_row_index": 2,
+                "worklist_rank": 2,
+                "belief_id": "lead",
+                "symbol": "BBB",
+                "date": "2026-01-02",
+                "row_timeframe": "1d",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 11,
+                "image_path": "row_2.png",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "visual_readability": "",
+                "promotion_blocker": "needs_fresh_data",
+                "source_update_instruction": "fill_required_labels_in_source_row:labels.csv#11",
+            },
+            {
+                "batch_id": "visual_label_batch_01",
+                "batch_row_index": 3,
+                "worklist_rank": 3,
+                "belief_id": "lead",
+                "symbol": "CCC",
+                "date": "2026-01-03",
+                "row_timeframe": "1d",
+                "source_label_file": "labels.csv",
+                "source_label_row_number": 12,
+                "image_path": "row_3.png",
+                "missing_required_labels": "visual_readability|promotion_blocker",
+                "visual_readability": "made_up_value",
+                "promotion_blocker": "none",
+                "source_update_instruction": "fill_required_labels_in_source_row:labels.csv#12",
+            },
+        ],
+    }
+    rubric = ceo_ops.build_sidecar_visual_label_rubric(
+        next_batch=next_batch,
+        progress={"next_batch_id": "visual_label_batch_01"},
+    )
+    entry_sheet = ceo_ops.build_sidecar_visual_label_entry_sheet(
+        next_batch=next_batch,
+        rubric=rubric,
+        source_root=tmp_path,
+    )
+
+    assert entry_sheet["model"] == ceo_ops.CEO_SIDECAR_VISUAL_LABEL_ENTRY_SHEET_MODEL
+    assert entry_sheet["status"] == "ready_for_visual_label_entry"
+    assert entry_sheet["batch_id"] == "visual_label_batch_01"
+    assert entry_sheet["row_count"] == 3
+    assert entry_sheet["missing_required_cell_count"] == 1
+    assert entry_sheet["missing_source_label_file_count"] == 0
+    assert entry_sheet["missing_source_label_row_count"] == 0
+    assert entry_sheet["missing_image_count"] == 0
+    assert entry_sheet["required_label_fields"] == ["promotion_blocker", "visual_readability"]
+    assert entry_sheet["rows"][0]["allowed_visual_readability"] == "ambiguous|chart_or_image_missing|clear_before_event|not_legible"
+    assert entry_sheet["rows"][0]["allowed_promotion_blocker"] == (
+        "ambiguous|insufficient_context|missed_upside_cost|needs_fresh_data|none|role_mismatch|visual_not_legible"
+    )
+    assert entry_sheet["rows"][0]["visual_readability"] == "clear_before_event"
+    assert entry_sheet["rows"][0]["source_label_file_exists"] is True
+    assert entry_sheet["rows"][0]["source_label_row_exists"] is True
+    assert entry_sheet["rows"][0]["image_exists"] is True
+    assert entry_sheet["rows"][0]["missing_required_field_count"] == 0
+    assert entry_sheet["rows"][0]["entry_row_status"] == "required_labels_present"
+    assert entry_sheet["rows"][1]["missing_required_field_count"] == 1
+    assert entry_sheet["rows"][1]["entry_row_status"] == "ready_for_label_entry"
+    assert entry_sheet["rows"][0]["source_update_instruction"] == "fill_required_labels_in_source_row:labels.csv#10"
+    assert entry_sheet["rows"][0]["product_language_allowed"] is False
+    entry_sheet_report = ceo_ops.render_sidecar_visual_label_entry_sheet(entry_sheet)
+    assert "Riskflow Sidecar Visual Label Entry Sheet" in entry_sheet_report
+    assert "Status: ready_for_visual_label_entry" in entry_sheet_report
+    assert "Source/image reference gaps source-file/source-row/image: 0/0/0" in entry_sheet_report
+    assert "Source update: fill_required_labels_in_source_row:labels.csv#10" in entry_sheet_report
+    assert "visual_readability: ambiguous|chart_or_image_missing|clear_before_event|not_legible" in entry_sheet_report
+
+    source_update_manifest = ceo_ops.build_sidecar_visual_label_source_update_manifest(entry_sheet)
+
+    assert source_update_manifest["model"] == ceo_ops.CEO_SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_MODEL
+    assert source_update_manifest["status"] == "ready_for_human_source_updates"
+    assert source_update_manifest["row_count"] == 3
+    assert source_update_manifest["pending_update_row_count"] == 1
+    assert source_update_manifest["required_update_cell_count"] == 1
+    assert source_update_manifest["blocked_reference_row_count"] == 0
+    assert source_update_manifest["complete_row_count"] == 2
+    assert source_update_manifest["rows"][1]["required_update_fields"] == "visual_readability"
+    assert source_update_manifest["rows"][1]["source_update_status"] == "pending_human_source_update"
+    assert source_update_manifest["rows"][0]["source_update_status"] == "source_row_labels_complete"
+    source_update_report = ceo_ops.render_sidecar_visual_label_source_update_manifest(source_update_manifest)
+    assert "Riskflow Sidecar Visual Label Source Update Manifest" in source_update_report
+    assert "Status: ready_for_human_source_updates" in source_update_report
+    assert "Required update cells: 1" in source_update_report
+    assert "Required update fields: visual_readability" in source_update_report
+
+    audit = ceo_ops.build_sidecar_visual_label_completion_audit(next_batch=next_batch, rubric=rubric)
+
+    assert audit["model"] == ceo_ops.CEO_SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_MODEL
+    assert audit["status"] == "pending_required_visual_labels"
+    assert audit["batch_id"] == "visual_label_batch_01"
+    assert audit["row_count"] == 3
+    assert audit["completed_row_count"] == 1
+    assert audit["missing_required_row_count"] == 1
+    assert audit["invalid_label_row_count"] == 1
+    rows = {row["worklist_rank"]: row for row in audit["rows"]}
+    assert rows[1]["label_completion_status"] == "required_visual_labels_complete"
+    assert rows[2]["missing_required_fields"] == "visual_readability"
+    assert rows[2]["label_completion_status"] == "missing_required_label_values"
+    assert rows[3]["invalid_label_fields"] == "visual_readability"
+    assert rows[3]["label_completion_status"] == "invalid_label_values"
+    report = ceo_ops.render_sidecar_visual_label_completion_audit(audit)
+    assert "Riskflow Sidecar Visual Label Completion Audit" in report
+    assert "Rows: 3" in report
+    assert "Missing-required rows: 1" in report
+    assert "Invalid-label rows: 1" in report
+    assert "Source update: fill_required_labels_in_source_row:labels.csv#12" in report
+
+    candidate = {
+        "belief_id": "lead",
+        "product_role": "warning_blocker",
+        "champion": "core_signal_v0",
+        "challenger": "core_signal_v0_plus_lead",
+        "comparison_decision": "candidate_improves_warning_blocker_role",
+        "evidence_status": "shadow_review_ready_fresh_data_blocked",
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "metric_summary": {
+            "median_forward_relative_return": 0.01,
+            "champion_baseline_median_forward_relative_return": -0.01,
+            "role_delta_vs_champion_baseline": 0.02,
+            "hit_rate": 0.6,
+            "champion_baseline_hit_rate": 0.45,
+            "median_max_drawdown": -0.03,
+            "median_max_favorable_excursion": 0.08,
+            "mfe_mae_ratio": 2.67,
+            "event_diversity": 8,
+            "matched_null_p_value": 0.04,
+            "strict_survivor": True,
+            "sample_size": 20,
+            "unique_symbols": 6,
+            "missed_upside_cost": 0.01,
+            "avoided_downside_benefit": 0.04,
+        },
+        "validation": {"route": "fresh_and_control_validation", "validation_result": "not_run"},
+    }
+    quality_audit = ceo_ops.build_sidecar_champion_challenger_quality_audit(
+        {"run_id": "ceo_test", "lab_run_id": "ceo_test_lab", "candidates": [candidate]},
+        visual_label_completion_audit=audit,
+    )
+
+    quality_check = quality_audit["checks"][0]
+    assert quality_check["visual_label_completion_audit_status"] == "pending_required_visual_labels"
+    assert quality_check["visual_label_completion_audit_batch_id"] == "visual_label_batch_01"
+    assert quality_check["visual_label_completion_audit_rows"] == 3
+    assert quality_check["visual_label_completion_audit_completed_rows"] == 1
+    assert quality_check["visual_label_completion_audit_missing_rows"] == 1
+    assert quality_check["visual_label_completion_audit_invalid_rows"] == 1
+    assert quality_check["advisory_findings"] == [
+        "visual_label_batch_missing_required_labels",
+        "visual_label_batch_invalid_values",
+    ]
+    quality_report = ceo_ops.render_sidecar_champion_challenger_quality_audit(quality_audit)
+    assert "Visual-label completion audit: pending_required_visual_labels batch=visual_label_batch_01" in quality_report
+    assert "Visual-label completion rows/completed/missing/invalid: 3/1/1/1" in quality_report
+    decision_cards = ceo_ops.render_sidecar_candidate_decision_cards(
+        {
+            "generated_at": "2026-06-08T00:00:00+00:00",
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "status": "manual_data_gate_blocks_validation",
+            "manual_data_gate_active": True,
+            "safe_to_run_fresh_validation": False,
+            "next_action": "import_or_curate_fresh_ohlcv_data",
+            "candidates": [candidate],
+        },
+        quality_audit=quality_audit,
+        visual_label_entry_sheet=entry_sheet,
+        visual_label_completion_audit=audit,
+    )
+    assert (
+        "Visual-label batch: ready_for_visual_label_entry batch=visual_label_batch_01 "
+        "rows=3 missing_cells=1 refs=0/0/0 completion=pending_required_visual_labels "
+        "completed/missing/invalid=1/1/1"
+    ) in decision_cards
+
+    classification, reason = ceo_ops._sidecar_candidate_learning_classification(
+        candidate=candidate,
+        readiness={},
+        quality_check=quality_check,
+    )
+    assert classification == "lead_post_data_candidate"
+    assert "waiting on fresh/control data and human visual labels" in reason
+
+
+def test_ceo_data_gate_brief_summarizes_fresh_data_blockers(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fresh_data_preflight.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_fresh_data_preflight_v0",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "universe": "test_universe",
+                "data_dir": "data/raw",
+                "overall_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "timeframes": [
+                    {
+                        "timeframe": "1d",
+                        "status": "no_ready_assets",
+                        "asset_count": 2,
+                        "active_count": 0,
+                        "missing_count": 1,
+                        "stale_count": 1,
+                        "load_failure_count": 0,
+                        "min_active_members": 2,
+                        "meets_min_active_members": False,
+                        "stale_limit_days": 7.0,
+                        "assets": [
+                            {
+                                "symbol": "AAA",
+                                "status": "stale",
+                                "path": "data/raw/AAA_1d.csv",
+                                "latest_date": "2026-05-24 00:00:00",
+                                "age_days": 14.0,
+                                "stale_limit_days": 7.0,
+                                "row_count": 100,
+                            },
+                            {"symbol": "BBB", "status": "missing"},
+                        ],
+                    }
+                ],
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "product_role": "warning_blocker",
+                        "evidence_status": "shadow_review_ready_fresh_data_blocked",
+                        "metric_summary": {
+                            "best_family_id": "hot_reset_warning",
+                            "timeframe": "1d",
+                            "direction": "negative",
+                            "classification": "useful",
+                        },
+                        "validation": {
+                            "route": "fresh_and_control_validation",
+                            "required_tests": ["fresh_data_preflight", "lag_sensitivity"],
+                            "validation_completed": False,
+                            "validation_result": "not_run",
+                        },
+                        "promotion_ceiling": "shadow_candidate",
+                        "production_effect": "none",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_candidate_learning_ledger.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+                "status": "candidate_learning_ledger_written",
+                "candidate_count": 1,
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 0,
+                "archive_failure_mode_count": 0,
+                "review_only_candidate_count": 0,
+                "quality_blocked_review_only_count": 0,
+                "rows": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "handling_classification": "lead_post_data_candidate",
+                        "next_allowed_action": "import_or_curate_fresh_ohlcv_data, then run fresh/control validation",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_data_gate_unlock_matrix.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_data_gate_unlock_matrix_v0",
+                "status": "manual_data_gate_blocks_unlock",
+                "rows": [
+                    {
+                        "belief_id": "candidate_warning",
+                        "product_role": "warning_blocker",
+                        "champion": "core_signal_v0",
+                        "challenger": "core_signal_v0_plus_hot_reset_warning_shadow",
+                        "unlock_status": "blocked_by_manual_data_gate",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "required_timeframes": "1d",
+                        "blocked_timeframes": "1d",
+                        "csv_requirement_count": 2,
+                        "csv_requirement_actions": "import_csv:1|refresh_csv:1",
+                        "next_allowed_action_after_unlock": "run governed fresh/control validation with frozen sidecar shape",
+                        "stop_condition": "stop promotion review if fresh/control evidence fails",
+                        "product_language_allowed": False,
+                        "production_effect": "none",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "role_task_queue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_role_task_queue_v0",
+                "tasks": [
+                    {
+                        "task_id": "candidate_warning__fresh_data_readiness",
+                        "role_id": "data_steward",
+                        "source_artifact": "fresh_data_preflight.yaml",
+                        "owner_command": "import_or_curate_fresh_ohlcv_data",
+                        "status": "blocked",
+                        "validation_status": "accepted",
+                        "result_recommended_next_action": "import_or_curate_fresh_ohlcv_data, then rerun fresh-data-preflight",
+                        "production_effect": "none",
+                    }
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_data_gate_brief(options)
+
+    brief = result["brief"]
+    assert brief["status"] == "fresh_data_gate_blocked"
+    assert brief["manual_data_gate_active"] is True
+    assert brief["safe_to_run_fresh_validation"] is False
+    assert brief["required_timeframes"] == ["1d"]
+    assert brief["timeframe_requirements"][0]["stale_symbols"] == ["AAA"]
+    assert brief["timeframe_requirements"][0]["missing_symbols"] == ["BBB"]
+    assert brief["timeframe_requirements"][0]["csv_requirement_count"] == 2
+    assert brief["csv_requirement_count"] == 2
+    assert brief["csv_requirements"][0]["symbol"] == "AAA"
+    assert brief["csv_requirements"][0]["required_action"] == "refresh_csv"
+    assert brief["csv_requirements"][0]["expected_path"] == "data/raw/AAA_1d.csv"
+    assert brief["csv_requirements"][1]["symbol"] == "BBB"
+    assert brief["csv_requirements"][1]["required_action"] == "import_csv"
+    assert brief["csv_requirements"][1]["expected_path"] == "data/raw/BBB_1d.csv"
+    assert brief["blocked_candidate_count"] == 1
+    assert brief["blocked_candidates"][0]["belief_id"] == "candidate_warning"
+    assert brief["blocked_candidates"][0]["learning_classification"] == "lead_post_data_candidate"
+    assert brief["candidate_unlock_count"] == 1
+    assert brief["candidate_unlock_table_status"] == "manual_data_gate_blocks_unlock"
+    assert brief["candidate_unlocks"][0]["belief_id"] == "candidate_warning"
+    assert brief["candidate_unlocks"][0]["learning_classification"] == "lead_post_data_candidate"
+    assert brief["candidate_unlocks"][0]["unlock_status"] == "blocked_by_manual_data_gate"
+    assert brief["candidate_unlocks"][0]["validation_authority"] == "blocked_by_manual_data_gate"
+    assert brief["candidate_unlocks"][0]["blocked_timeframes"] == "1d"
+    assert brief["sidecar_learning_status"] == "candidate_learning_ledger_written"
+    assert brief["sidecar_learning_candidate_count"] == 1
+    assert brief["sidecar_learning_lead_count"] == 1
+    assert brief["sidecar_learning_control_count"] == 0
+    assert brief["sidecar_learning_archive_count"] == 0
+    assert brief["sidecar_learning_review_count"] == 0
+    assert brief["sidecar_learning_blocked_count"] == 0
+    assert "fresh/control review for 1 lead candidate" in brief["sidecar_learning_unlock_summary"]
+    assert brief["fresh_data_role_blocker_count"] == 1
+    assert brief["next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert brief["next_verification_command"].endswith("ceo fresh-data-preflight --run-id ceo_test")
+    assert brief["product_language_allowed"] is False
+    assert brief["production_effect"] == "none"
+    assert result["paths"]["data_gate_csv_requirements"].exists()
+    assert result["paths"]["data_gate_candidate_unlocks"].exists()
+    assert result["paths"]["data_gate_import_plan"].exists()
+    assert result["paths"]["data_gate_import_plan_report"].exists()
+    assert result["paths"]["data_gate_import_batches"].exists()
+    assert result["paths"]["data_gate_import_checklist"].exists()
+    assert result["paths"]["data_gate_import_checklist_yaml"].exists()
+    assert result["paths"]["data_gate_import_checklist_report"].exists()
+    assert result["paths"]["data_gate_symbol_matrix"].exists()
+    assert result["paths"]["data_gate_symbol_matrix_report"].exists()
+    assert result["paths"]["data_gate_handoff_audit"].exists()
+    assert result["paths"]["data_gate_handoff_audit_report"].exists()
+    assert result["paths"]["data_gate_symbol_matrix"].exists()
+    assert result["paths"]["data_gate_symbol_matrix_report"].exists()
+    import_plan = result["import_plan"]
+    assert import_plan["model"] == "riskflow_ceo_data_gate_import_plan_v0"
+    assert import_plan["status"] == "manual_data_import_required"
+    assert import_plan["required_csv_count"] == 2
+    assert import_plan["required_batch_count"] == 1
+    assert import_plan["can_run_validation_now"] is False
+    assert import_plan["lead_post_data_candidates"] == "candidate_warning"
+    assert import_plan["post_import_sequence"][1].endswith("ceo fresh-data-preflight --run-id ceo_test")
+    assert import_plan["production_effect"] == "none"
+    report = result["paths"]["data_gate_brief_report"].read_text(encoding="utf-8")
+    assert "Riskflow Data Gate Brief" in report
+    assert "candidate_warning" in report
+    assert "CSV requirements: 2" in report
+    assert "Sidecar learning ledger: candidate_learning_ledger_written" in report
+    assert "Sidecar learning lead/control/archive/review/blocked: 1/0/0/0/0" in report
+    assert "Candidate Unlock Handoff" in report
+    assert "candidate_warning learning=lead_post_data_candidate unlock=blocked_by_manual_data_gate" in report
+    assert "ready=0/2" in report
+    assert "AAA tf=1d status=stale action=refresh_csv" in report
+    assert "BBB tf=1d status=missing action=import_csv" in report
+    csv_rows = list(csv.DictReader(result["paths"]["data_gate_csv_requirements"].read_text(encoding="utf-8").splitlines()))
+    assert len(csv_rows) == 2
+    assert csv_rows[0]["symbol"] == "AAA"
+    assert csv_rows[0]["required_action"] == "refresh_csv"
+    assert csv_rows[0]["expected_path"] == "data/raw/AAA_1d.csv"
+    assert csv_rows[1]["symbol"] == "BBB"
+    assert csv_rows[1]["required_action"] == "import_csv"
+    assert csv_rows[1]["expected_path"] == "data/raw/BBB_1d.csv"
+    import_report = result["paths"]["data_gate_import_plan_report"].read_text(encoding="utf-8")
+    assert "Riskflow Data Gate Import Plan" in import_report
+    assert "Can run validation now: False" in import_report
+    assert "1d_csv_import_batch timeframe=1d requirements=2" in import_report
+    assert "Lead post-data candidates: candidate_warning" in import_report
+    import_batch_rows = list(
+        csv.DictReader(result["paths"]["data_gate_import_batches"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(import_batch_rows) == 1
+    assert import_batch_rows[0]["batch_id"] == "1d_csv_import_batch"
+    assert import_batch_rows[0]["requirement_count"] == "2"
+    assert import_batch_rows[0]["required_actions"] == "import_csv:1|refresh_csv:1"
+    assert import_batch_rows[0]["readiness_after_batch"] == "rerun_fresh_data_preflight_before_any_validation"
+    import_checklist = result["import_checklist"]
+    assert import_checklist["model"] == "riskflow_ceo_data_gate_import_checklist_v0"
+    assert import_checklist["status"] == "manual_data_import_checklist"
+    assert import_checklist["checklist_row_count"] == 2
+    assert import_checklist["pending_import_count"] == 2
+    assert import_checklist["complete_ready_count"] == 0
+    assert import_checklist["can_run_validation_now"] is False
+    assert import_checklist["status_counts"] == "missing:1|stale:1"
+    assert import_checklist["required_action_counts"] == "import_csv:1|refresh_csv:1"
+    assert import_checklist["production_effect"] == "none"
+    import_checklist_rows = list(
+        csv.DictReader(result["paths"]["data_gate_import_checklist"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(import_checklist_rows) == 2
+    assert import_checklist_rows[0]["checklist_id"] == "001_AAA_1d"
+    assert import_checklist_rows[0]["batch_id"] == "1d_csv_import_batch"
+    assert import_checklist_rows[0]["import_instruction"] == "refresh_csv:data/raw/AAA_1d.csv"
+    assert import_checklist_rows[0]["can_run_validation_after_row"] == "False"
+    assert import_checklist_rows[1]["checklist_id"] == "002_BBB_1d"
+    assert import_checklist_rows[1]["import_instruction"] == "create_or_import_csv:data/raw/BBB_1d.csv"
+    import_checklist_report = result["paths"]["data_gate_import_checklist_report"].read_text(encoding="utf-8")
+    assert "Riskflow Data Gate Import Checklist" in import_checklist_report
+    assert "Checklist rows: 2" in import_checklist_report
+    assert "Pending imports: 2" in import_checklist_report
+    assert "001_AAA_1d AAA 1d status=stale action=refresh_csv" in import_checklist_report
+    handoff_audit = result["handoff_audit"]
+    assert handoff_audit["model"] == "riskflow_ceo_data_gate_handoff_audit_v0"
+    assert handoff_audit["status"] == "pass_data_gate_handoff_consistency"
+    assert handoff_audit["check_count"] == 8
+    assert handoff_audit["issue_count"] == 0
+    assert handoff_audit["authority_scope"] == "data-gate handoff artifact consistency only"
+    handoff_audit_report = result["paths"]["data_gate_handoff_audit_report"].read_text(encoding="utf-8")
+    assert "Riskflow Data Gate Handoff Audit" in handoff_audit_report
+    assert "Checks/issues: 8/0" in handoff_audit_report
+    assert "pass csv_requirement_count_matches_checklist expected=2 actual=2" in handoff_audit_report
+    symbol_matrix = result["symbol_matrix"]
+    assert symbol_matrix["model"] == "riskflow_ceo_data_gate_symbol_matrix_v0"
+    assert symbol_matrix["status"] == "manual_data_gate_symbol_matrix"
+    assert symbol_matrix["symbol_count"] == 2
+    assert symbol_matrix["requirement_count"] == 2
+    symbol_rows = list(
+        csv.DictReader(result["paths"]["data_gate_symbol_matrix"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(symbol_rows) == 2
+    assert symbol_rows[0]["symbol"] == "AAA"
+    assert symbol_rows[0]["status_counts"] == "stale:1"
+    assert symbol_rows[0]["required_actions"] == "refresh_csv:1"
+    assert symbol_rows[0]["expected_paths"] == "data/raw/AAA_1d.csv"
+    assert symbol_rows[1]["symbol"] == "BBB"
+    assert symbol_rows[1]["status_counts"] == "missing:1"
+    assert symbol_rows[1]["required_actions"] == "import_csv:1"
+    assert symbol_rows[1]["expected_paths"] == "data/raw/BBB_1d.csv"
+    symbol_report = result["paths"]["data_gate_symbol_matrix_report"].read_text(encoding="utf-8")
+    assert "Riskflow Data Gate Symbol Matrix" in symbol_report
+    assert "AAA requirements=1 timeframes=1d statuses=stale:1 actions=refresh_csv:1" in symbol_report
+    assert "BBB requirements=1 timeframes=1d statuses=missing:1 actions=import_csv:1" in symbol_report
+    unlock_rows = list(
+        csv.DictReader(result["paths"]["data_gate_candidate_unlocks"].read_text(encoding="utf-8").splitlines())
+    )
+    assert len(unlock_rows) == 1
+    assert unlock_rows[0]["belief_id"] == "candidate_warning"
+    assert unlock_rows[0]["learning_classification"] == "lead_post_data_candidate"
+    assert unlock_rows[0]["unlock_status"] == "blocked_by_manual_data_gate"
+    assert unlock_rows[0]["production_effect"] == "none"
 
 
 def test_ceo_fresh_data_preflight_marks_ready_local_data(tmp_path: Path) -> None:
@@ -2389,6 +4991,158 @@ def test_ceo_evidence_debt_register_tracks_candidate_blockers_across_artifacts(t
     assert fresh_control_debt["production_effect"] == "none"
 
 
+def test_ceo_evidence_debt_register_routes_current_handoff_to_manual_data_gate() -> None:
+    register = ceo_ops.build_ceo_evidence_debt_register(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        candidate_portfolio=[],
+        champion_results={},
+        visual_queue={},
+        fresh_data_preflight={
+            "model": "riskflow_ceo_fresh_data_preflight_v0",
+            "safe_to_run_fresh_validation": False,
+            "next_action": "import_or_curate_fresh_ohlcv_data",
+            "production_effect": "none",
+        },
+        frozen_plan={},
+        fresh_withheld_execution={},
+        promotion_proposal={
+            "model": "riskflow_ceo_promotion_proposal_v0",
+            "status": "blocked_missing_promotion_evidence",
+            "missing_evidence": ["completed_fresh_or_frozen_validation"],
+            "product_language_allowed": False,
+            "production_effect": "none",
+        },
+        trace_grade={},
+    )
+
+    assert register["next_action"] == "build_or_run_frozen_validation_executor"
+    assert register["strategic_next_action"] == "build_or_run_frozen_validation_executor"
+    assert register["current_runtime_handoff_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert register["current_runtime_handoff_status"] == "manual_data_gate_required"
+    assert register["current_runtime_handoff_reason"] == "fresh_data_preflight_not_ready_blocks_validation_evidence"
+    assert register["strategic_next_action_blocked_by_current_handoff"] is True
+    assert "build_or_run_frozen_validation_executor" in register["blocked_strategic_actions"]
+    report = ceo_ops.render_ceo_evidence_debt_register(register)
+    assert "Strategic next action: build_or_run_frozen_validation_executor" in report
+    assert "Current runtime handoff: import_or_curate_fresh_ohlcv_data" in report
+
+
+def test_ceo_evidence_debt_register_tracks_human_visual_review_label_debt() -> None:
+    register = ceo_ops.build_ceo_evidence_debt_register(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        candidate_portfolio=[
+            {
+                "belief_id": "candidate_warning",
+                "product_role": "warning_blocker",
+                "champion_challenger_decision": "needs_fresh_or_control_validation",
+                "visual_review_status": "ready_for_visual_review",
+                "fresh_control_route": "fresh_and_control_validation",
+                "frozen_spec_status": "spec_only_not_validated",
+                "production_effect": "none",
+            }
+        ],
+        champion_results={},
+        visual_queue={},
+        fresh_data_preflight={},
+        frozen_plan={},
+        fresh_withheld_execution={
+            "validation_completed": True,
+            "validation_result": "fresh_withheld_validation_passed_shadow_only_not_promotion_eligible",
+            "threshold_results": {"status": "passed"},
+            "production_effect": "none",
+        },
+        promotion_proposal={
+            "model": "riskflow_ceo_promotion_proposal_v0",
+            "status": "blocked_missing_promotion_evidence",
+            "missing_evidence": [],
+            "product_language_allowed": False,
+            "production_effect": "none",
+        },
+        trace_grade={},
+        sidecar_visual_review_coverage={
+            "rows": [
+                {
+                    "belief_id": "candidate_warning",
+                    "human_label_completion_status": "human_review_not_started",
+                    "human_review_completed_rows": 0,
+                    "label_row_count": 60,
+                }
+            ]
+        },
+    )
+
+    debts = {debt["debt_kind"]: debt for debt in register["debts"]}
+    debt = debts["human_visual_review_labels"]
+    assert register["status"] == "open_evidence_debt"
+    assert register["debt_count"] == 1
+    assert register["candidate_debt_count"] == 1
+    assert debt["candidate_id"] == "candidate_warning"
+    assert debt["product_role"] == "warning_blocker"
+    assert debt["priority"] == 4
+    assert debt["blocker_type"] == "human_review_not_started"
+    assert debt["owner_command"] == "complete_champion_challenger_visual_review"
+    assert debt["blocking_artifact"] == "sidecar_visual_review_coverage.csv"
+    assert debt["blocks_promotion"] is True
+    assert debt["production_effect"] == "none"
+    report = ceo_ops.render_ceo_evidence_debt_register(register)
+    assert "candidate_warning__human_visual_review_labels" in report
+    assert "retire=complete_champion_challenger_visual_review" in report
+
+
+def test_ceo_evidence_debt_register_suppresses_archive_only_sidecar_debts(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    _write_lab_artifacts(tmp_path, with_candidate=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "sidecar_candidate_learning_ledger.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+                "status": "candidate_learning_ledger_written",
+                "candidates": [
+                    {
+                        "belief_id": "lower_high_rollover_warning_4h",
+                        "handling_classification": "archive_failure_mode",
+                        "handling_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                        "product_role": "warning_blocker",
+                        "validation_authority": "archive_only_no_validation_authority",
+                        "next_allowed_action": (
+                            "preserve archive; require a new approved hypothesis before any promotion review"
+                        ),
+                        "next_required_action": "preserve as failure-mode evidence",
+                        "product_language_allowed": False,
+                        "production_effect": "none",
+                    }
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_evidence_debt_register(_authorized(options, "evidence-debt-register"))
+
+    register = result["register"]
+    candidate_debts = [
+        debt
+        for debt in register["debts"]
+        if debt.get("candidate_id") == "lower_high_rollover_warning_4h"
+    ]
+    assert candidate_debts == []
+    assert register["archived_candidate_count"] == 1
+    archived = register["archived_candidates"][0]
+    assert archived["candidate_id"] == "lower_high_rollover_warning_4h"
+    assert archived["handling_classification"] == "archive_failure_mode"
+    assert archived["validation_authority"] == "archive_only_no_validation_authority"
+    assert archived["blocks_promotion"] is False
+    report = result["paths"]["register_report"].read_text(encoding="utf-8")
+    assert "## Archived Non-Promotional Candidates" in report
+    assert "lower_high_rollover_warning_4h" in report
+
+
 def test_ceo_evidence_debt_register_routes_source_replay_to_fresh_validation(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
@@ -2613,6 +5367,25 @@ def test_ceo_promotion_proposal_run_requires_specialist_reviews(tmp_path: Path) 
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
     _write_promotion_ready_inputs(root)
+    (root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 3,
+                "ready_visual_review_count": 2,
+                "fresh_data_blocked_count": 3,
+                "review_only_frozen_spec_count": 3,
+                "official_frozen_candidate_validation_plan_exists": False,
+                "official_frozen_candidate_validation_plan_status": "missing_official_frozen_plan",
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "role_task_queue.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3269,6 +6042,25 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 3,
+                "ready_visual_review_count": 2,
+                "fresh_data_blocked_count": 3,
+                "review_only_frozen_spec_count": 3,
+                "official_frozen_candidate_validation_plan_exists": False,
+                "official_frozen_candidate_validation_plan_status": "missing_official_frozen_plan",
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "role_result_validation.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3313,6 +6105,60 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (root / "sidecar_candidate_learning_ledger.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+                "status": "candidate_learning_ledger_written",
+                "candidate_count": 3,
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 1,
+                "archive_failure_mode_count": 1,
+                "review_only_candidate_count": 0,
+                "quality_blocked_review_only_count": 0,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_lead",
+                        "handling_classification": "lead_post_data_candidate",
+                        "handling_reason": "clean same-sample candidate waiting on fresh/control data",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_lead_shadow",
+                        "primary_blocker": "manual_data_gate",
+                        "quality_status": "pass_champion_challenger_quality",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "run governed fresh/control validation with frozen sidecar shape",
+                        "next_required_action": "import or curate fresh OHLCV data, then rerun fresh-data preflight",
+                    },
+                    {
+                        "belief_id": "candidate_control",
+                        "handling_classification": "diversity_control_only",
+                        "handling_reason": "useful as a diversity/fragility control, not as a promotion lead",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_control_shadow",
+                        "primary_blocker": "cluster_concentration",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "after data unlock, run only diversity/fragility control validation",
+                        "next_required_action": "complete visual review and require broader fresh/control evidence before promotion consideration",
+                    },
+                    {
+                        "belief_id": "candidate_archive",
+                        "handling_classification": "archive_failure_mode",
+                        "handling_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                        "product_role": "reset_quality",
+                        "challenger": "core_signal_v0_plus_archive_shadow",
+                        "primary_blocker": "failure_mode_review_only",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "archive_only_no_validation_authority",
+                        "next_allowed_action": "preserve archive; require a new approved hypothesis before any promotion review",
+                        "next_required_action": "preserve as failure-mode evidence; do not promote without new governed validation",
+                    },
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = run_ceo_executive_kpis(options)
 
@@ -3320,6 +6166,13 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
     assert kpis["status"] == "attention_required"
     assert kpis["kpis"]["open_approval_count"] == 1
     assert kpis["kpis"]["evidence_debt_count"] == 2
+    assert kpis["kpis"]["sidecar_learning_status"] == "candidate_learning_ledger_written"
+    assert kpis["kpis"]["sidecar_learning_candidate_count"] == 3
+    assert kpis["kpis"]["sidecar_learning_lead_count"] == 1
+    assert kpis["kpis"]["sidecar_learning_control_count"] == 1
+    assert kpis["kpis"]["sidecar_learning_archive_count"] == 1
+    assert kpis["kpis"]["sidecar_learning_review_count"] == 0
+    assert kpis["kpis"]["sidecar_learning_blocked_count"] == 0
     assert kpis["kpis"]["trace_verdict"] == "pass"
     assert kpis["kpis"]["trace_recommended_next_action"] == "continue_with_one_bound_ceo_action"
     assert kpis["kpis"]["trace_issues"] == []
@@ -3356,6 +6209,10 @@ def test_ceo_executive_kpis_writes_operating_scoreboard(tmp_path: Path) -> None:
     assert "Next action scope: executive_health_diagnostic_only" in report
     assert "Dispatch authority: not_granted_by_executive_kpis" in report
     assert "trace_recommended_next_action: continue_with_one_bound_ceo_action" in report
+    assert "sidecar_learning_status: candidate_learning_ledger_written" in report
+    assert "sidecar_learning_lead_count: 1" in report
+    assert "sidecar_learning_control_count: 1" in report
+    assert "sidecar_learning_archive_count: 1" in report
     assert "trace_manual_data_import_required: False" in report
     assert "role_top_blocked_review_status: accepted_blocked_result" in report
     assert "role_top_blocked_finding: Visual review evidence is missing." in report
@@ -3649,6 +6506,57 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
+    (root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 3,
+                "ready_visual_review_count": 2,
+                "fresh_data_blocked_count": 3,
+                "review_only_frozen_spec_count": 3,
+                "official_frozen_candidate_validation_plan_exists": False,
+                "official_frozen_candidate_validation_plan_status": "missing_official_frozen_plan",
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_shadow_guardrail_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_shadow_guardrail_audit_v0",
+                "status": "pass_shadow_only_guardrails",
+                "candidate_count": 3,
+                "violation_count": 0,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_brief_v0",
+                "status": "fresh_data_gate_blocked",
+                "preflight_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "manual_data_gate_active": True,
+                "required_timeframes": ["1d", "4h"],
+                "csv_requirement_count": 80,
+                "blocked_candidate_count": 3,
+                "candidate_unlock_count": 3,
+                "fresh_data_role_blocker_count": 4,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "next_verification_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (root / "role_result_validation.yaml").write_text(
         yaml.safe_dump(
             {
@@ -3773,6 +6681,60 @@ def test_ceo_status_surfaces_existing_operating_artifacts(tmp_path: Path) -> Non
     assert operating["operator_brief_status"] == "waiting_on_manual_gate"
     assert operating["operator_brief_summary"] == "CEO mode is stopped at a manual gate."
     assert operating["operator_brief_next_action"].endswith("approval-queue --run-id ceo_test")
+    assert operating["sidecar_evidence_brief_status"] == "manual_data_gate_blocks_validation"
+    assert operating["sidecar_candidate_count"] == 3
+    assert operating["sidecar_ready_visual_review_count"] == 2
+    assert operating["sidecar_fresh_data_blocked_count"] == 3
+    assert operating["sidecar_review_only_frozen_spec_count"] == 3
+    assert operating["sidecar_official_frozen_plan_exists"] is False
+    assert operating["sidecar_official_frozen_plan_status"] == "missing_official_frozen_plan"
+    assert operating["sidecar_manual_data_gate_active"] is True
+    assert operating["sidecar_safe_to_run_fresh_validation"] is False
+    assert operating["sidecar_next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert operating["sidecar_evidence_brief_report"].endswith("sidecar_evidence_brief.md")
+    assert operating["sidecar_evidence_candidate_table"].endswith("sidecar_evidence_candidates.csv")
+    assert operating["sidecar_visual_review_handoff_count"] == 2
+    assert operating["sidecar_visual_review_handoff_table"].endswith("sidecar_visual_review_handoff.csv")
+    assert operating["sidecar_champion_challenger_evidence_count"] == 3
+    assert operating["sidecar_champion_challenger_evidence_table"].endswith("sidecar_champion_challenger_evidence.csv")
+    assert operating["sidecar_evidence_gap_matrix"].endswith("sidecar_evidence_gap_matrix.csv")
+    assert operating["sidecar_candidate_readiness_summary"].endswith("sidecar_candidate_readiness_summary.csv")
+    assert operating["sidecar_candidate_readiness_summary_report"].endswith("sidecar_candidate_readiness_summary.md")
+    assert operating["sidecar_validation_queue"].endswith("sidecar_validation_queue.csv")
+    assert operating["sidecar_validation_queue_report"].endswith("sidecar_validation_queue.md")
+    assert operating["sidecar_champion_challenger_validation_design"].endswith(
+        "sidecar_champion_challenger_validation_design.yaml"
+    )
+    assert operating["sidecar_champion_challenger_validation_design_report"].endswith(
+        "sidecar_champion_challenger_validation_design.md"
+    )
+    assert operating["sidecar_data_gate_unlock_matrix"].endswith("sidecar_data_gate_unlock_matrix.csv")
+    assert operating["sidecar_data_gate_unlock_matrix_yaml"].endswith("sidecar_data_gate_unlock_matrix.yaml")
+    assert operating["sidecar_data_gate_unlock_matrix_report"].endswith("sidecar_data_gate_unlock_matrix.md")
+    assert operating["sidecar_evidence_consistency_audit"].endswith("sidecar_evidence_consistency_audit.yaml")
+    assert operating["sidecar_evidence_consistency_audit_report"].endswith("sidecar_evidence_consistency_audit.md")
+    assert operating["sidecar_evidence_packet_index"].endswith("sidecar_evidence_packet_index.yaml")
+    assert operating["sidecar_evidence_packet_index_report"].endswith("sidecar_evidence_packet_index.md")
+    assert operating["sidecar_candidate_decision_cards"].endswith("sidecar_candidate_decision_cards.md")
+    assert operating["sidecar_shadow_guardrail_status"] == "pass_shadow_only_guardrails"
+    assert operating["sidecar_shadow_guardrail_violation_count"] == 0
+    assert operating["sidecar_shadow_guardrail_audit"].endswith("sidecar_shadow_guardrail_audit.yaml")
+    assert operating["sidecar_shadow_guardrail_report"].endswith("sidecar_shadow_guardrail_audit.md")
+    assert operating["sidecar_evidence_source_manifest"].endswith("sidecar_evidence_source_manifest.csv")
+    assert operating["sidecar_frozen_spec_review_table"].endswith("sidecar_frozen_spec_review.csv")
+    assert operating["data_gate_brief_status"] == "fresh_data_gate_blocked"
+    assert operating["data_gate_preflight_status"] == "not_ready"
+    assert operating["data_gate_safe_to_run_fresh_validation"] is False
+    assert operating["data_gate_manual_gate_active"] is True
+    assert operating["data_gate_required_timeframes"] == ["1d", "4h"]
+    assert operating["data_gate_csv_requirement_count"] == 80
+    assert operating["data_gate_blocked_candidate_count"] == 3
+    assert operating["data_gate_candidate_unlock_count"] == 3
+    assert operating["data_gate_role_blocker_count"] == 4
+    assert operating["data_gate_next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert operating["data_gate_next_verification_command"].endswith("ceo fresh-data-preflight --run-id ceo_test")
+    assert operating["data_gate_brief_report"].endswith("data_gate_brief.md")
+    assert operating["data_gate_candidate_unlocks"].endswith("data_gate_candidate_unlocks.csv")
     assert operating["role_queue_status"] == "pending_role_tasks"
     assert operating["role_pending_task_count"] == 4
     assert operating["role_pending_manual_task_count"] == 1
@@ -3828,6 +6790,35 @@ def test_ceo_status_defaults_to_resumption_brief_when_handoff_missing(tmp_path: 
     assert operating["artifact_coherence_status"] == "missing_artifact_coherence"
     assert operating["repair_apply_status"] == "missing_repair_apply"
     assert operating["role_result_validation_status"] == "missing_role_result_validation"
+
+
+def test_ceo_status_marks_repair_apply_not_required_when_no_runnable_repair(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "repair_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_plan_v0",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "manual_gate_first",
+                "runnable_repair_count": 0,
+                "top_repair": "incident:manual_data_gate",
+                "top_repair_kind": "manual_gate",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id ceo_test",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_status(options)
+
+    operating = result["company_status"]["operating_artifacts"]
+    assert operating["repair_plan_status"] == "manual_gate_first"
+    assert operating["runnable_repair_count"] == 0
+    assert operating["repair_apply_status"] == "not_required_by_current_repair_plan"
 
 
 def test_ceo_status_live_stop_overrides_stale_safe_operating_artifacts(tmp_path: Path) -> None:
@@ -3934,6 +6925,519 @@ def test_ceo_status_live_stop_overrides_stale_safe_operating_artifacts(tmp_path:
     assert operating["decision_quality_selected_action_blocked_by"] == "manual_gate_required:blocker:stop_requested"
     assert operating["operator_brief_status"] == "waiting_on_manual_gate"
     assert operating["operator_brief_next_action"].endswith("approval-queue --run-id ceo_test")
+
+
+def test_ceo_status_routes_manual_data_gate_default_handoff_to_data_gate_brief(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "resumption_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_resumption_brief_v0",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "resume_status": "blocked_preflight",
+                "next_command": "PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id ceo_test --enforce-memory-delta",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "approval_queue.yaml").write_text(
+        yaml.safe_dump({"status": "no_pending_approvals", "pending_count": 0, "production_effect": "none"}),
+        encoding="utf-8",
+    )
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "manual_gate_required",
+                "primary_action": {
+                    "action_id": "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                    "command_kind": "manual_gate",
+                    "can_execute_now": False,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "status": "waiting_on_manual_gate",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "runtime_authority_status": "manual_gate_required",
+                "effective_runtime_action": "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                "runtime_blocked": True,
+                "runtime_block_reason": "manual_gate_required:incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_brief_v0",
+                "status": "fresh_data_gate_blocked",
+                "manual_data_gate_active": True,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_status(options)
+
+    operating = result["company_status"]["operating_artifacts"]
+    assert operating["resumption_next_command"].endswith("preflight-gate --run-id ceo_test --enforce-memory-delta")
+    assert operating["default_handoff_command"].endswith("data-gate-brief --run-id ceo_test")
+    assert operating["default_handoff_reason"] == "manual_data_gate"
+
+
+def test_ceo_heartbeat_status_respects_manual_gate_runtime_authority(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "action_board.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_board_v0",
+                "status": "manual_gate_required",
+                "primary_action": {
+                    "action_id": "blocker:pending_user_approval",
+                    "command_kind": "manual_gate",
+                    "can_execute_now": False,
+                },
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "operator_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_operator_brief_v0",
+                "status": "waiting_on_manual_gate",
+                "recommended_next_action": "PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id ceo_test",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "decision_quality.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_decision_quality_v0",
+                "runtime_authority_status": "manual_gate_required",
+                "effective_runtime_action": "blocker:pending_user_approval",
+                "runtime_blocked": True,
+                "runtime_block_reason": "manual_gate_required:blocker:pending_user_approval",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_brief_v0",
+                "status": "fresh_data_gate_blocked",
+                "preflight_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "required_timeframes": ["1d", "4h"],
+                "csv_requirement_count": 80,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_brief.md").write_text("# Data Gate\n", encoding="utf-8")
+    (root / "data_gate_symbol_matrix.csv").write_text(
+        "symbol,requirement_count\nAAA,2\nBBB,2\n",
+        encoding="utf-8",
+    )
+    (root / "data_gate_symbol_matrix.md").write_text("# Symbol Matrix\n", encoding="utf-8")
+    (root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 2,
+                "ready_visual_review_count": 2,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_control",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_control_shadow",
+                        "visual_review": {
+                            "status": "ready_for_visual_review",
+                            "focus": "blocker_false_positive_and_avoided_downside_review",
+                            "priority": 3.0,
+                            "review_questions": ["Does the warning over-block constructive resets?"],
+                            "required_labels": ["visual_readability"],
+                            "gallery": "reports/review/control/gallery.md",
+                            "labels_with_images": "reports/review/control/labels.csv",
+                        },
+                        "metric_summary": {
+                            "timeframe": "4h",
+                            "classification": "useful",
+                            "event_diversity": 3,
+                            "role_delta_vs_champion_baseline": 0.01,
+                        },
+                    },
+                    {
+                        "belief_id": "candidate_lead",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_lead_shadow",
+                        "visual_review": {
+                            "status": "ready_for_visual_review",
+                            "focus": "blocker_false_positive_and_avoided_downside_review",
+                            "priority": 27.781,
+                            "review_questions": ["Was the warning visually legible before the downside move?"],
+                            "required_labels": ["visual_readability", "promotion_blocker"],
+                            "gallery": "reports/review/lead/gallery.md",
+                            "labels_with_images": "reports/review/lead/labels.csv",
+                        },
+                        "metric_summary": {
+                            "timeframe": "1d",
+                            "classification": "useful",
+                            "event_diversity": 27,
+                            "role_delta_vs_champion_baseline": 0.115,
+                        },
+                    },
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_candidate_learning_ledger.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+                "status": "candidate_learning_ledger_written",
+                "candidate_count": 3,
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 1,
+                "archive_failure_mode_count": 1,
+                "review_only_candidate_count": 0,
+                "quality_blocked_review_only_count": 0,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_lead",
+                        "handling_classification": "lead_post_data_candidate",
+                        "handling_reason": "clean same-sample candidate waiting on fresh/control data",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_lead_shadow",
+                        "primary_blocker": "manual_data_gate",
+                        "quality_status": "pass_champion_challenger_quality",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "run governed fresh/control validation with frozen sidecar shape",
+                        "next_required_action": "import or curate fresh OHLCV data, then rerun fresh-data preflight",
+                    },
+                    {
+                        "belief_id": "candidate_control",
+                        "handling_classification": "diversity_control_only",
+                        "handling_reason": "useful as a diversity/fragility control, not as a promotion lead",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_control_shadow",
+                        "primary_blocker": "cluster_concentration",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "after data unlock, run only diversity/fragility control validation",
+                        "next_required_action": "complete visual review and require broader fresh/control evidence before promotion consideration",
+                    },
+                    {
+                        "belief_id": "candidate_archive",
+                        "handling_classification": "archive_failure_mode",
+                        "handling_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                        "product_role": "reset_quality",
+                        "challenger": "core_signal_v0_plus_archive_shadow",
+                        "primary_blocker": "failure_mode_review_only",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "archive_only_no_validation_authority",
+                        "next_allowed_action": "preserve archive; require a new approved hypothesis before any promotion review",
+                        "next_required_action": "preserve as failure-mode evidence; do not promote without new governed validation",
+                    },
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_candidate_learning_ledger.md").write_text("# Learning Ledger\n", encoding="utf-8")
+    (root / "sidecar_current_handoff.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_current_handoff_v0",
+                "status": "manual_data_gate_current_handoff",
+                "candidate_count": 3,
+                "current_required_action": "import_or_curate_fresh_ohlcv_data",
+                "historical_decision_packet_boundary": {
+                    "historical_only": True,
+                    "stale_product_delta_snapshot_detected": True,
+                    "current_state_source": (
+                        "sidecar_current_decision_packet plus sidecar_evidence_packet_index "
+                        "plus sidecar_candidate_learning_ledger plus sidecar_quality_remediation_plan"
+                    ),
+                },
+                "product_language_allowed": False,
+                "promotion_authority": "none",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_current_handoff.md").write_text("# Current Handoff\n", encoding="utf-8")
+    (root / "sidecar_current_decision_packet.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_current_decision_packet_v0",
+                "status": "manual_gate_current_decision_packet",
+                "executive_decision": "hold_validation_at_manual_data_gate",
+                "current_required_action": "import_or_curate_fresh_ohlcv_data",
+                "candidate_count": 3,
+                "quality_remediation_status": "manual_gate_quality_remediation_plan",
+                "quality_remediation_current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "quality_remediation_autonomous_clearable_now_count": 0,
+                "quality_remediation_human_visual_remediation_count": 1,
+                "quality_remediation_diversity_control_remediation_count": 1,
+                "quality_remediation_archive_only_count": 1,
+                "product_language_allowed": False,
+                "promotion_authority": "none",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_current_decision_packet.md").write_text("# Current Decision\n", encoding="utf-8")
+    (root / "sidecar_candidate_decision_matrix.csv").write_text(
+        "belief_id,handling_classification\n"
+        "candidate_lead,lead_post_data_candidate\n"
+        "candidate_control,diversity_control_only\n"
+        "candidate_archive,archive_failure_mode\n",
+        encoding="utf-8",
+    )
+    (root / "sidecar_candidate_decision_matrix.md").write_text("# Decision Matrix\n", encoding="utf-8")
+    (root / "sidecar_evidence_consistency_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_consistency_audit_v0",
+                "status": "pass_sidecar_consistency",
+                "check_count": 22,
+                "issue_count": 0,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_evidence_consistency_audit.md").write_text("# Consistency\n", encoding="utf-8")
+    (root / "sidecar_champion_challenger_quality_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_champion_challenger_quality_audit_v0",
+                "status": "pass_with_advisory_quality_findings",
+                "issue_count": 2,
+                "hard_issue_count": 0,
+                "advisory_issue_count": 2,
+                "hard_issues": [],
+                "advisory_issues": [
+                    {
+                        "belief_id": "candidate_control",
+                        "findings": ["event_diversity_below_review_threshold"],
+                        "missing_advisory_metric_fields": [],
+                    },
+                    {
+                        "belief_id": "candidate_archive",
+                        "findings": ["missing_role_benefit_fields", "strict_survivor_false"],
+                        "missing_advisory_metric_fields": ["missed_upside_cost", "avoided_downside_benefit"],
+                    },
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_champion_challenger_quality_audit.md").write_text("# Quality\n", encoding="utf-8")
+    (root / "sidecar_quality_remediation_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_quality_remediation_plan_v0",
+                "status": "manual_gate_quality_remediation_plan",
+                "candidate_count": 3,
+                "quality_issue_count": 2,
+                "autonomous_clearable_now_count": 0,
+                "human_visual_remediation_count": 1,
+                "diversity_control_remediation_count": 1,
+                "archive_only_count": 1,
+                "current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_quality_remediation_plan.md").write_text("# Remediation\n", encoding="utf-8")
+    (root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "debt_count": 11,
+                "candidate_debt_count": 4,
+                "global_debt_count": 7,
+                "archived_candidate_count": 1,
+                "next_action": "build_or_run_frozen_validation_executor",
+                "strategic_next_action": "build_or_run_frozen_validation_executor",
+                "current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                "current_runtime_handoff_status": "manual_data_gate_required",
+                "current_runtime_handoff_reason": "fresh_data_preflight_not_ready_blocks_validation_evidence",
+                "strategic_next_action_blocked_by_current_handoff": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "evidence_debt_register.md").write_text("# Evidence Debt\n", encoding="utf-8")
+
+    result = run_ceo_heartbeat_status(options)
+
+    status = result["status"]
+    assert status["continue_recommended"] is False
+    assert status["stop_recommended"] is True
+    assert status["manual_gate_active"] is True
+    assert status["runtime_authority_status"] == "manual_gate_required"
+    assert status["runtime_blocked"] is True
+    assert status["runtime_block_reason"] == "manual_gate_required:blocker:pending_user_approval"
+    assert status["data_gate_status"] == "fresh_data_gate_blocked"
+    assert status["data_gate_csv_requirement_count"] == 80
+    assert status["data_gate_required_timeframes"] == ["1d", "4h"]
+    assert status["data_gate_next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert status["data_gate_brief_report"].endswith("data_gate_brief.md")
+    assert status["data_gate_symbol_matrix"].endswith("data_gate_symbol_matrix.csv")
+    assert status["data_gate_symbol_matrix_report"].endswith("data_gate_symbol_matrix.md")
+    assert status["data_gate_symbol_matrix_row_count"] == 2
+    assert status["sidecar_learning_status"] == "candidate_learning_ledger_written"
+    assert status["sidecar_learning_candidate_count"] == 3
+    assert status["sidecar_learning_lead_count"] == 1
+    assert status["sidecar_learning_control_count"] == 1
+    assert status["sidecar_learning_archive_count"] == 1
+    assert status["sidecar_learning_review_count"] == 0
+    assert status["sidecar_learning_blocked_count"] == 0
+    assert status["sidecar_learning_ledger_report"].endswith("sidecar_candidate_learning_ledger.md")
+    assert status["sidecar_learning_lead_candidate"] == "candidate_lead"
+    assert status["sidecar_learning_lead_next_required_action"] == (
+        "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+    )
+    assert status["sidecar_learning_lead_validation_authority"] == "blocked_by_manual_data_gate"
+    assert status["sidecar_learning_control_candidate"] == "candidate_control"
+    assert status["sidecar_learning_control_reason"] == "useful as a diversity/fragility control, not as a promotion lead"
+    assert status["sidecar_learning_archive_candidate"] == "candidate_archive"
+    assert status["sidecar_learning_archive_reason"] == "failure-mode evidence; preserve as do-not-repeat learning"
+    assert status["sidecar_current_handoff"].endswith("sidecar_current_handoff.yaml")
+    assert status["sidecar_current_handoff_report"].endswith("sidecar_current_handoff.md")
+    assert status["sidecar_current_handoff_status"] == "manual_data_gate_current_handoff"
+    assert status["sidecar_current_handoff_candidate_count"] == 3
+    assert status["sidecar_current_handoff_required_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert status["sidecar_current_handoff_historical_only"] is True
+    assert status["sidecar_current_handoff_stale_product_delta_snapshot_detected"] is True
+    assert status["sidecar_current_handoff_state_source"] == (
+        "sidecar_current_decision_packet plus sidecar_evidence_packet_index plus "
+        "sidecar_candidate_learning_ledger plus sidecar_quality_remediation_plan"
+    )
+    assert status["sidecar_current_decision_packet"].endswith("sidecar_current_decision_packet.yaml")
+    assert status["sidecar_current_decision_packet_report"].endswith("sidecar_current_decision_packet.md")
+    assert status["sidecar_current_decision_packet_status"] == "manual_gate_current_decision_packet"
+    assert status["sidecar_current_decision_packet_decision"] == "hold_validation_at_manual_data_gate"
+    assert status["sidecar_current_decision_packet_required_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert status["sidecar_current_decision_packet_candidate_count"] == 3
+    assert status["sidecar_current_decision_packet_quality_remediation_status"] == (
+        "manual_gate_quality_remediation_plan"
+    )
+    assert status["sidecar_current_decision_packet_quality_remediation_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert status["sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count"] == 0
+    assert status["sidecar_current_decision_packet_quality_remediation_human_visual_count"] == 1
+    assert status["sidecar_current_decision_packet_quality_remediation_diversity_control_count"] == 1
+    assert status["sidecar_current_decision_packet_quality_remediation_archive_only_count"] == 1
+    assert status["sidecar_candidate_decision_matrix"].endswith("sidecar_candidate_decision_matrix.csv")
+    assert status["sidecar_candidate_decision_matrix_report"].endswith("sidecar_candidate_decision_matrix.md")
+    assert status["sidecar_candidate_decision_matrix_row_count"] == 3
+    assert status["sidecar_evidence_consistency_audit"].endswith("sidecar_evidence_consistency_audit.yaml")
+    assert status["sidecar_evidence_consistency_audit_report"].endswith("sidecar_evidence_consistency_audit.md")
+    assert status["sidecar_evidence_consistency_audit_status"] == "pass_sidecar_consistency"
+    assert status["sidecar_evidence_consistency_audit_check_count"] == 22
+    assert status["sidecar_evidence_consistency_audit_issue_count"] == 0
+    assert status["sidecar_quality_status"] == "pass_with_advisory_quality_findings"
+    assert status["sidecar_quality_hard_issue_count"] == 0
+    assert status["sidecar_quality_advisory_issue_count"] == 2
+    assert status["sidecar_quality_remediation_plan"].endswith("sidecar_quality_remediation_plan.yaml")
+    assert status["sidecar_quality_remediation_plan_report"].endswith("sidecar_quality_remediation_plan.md")
+    assert status["sidecar_quality_remediation_plan_status"] == "manual_gate_quality_remediation_plan"
+    assert status["sidecar_quality_remediation_plan_current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert status["sidecar_quality_remediation_plan_autonomous_clearable_now_count"] == 0
+    assert status["sidecar_quality_remediation_plan_human_visual_remediation_count"] == 1
+    assert status["sidecar_quality_remediation_plan_diversity_control_remediation_count"] == 1
+    assert status["sidecar_quality_remediation_plan_archive_only_count"] == 1
+    assert status["sidecar_quality_advisory_issue_summary"] == (
+        "candidate_control:event_diversity_below_review_threshold; "
+        "candidate_archive:missing_role_benefit_fields|strict_survivor_false "
+        "missing=missed_upside_cost|avoided_downside_benefit"
+    )
+    assert status["sidecar_visual_review_top_candidate"] == "candidate_lead"
+    assert status["sidecar_visual_review_top_product_role"] == "warning_blocker"
+    assert status["sidecar_visual_review_top_focus"] == "blocker_false_positive_and_avoided_downside_review"
+    assert status["sidecar_visual_review_top_priority"] == 27.781
+    assert status["sidecar_visual_review_top_question"] == "Was the warning visually legible before the downside move?"
+    assert status["sidecar_visual_review_top_gallery"] == "reports/review/lead/gallery.md"
+    assert status["sidecar_visual_review_top_labels_with_images"] == "reports/review/lead/labels.csv"
+    assert status["evidence_debt_status"] == "open_evidence_debt"
+    assert status["evidence_debt_count"] == 11
+    assert status["evidence_debt_candidate_count"] == 4
+    assert status["evidence_debt_global_count"] == 7
+    assert status["evidence_debt_archived_candidate_count"] == 1
+    assert status["evidence_debt_next_action"] == "build_or_run_frozen_validation_executor"
+    assert status["evidence_debt_current_runtime_handoff_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert status["evidence_debt_current_runtime_handoff_status"] == "manual_data_gate_required"
+    assert status["evidence_debt_strategic_blocked_by_current_handoff"] is True
+    assert status["evidence_debt_register_report"].endswith("evidence_debt_register.md")
+    assert "Manual gate active" in status["next_recommended_action"]
+    assert "manual_gate_required:blocker:pending_user_approval" in status["next_recommended_action"]
+    persisted = yaml.safe_load(result["paths"]["heartbeat_status"].read_text(encoding="utf-8"))
+    assert persisted["manual_gate_active"] is True
+    assert persisted["continue_recommended"] is False
+    assert persisted["data_gate_csv_requirement_count"] == 80
+    assert persisted["data_gate_symbol_matrix"].endswith("data_gate_symbol_matrix.csv")
+    assert persisted["data_gate_symbol_matrix_row_count"] == 2
+    assert persisted["sidecar_learning_lead_count"] == 1
+    assert persisted["sidecar_learning_lead_candidate"] == "candidate_lead"
+    assert persisted["sidecar_quality_advisory_issue_count"] == 2
+    assert persisted["sidecar_visual_review_top_candidate"] == "candidate_lead"
+    assert persisted["evidence_debt_candidate_count"] == 4
+    assert persisted["evidence_debt_current_runtime_handoff_action"] == "import_or_curate_fresh_ohlcv_data"
 
 
 def test_ceo_heartbeat_plan_writes_persistent_tick_contract(tmp_path: Path) -> None:
@@ -6262,6 +9766,97 @@ def test_ceo_eval_suite_fails_action_receipt_snapshot_with_unusable_required_fin
     assert str(snapshot_path) in case["evidence"]
 
 
+def test_ceo_eval_suite_allows_missing_decision_packet_fingerprint_payload(tmp_path: Path) -> None:
+    root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_path = root / "dispatch_receipts" / "action_snapshot.yaml"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    required_names = [
+        "decision_packet",
+        "action_contract",
+        "preflight_gate",
+        "trace_grade",
+        "ceo_replay",
+        "ceo_eval_suite",
+        "guardrail_audit",
+        "memory_delta",
+        "approval_queue",
+        "approval_status",
+        "mission_score",
+        "strategy_capital_dashboard",
+        "artifact_coherence",
+        "resumption_brief",
+    ]
+    fingerprints = {
+        name: {"path": str(root / f"{name}.yaml"), "exists": True, "sha256": f"{name}-sha"}
+        for name in required_names
+    }
+    fingerprints["decision_packet"] = {
+        "path": str(root / "executive_decision_packet.md"),
+        "exists": False,
+        "sha256": "",
+    }
+    snapshot = {
+        "model": "riskflow_ceo_dispatch_receipt_v0",
+        "run_id": "ceo_test",
+        "lab_run_id": "ceo_test_lab",
+        "decision": "request_fresh_data",
+        "status": "dispatch_allowed",
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+        "trust_artifact_fingerprints": fingerprints,
+    }
+    snapshot_path.write_text(yaml.safe_dump(snapshot), encoding="utf-8")
+    (root / "dispatch_receipt.yaml").write_text(yaml.safe_dump(snapshot), encoding="utf-8")
+    (root / "binding_action_result.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_binding_action_result_v0",
+                "generated_at": "2026-06-06T00:01:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "decision": "request_fresh_data",
+                "status": "not_ready",
+                "action_taken": "fresh_data_preflight",
+                "dispatch_receipt": {"path": str(snapshot_path), "sha256": _sha256(snapshot_path)},
+                "transition_policy_version": "riskflow_ceo_state_transition_v1",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "action_contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_action_contract_v0",
+                "decision": "request_fresh_data",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = ceo_ops.build_ceo_eval_suite(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        root=root,
+        replay={"status": "replayable", "action_count": 1, "dispatch_receipt_status": "pass", "dispatch_receipt_checks": [{"status": "pass"}]},
+        trace_grade={"recommended_next_action": "continue", "production_effect": "none"},
+        approval_queue={"pending_count": 0, "production_effect": "none"},
+        role_queue={"completed_task_count": 0, "blocked_task_count": 0, "pending_task_count": 0, "tasks": [], "production_effect": "none"},
+        fresh_withheld_execution={"production_effect": "none"},
+        evidence_debt_register={"debt_count": 0, "production_effect": "none"},
+        mission_score={"overall_mission_score": 80, "lowest_dimension": "reset_quality", "production_effect": "none"},
+        strategy_capital_dashboard={"selected_capital_bucket": "validation_authority", "production_effect": "none"},
+        eval_fixtures={"status": "pass", "case_count": 1, "production_effect": "none"},
+    )
+
+    case = {item["case_id"]: item for item in suite["cases"]}["dispatch_receipt_fingerprints_trust_artifacts"]
+    assert case["status"] == "pass"
+    assert "unusable=[]" in case["evidence"]
+
+
 def test_ceo_eval_suite_requires_accepted_role_result_validation(tmp_path: Path) -> None:
     root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
     root.mkdir(parents=True, exist_ok=True)
@@ -7200,6 +10795,91 @@ def test_ceo_artifact_coherence_passes_clean_current_artifacts(tmp_path: Path) -
     assert (root / "ceo_action_ledger.jsonl").read_text(encoding="utf-8") == ledger_before
 
 
+def _mark_coherence_repair_apply_absent_in_receipt(root: Path) -> None:
+    action_path = root / "binding_action_result.yaml"
+    action = yaml.safe_load(action_path.read_text(encoding="utf-8"))
+    receipt_path = Path(action["dispatch_receipt"]["path"])
+    receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+    receipt.setdefault("trust_artifact_fingerprints", {})["repair_apply"] = {
+        "path": str(root / "repair_apply.yaml"),
+        "exists": False,
+        "sha256": "",
+    }
+    receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+    action["dispatch_receipt"]["sha256"] = _sha256(receipt_path)
+    action_path.write_text(yaml.safe_dump(action), encoding="utf-8")
+    (root / "ceo_action_ledger.jsonl").write_text(json.dumps(action, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_ceo_artifact_coherence_marks_repair_apply_not_required_for_manual_gate_plan(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    (root / "repair_apply.yaml").unlink()
+    _mark_coherence_repair_apply_absent_in_receipt(root)
+    (root / "repair_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_plan_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "manual_gate_first",
+                "runnable_repair_count": 0,
+                "top_repair": "incident:manual_data_gate",
+                "top_repair_kind": "manual_gate",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    repair_apply = [item for item in coherence["artifacts"] if item["artifact"] == "repair_apply"][0]
+    assert coherence["status"] == "pass"
+    assert coherence["issue_count"] == 0
+    assert repair_apply["exists"] is False
+    assert repair_apply["issues"] == []
+    assert repair_apply["status"] == "not_required_by_current_repair_plan"
+    assert repair_apply["applicability"] == "not_required_by_current_repair_plan"
+    report = result["paths"]["artifact_coherence_report"].read_text(encoding="utf-8")
+    assert "repair_apply: exists=False" in report
+    assert "applicability=not_required_by_current_repair_plan" in report
+
+
+def test_ceo_artifact_coherence_requires_repair_apply_for_ready_repair_plan(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    (root / "repair_apply.yaml").unlink()
+    _mark_coherence_repair_apply_absent_in_receipt(root)
+    (root / "repair_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_repair_plan_v0",
+                "generated_at": "2026-06-06T00:05:00+00:00",
+                "run_id": "ceo_test",
+                "lab_run_id": "ceo_test_lab",
+                "status": "repair_plan_ready",
+                "runnable_repair_count": 1,
+                "top_repair": "blocker:stale_artifacts",
+                "top_repair_kind": "diagnostic_refresh",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    issues = {item["artifact"]: item["issues"] for item in coherence["issues"]}
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert issues["repair_apply"] == ["missing_artifact"]
+
+
 def test_ceo_artifact_coherence_flags_stale_mission_after_latest_action(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     root = options.report_root / "ceo_test"
@@ -7561,6 +11241,37 @@ def test_ceo_artifact_coherence_flags_receipt_fingerprint_drift(tmp_path: Path) 
     action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
     receipt_path = Path(action["dispatch_receipt"]["path"])
     receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
+    contract_path = root / "action_contract.yaml"
+    receipt["trust_artifact_fingerprints"]["action_contract"] = {
+        "path": str(contract_path),
+        "exists": True,
+        "sha256": _sha256(contract_path),
+    }
+    receipt_path.write_text(yaml.safe_dump(receipt), encoding="utf-8")
+    action["dispatch_receipt"]["sha256"] = _sha256(receipt_path)
+    (root / "binding_action_result.yaml").write_text(yaml.safe_dump(action), encoding="utf-8")
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract["diagnostic_note"] = "changed after receipt"
+    contract_path.write_text(yaml.safe_dump(contract), encoding="utf-8")
+
+    result = run_ceo_artifact_coherence(options)
+
+    coherence = result["coherence"]
+    dispatch_issue = next(item for item in coherence["issues"] if item["artifact"] == "dispatch_receipt")
+    mismatches = dispatch_issue["evidence"]["trust_fingerprint_mismatches"]
+    assert coherence["status"] == "fail"
+    assert "dispatch_receipt_trust_fingerprint_drift" in dispatch_issue["issues"]
+    assert mismatches[0]["artifact"] == "action_contract"
+    assert mismatches[0]["reason"] == "fingerprinted_artifact_sha_mismatch"
+
+
+def test_ceo_artifact_coherence_keeps_mutable_receipt_fingerprint_drift_advisory(tmp_path: Path) -> None:
+    options = _options(tmp_path, apply=True)
+    root = options.report_root / "ceo_test"
+    _write_clean_coherence_inputs(root)
+    action = yaml.safe_load((root / "binding_action_result.yaml").read_text(encoding="utf-8"))
+    receipt_path = Path(action["dispatch_receipt"]["path"])
+    receipt = yaml.safe_load(receipt_path.read_text(encoding="utf-8"))
     preflight_path = root / "preflight_gate.yaml"
     receipt["trust_artifact_fingerprints"]["preflight_gate"] = {
         "path": str(preflight_path),
@@ -7577,7 +11288,8 @@ def test_ceo_artifact_coherence_flags_receipt_fingerprint_drift(tmp_path: Path) 
     coherence = result["coherence"]
     dispatch_issue = next(item for item in coherence["issues"] if item["artifact"] == "dispatch_receipt")
     mismatches = dispatch_issue["evidence"]["trust_fingerprint_mismatches"]
-    assert coherence["status"] == "fail"
+    assert coherence["status"] == "pass_with_advisory_issues"
+    assert coherence["hard_issue_count"] == 0
     assert "dispatch_receipt_trust_fingerprint_drift" in dispatch_issue["issues"]
     assert mismatches[0]["artifact"] == "preflight_gate"
     assert mismatches[0]["reason"] == "fingerprinted_artifact_sha_mismatch"
@@ -8055,6 +11767,207 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    (stale_trace_root / "data_gate_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_brief_v0",
+                "status": "fresh_data_gate_blocked",
+                "preflight_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "required_timeframes": ["1d", "4h"],
+                "csv_requirement_count": 80,
+                "blocked_candidate_count": 3,
+                "fresh_data_role_blocker_count": 4,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "next_verification_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_stale_trace_fail",
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "sidecar_evidence_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_evidence_brief_v0",
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 2,
+                "ready_visual_review_count": 2,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_control",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_control_shadow",
+                        "visual_review": {
+                            "status": "ready_for_visual_review",
+                            "focus": "blocker_false_positive_and_avoided_downside_review",
+                            "priority": 7.5,
+                            "review_questions": ["Is the warning legible before downside?"],
+                            "required_labels": ["visual_readability"],
+                            "gallery": "reports/review/control/gallery.md",
+                            "labels_with_images": "reports/review/control/labels.csv",
+                        },
+                        "metric_summary": {
+                            "timeframe": "4h",
+                            "classification": "useful",
+                            "event_diversity": 3,
+                            "role_delta_vs_champion_baseline": 0.01,
+                        },
+                    },
+                    {
+                        "belief_id": "candidate_lead",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_lead_shadow",
+                        "visual_review": {
+                            "status": "ready_for_visual_review",
+                            "focus": "blocker_false_positive_and_avoided_downside_review",
+                            "priority": 27.781,
+                            "review_questions": ["Was the warning visually legible before the downside move?"],
+                            "required_labels": ["visual_readability", "promotion_blocker"],
+                            "gallery": "reports/review/lead/gallery.md",
+                            "labels_with_images": "reports/review/lead/labels.csv",
+                        },
+                        "metric_summary": {
+                            "timeframe": "1d",
+                            "classification": "useful",
+                            "event_diversity": 27,
+                            "role_delta_vs_champion_baseline": 0.115,
+                        },
+                    },
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "sidecar_candidate_learning_ledger.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+                "status": "candidate_learning_ledger_written",
+                "candidate_count": 3,
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 1,
+                "archive_failure_mode_count": 1,
+                "review_only_candidate_count": 0,
+                "quality_blocked_review_only_count": 0,
+                "candidates": [
+                    {
+                        "belief_id": "candidate_lead",
+                        "handling_classification": "lead_post_data_candidate",
+                        "handling_reason": "clean same-sample candidate waiting on fresh/control data",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_lead_shadow",
+                        "primary_blocker": "manual_data_gate",
+                        "quality_status": "pass_champion_challenger_quality",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "run governed fresh/control validation with frozen sidecar shape",
+                        "next_required_action": "import or curate fresh OHLCV data, then rerun fresh-data preflight",
+                    },
+                    {
+                        "belief_id": "candidate_control",
+                        "handling_classification": "diversity_control_only",
+                        "handling_reason": "useful as a diversity/fragility control, not as a promotion lead",
+                        "product_role": "warning_blocker",
+                        "challenger": "core_signal_v0_plus_control_shadow",
+                        "primary_blocker": "cluster_concentration",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "blocked_by_manual_data_gate",
+                        "next_allowed_action": "after data unlock, run only diversity/fragility control validation",
+                        "next_required_action": "complete visual review and require broader fresh/control evidence before promotion consideration",
+                    },
+                    {
+                        "belief_id": "candidate_archive",
+                        "handling_classification": "archive_failure_mode",
+                        "handling_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                        "product_role": "reset_quality",
+                        "challenger": "core_signal_v0_plus_archive_shadow",
+                        "primary_blocker": "failure_mode_review_only",
+                        "quality_status": "pass_with_advisory_quality_findings",
+                        "validation_authority": "archive_only_no_validation_authority",
+                        "next_allowed_action": "preserve archive; require a new approved hypothesis before any promotion review",
+                        "next_required_action": "preserve as failure-mode evidence; do not promote without new governed validation",
+                    },
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "sidecar_post_data_validation_playbook.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_post_data_validation_playbook_v0",
+                "status": "manual_data_gate_blocks_post_data_playbook",
+                "candidate_count": 3,
+                "current_required_action": "import_or_curate_fresh_ohlcv_data",
+                "visual_label_completion_status": "pending_required_visual_labels",
+                "visual_label_gate_passed": False,
+                "pre_validation_blockers": [
+                    "fresh_data_preflight_not_safe",
+                    "visual_label_completion_audit_not_passed",
+                ],
+                "candidates": [
+                    {"belief_id": "candidate_lead", "can_execute_now": False},
+                    {"belief_id": "candidate_control", "can_execute_now": False},
+                    {"belief_id": "candidate_archive", "can_execute_now": False},
+                ],
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "sidecar_post_data_validation_playbook.md").write_text(
+        "# Sidecar Post-Data Validation Playbook\n",
+        encoding="utf-8",
+    )
+    (stale_trace_root / "sidecar_champion_challenger_quality_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_champion_challenger_quality_audit_v0",
+                "status": "pass_with_advisory_quality_findings",
+                "issue_count": 2,
+                "hard_issue_count": 0,
+                "advisory_issue_count": 2,
+                "hard_issues": [],
+                "advisory_issues": [
+                    {
+                        "belief_id": "candidate_control",
+                        "findings": ["event_diversity_below_review_threshold"],
+                        "missing_advisory_metric_fields": [],
+                    },
+                    {
+                        "belief_id": "candidate_archive",
+                        "findings": ["strict_survivor_false"],
+                        "missing_advisory_metric_fields": [],
+                    },
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stale_trace_root / "evidence_debt_register.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_evidence_debt_register_v0",
+                "status": "open_evidence_debt",
+                "debt_count": 11,
+                "candidate_debt_count": 4,
+                "global_debt_count": 7,
+                "archived_candidate_count": 1,
+                "next_action": "build_or_run_frozen_validation_executor",
+                "strategic_next_action": "build_or_run_frozen_validation_executor",
+                "current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                "current_runtime_handoff_status": "manual_data_gate_required",
+                "current_runtime_handoff_reason": "fresh_data_preflight_not_ready_blocks_validation_evidence",
+                "strategic_next_action_blocked_by_current_handoff": True,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
     (stale_trace_root / "ceo_replay.yaml").write_text(
         yaml.safe_dump({"status": "replayable", "issues": [], "production_effect": "none"}),
         encoding="utf-8",
@@ -8267,6 +12180,81 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
     assert rows["ceo_stale_trace_fail"]["eval_suite_status"] == "pass"
     assert rows["ceo_stale_trace_fail"]["trace_grade_status"] == "fail"
     assert rows["ceo_stale_trace_fail"]["trace_grade_manual_data_import_required"] is True
+    assert rows["ceo_stale_trace_fail"]["data_gate_brief_status"] == "fresh_data_gate_blocked"
+    assert rows["ceo_stale_trace_fail"]["data_gate_safe_to_run_fresh_validation"] is False
+    assert rows["ceo_stale_trace_fail"]["data_gate_required_timeframes"] == ["1d", "4h"]
+    assert rows["ceo_stale_trace_fail"]["data_gate_csv_requirement_count"] == 80
+    assert rows["ceo_stale_trace_fail"]["data_gate_blocked_candidate_count"] == 3
+    assert rows["ceo_stale_trace_fail"]["data_gate_role_blocker_count"] == 4
+    assert rows["ceo_stale_trace_fail"]["data_gate_next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert rows["ceo_stale_trace_fail"]["data_gate_next_verification_command"].endswith(
+        "ceo fresh-data-preflight --run-id ceo_stale_trace_fail"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_status"] == "candidate_learning_ledger_written"
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_candidate_count"] == 3
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_lead_count"] == 1
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_control_count"] == 1
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_archive_count"] == 1
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_review_count"] == 0
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_blocked_count"] == 0
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_lead_candidate"] == "candidate_lead"
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_lead_next_required_action"] == (
+        "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_lead_validation_authority"] == "blocked_by_manual_data_gate"
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_control_candidate"] == "candidate_control"
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_control_next_allowed_action"] == (
+        "after data unlock, run only diversity/fragility control validation"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_archive_candidate"] == "candidate_archive"
+    assert rows["ceo_stale_trace_fail"]["sidecar_learning_archive_next_allowed_action"] == (
+        "preserve archive; require a new approved hypothesis before any promotion review"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_status"] == (
+        "manual_data_gate_blocks_post_data_playbook"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_candidate_count"] == 3
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_visual_label_completion_status"] == (
+        "pending_required_visual_labels"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_visual_label_gate_passed"] is False
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_pre_validation_blockers"] == (
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_can_execute_count"] == 0
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook"].endswith(
+        "sidecar_post_data_validation_playbook.yaml"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_post_data_playbook_report"].endswith(
+        "sidecar_post_data_validation_playbook.md"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_quality_status"] == "pass_with_advisory_quality_findings"
+    assert rows["ceo_stale_trace_fail"]["sidecar_quality_hard_issue_count"] == 0
+    assert rows["ceo_stale_trace_fail"]["sidecar_quality_advisory_issue_count"] == 2
+    assert rows["ceo_stale_trace_fail"]["sidecar_quality_advisory_issue_summary"] == (
+        "candidate_control:event_diversity_below_review_threshold; candidate_archive:strict_survivor_false"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_candidate"] == "candidate_lead"
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_product_role"] == "warning_blocker"
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_focus"] == (
+        "blocker_false_positive_and_avoided_downside_review"
+    )
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_priority"] == 27.781
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_gallery"] == "reports/review/lead/gallery.md"
+    assert rows["ceo_stale_trace_fail"]["sidecar_visual_review_top_labels_with_images"] == "reports/review/lead/labels.csv"
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_status"] == "open_evidence_debt"
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_count"] == 11
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_candidate_count"] == 4
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_global_count"] == 7
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_archived_candidate_count"] == 1
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_next_action"] == "build_or_run_frozen_validation_executor"
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_current_runtime_handoff_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_current_runtime_handoff_status"] == "manual_data_gate_required"
+    assert rows["ceo_stale_trace_fail"]["evidence_debt_strategic_blocked_by_current_handoff"] is True
+    assert rows["ceo_stale_trace_fail"]["next_command"].endswith("data-gate-brief --run-id ceo_stale_trace_fail")
     assert rows["ceo_stale_manual_gate"]["status"] == "blocked"
     assert rows["ceo_stale_manual_gate"]["dispatch_receipt_status"] == "dispatch_allowed"
     assert rows["ceo_stale_manual_gate"]["dispatch_safe_to_dispatch"] is True
@@ -8405,6 +12393,40 @@ def test_ceo_run_index_classifies_runs_and_next_commands(tmp_path: Path) -> None
     assert "eval_score=94" in report
     assert "readiness=ready_for_extended_autonomy" in report
     assert "readiness_blockers=0" in report
+    assert "data_gate=fresh_data_gate_blocked" in report
+    assert "data_gate_safe=False" in report
+    assert "data_gate_csvs=80" in report
+    assert "data_gate_candidates=3" in report
+    assert "data_gate_role_blockers=4" in report
+    assert "sidecar_learning=candidate_learning_ledger_written" in report
+    assert "sidecar_learning_lead=1" in report
+    assert "sidecar_learning_control=1" in report
+    assert "sidecar_learning_archive=1" in report
+    assert "sidecar_learning_review=0" in report
+    assert "sidecar_learning_blocked=0" in report
+    assert "sidecar_learning_lead=candidate_lead" in report
+    assert "sidecar_learning_control=candidate_control" in report
+    assert "sidecar_learning_archive=candidate_archive" in report
+    assert "sidecar_post_data_playbook=manual_data_gate_blocks_post_data_playbook" in report
+    assert "sidecar_post_data_action=import_or_curate_fresh_ohlcv_data" in report
+    assert "sidecar_post_data_candidates=3" in report
+    assert "sidecar_post_data_visual_gate=False" in report
+    assert "sidecar_post_data_blockers=fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed" in report
+    assert "sidecar_post_data_can_execute=0" in report
+    assert "sidecar_quality=pass_with_advisory_quality_findings" in report
+    assert "sidecar_quality_hard=0" in report
+    assert "sidecar_quality_advisory=2" in report
+    assert "sidecar_quality_advisory=candidate_control:event_diversity_below_review_threshold" in report
+    assert "sidecar_visual_top=candidate_lead" in report
+    assert "gallery=reports/review/lead/gallery.md" in report
+    assert "labels=reports/review/lead/labels.csv" in report
+    assert "evidence_debt=open_evidence_debt" in report
+    assert "evidence_debt_count=11" in report
+    assert "evidence_debt_candidate=4" in report
+    assert "evidence_debt_global=7" in report
+    assert "evidence_debt_archive=1" in report
+    assert "evidence_debt_current_handoff=import_or_curate_fresh_ohlcv_data" in report
+    assert "evidence_debt_handoff_status=manual_data_gate_required" in report
     assert "coherence=pass_with_advisory_issues" in report
     assert "coherence_issues=1" in report
     assert "artifact_coherence_top_issue=action_contract severity=advisory" in report
@@ -8469,6 +12491,76 @@ def test_ceo_cli_run_index_prints_latest_decision_authority(
                         "artifact_coherence_status": "pass_with_advisory_issues",
                         "artifact_coherence_top_issue": "action_contract",
                         "artifact_coherence_top_issue_severity": "advisory",
+                        "data_gate_brief_status": "fresh_data_gate_blocked",
+                        "data_gate_safe_to_run_fresh_validation": False,
+                        "data_gate_csv_requirement_count": 80,
+                        "data_gate_blocked_candidate_count": 3,
+                        "data_gate_role_blocker_count": 4,
+                        "data_gate_next_action": "import_or_curate_fresh_ohlcv_data",
+                        "data_gate_next_verification_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_latest",
+                        "sidecar_learning_status": "candidate_learning_ledger_written",
+                        "sidecar_learning_candidate_count": 3,
+                        "sidecar_learning_lead_count": 1,
+                        "sidecar_learning_control_count": 1,
+                        "sidecar_learning_archive_count": 1,
+                        "sidecar_learning_review_count": 0,
+                        "sidecar_learning_blocked_count": 0,
+                        "sidecar_learning_lead_candidate": "candidate_lead",
+                        "sidecar_learning_lead_next_required_action": (
+                            "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+                        ),
+                        "sidecar_learning_lead_validation_authority": "blocked_by_manual_data_gate",
+                        "sidecar_learning_control_candidate": "candidate_control",
+                        "sidecar_learning_control_reason": (
+                            "useful as a diversity/fragility control, not as a promotion lead"
+                        ),
+                        "sidecar_learning_control_next_allowed_action": (
+                            "after data unlock, run only diversity/fragility control validation"
+                        ),
+                        "sidecar_learning_archive_candidate": "candidate_archive",
+                        "sidecar_learning_archive_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                        "sidecar_learning_archive_next_allowed_action": (
+                            "preserve archive; require a new approved hypothesis before any promotion review"
+                        ),
+                        "sidecar_post_data_playbook_status": "manual_data_gate_blocks_post_data_playbook",
+                        "sidecar_post_data_playbook_current_required_action": (
+                            "import_or_curate_fresh_ohlcv_data"
+                        ),
+                        "sidecar_post_data_playbook_candidate_count": 3,
+                        "sidecar_post_data_playbook_visual_label_completion_status": (
+                            "pending_required_visual_labels"
+                        ),
+                        "sidecar_post_data_playbook_visual_label_gate_passed": False,
+                        "sidecar_post_data_playbook_pre_validation_blockers": (
+                            "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+                        ),
+                        "sidecar_post_data_playbook_can_execute_count": 0,
+                        "sidecar_post_data_playbook": (
+                            "reports/ceo_runs/ceo_latest/sidecar_post_data_validation_playbook.yaml"
+                        ),
+                        "sidecar_post_data_playbook_report": (
+                            "reports/ceo_runs/ceo_latest/sidecar_post_data_validation_playbook.md"
+                        ),
+                        "sidecar_quality_status": "pass_with_advisory_quality_findings",
+                        "sidecar_quality_hard_issue_count": 0,
+                        "sidecar_quality_advisory_issue_count": 2,
+                        "sidecar_quality_advisory_issue_summary": (
+                            "candidate_control:event_diversity_below_review_threshold"
+                        ),
+                        "sidecar_visual_review_top_candidate": "candidate_lead",
+                        "sidecar_visual_review_top_product_role": "warning_blocker",
+                        "sidecar_visual_review_top_focus": "blocker_false_positive_and_avoided_downside_review",
+                        "sidecar_visual_review_top_priority": 27.781,
+                        "sidecar_visual_review_top_gallery": "reports/review/lead/gallery.md",
+                        "sidecar_visual_review_top_labels_with_images": "reports/review/lead/labels.csv",
+                        "evidence_debt_status": "open_evidence_debt",
+                        "evidence_debt_count": 11,
+                        "evidence_debt_candidate_count": 4,
+                        "evidence_debt_global_count": 7,
+                        "evidence_debt_archived_candidate_count": 1,
+                        "evidence_debt_next_action": "build_or_run_frozen_validation_executor",
+                        "evidence_debt_current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                        "evidence_debt_current_runtime_handoff_status": "manual_data_gate_required",
                         "effective_operator_status": "manual_gate_required",
                         "manual_gate_active": True,
                         "decision_quality_selected_action": "run_frozen_candidate_validation",
@@ -8520,6 +12612,55 @@ def test_ceo_cli_run_index_prints_latest_decision_authority(
     assert "Latest artifact coherence: pass_with_advisory_issues" in out
     assert "Latest artifact coherence top issue: action_contract" in out
     assert "Latest artifact coherence top issue severity: advisory" in out
+    assert "Latest data gate: fresh_data_gate_blocked" in out
+    assert "Latest data gate safe fresh validation: False" in out
+    assert "Latest data gate CSV requirements: 80" in out
+    assert "Latest data gate blocked candidates: 3" in out
+    assert "Latest data gate role blockers: 4" in out
+    assert "Latest data gate next action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Latest data gate next verification: PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_latest" in out
+    assert "Latest sidecar learning ledger: candidate_learning_ledger_written" in out
+    assert "Latest sidecar learning candidates: 3" in out
+    assert "Latest sidecar learning lead/control/archive/review/blocked: 1/1/1/0/0" in out
+    assert "Latest sidecar learning lead candidate: candidate_lead" in out
+    assert "Latest sidecar learning lead next required: import or curate fresh OHLCV data" in out
+    assert "Latest sidecar learning lead authority: blocked_by_manual_data_gate" in out
+    assert "Latest sidecar learning control candidate: candidate_control" in out
+    assert "Latest sidecar learning control reason: useful as a diversity/fragility control" in out
+    assert "Latest sidecar learning archive candidate: candidate_archive" in out
+    assert "Latest sidecar learning archive reason: failure-mode evidence" in out
+    assert "Latest sidecar post-data playbook: manual_data_gate_blocks_post_data_playbook" in out
+    assert "Latest sidecar post-data action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Latest sidecar post-data candidates: 3" in out
+    assert "Latest sidecar post-data visual-label status/gate: pending_required_visual_labels/False" in out
+    assert (
+        "Latest sidecar post-data blockers: "
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    ) in out
+    assert "Latest sidecar post-data can-execute candidates: 0" in out
+    assert (
+        "Latest sidecar post-data playbook path: "
+        "reports/ceo_runs/ceo_latest/sidecar_post_data_validation_playbook.yaml"
+    ) in out
+    assert (
+        "Latest sidecar post-data playbook report: "
+        "reports/ceo_runs/ceo_latest/sidecar_post_data_validation_playbook.md"
+    ) in out
+    assert "Latest sidecar visual-review top candidate: candidate_lead" in out
+    assert "Latest sidecar visual-review top role: warning_blocker" in out
+    assert "Latest sidecar visual-review top focus: blocker_false_positive_and_avoided_downside_review" in out
+    assert "Latest sidecar visual-review top priority: 27.781" in out
+    assert "Latest sidecar visual-review top gallery: reports/review/lead/gallery.md" in out
+    assert "Latest sidecar visual-review top labels: reports/review/lead/labels.csv" in out
+    assert "Latest sidecar quality status: pass_with_advisory_quality_findings" in out
+    assert "Latest sidecar quality hard/advisory issues: 0/2" in out
+    assert "Latest sidecar quality advisory summary: candidate_control:event_diversity_below_review_threshold" in out
+    assert "Latest evidence debt register: open_evidence_debt" in out
+    assert "Latest evidence debt count: 11" in out
+    assert "Latest evidence debt candidate/global/archive: 4/7/1" in out
+    assert "Latest evidence debt next action: build_or_run_frozen_validation_executor" in out
+    assert "Latest evidence debt current handoff: import_or_curate_fresh_ohlcv_data" in out
+    assert "Latest evidence debt handoff status: manual_data_gate_required" in out
     assert "Latest effective operator status: manual_gate_required" in out
     assert "Latest manual gate active: True" in out
     assert "Latest decision: run_frozen_candidate_validation" in out
@@ -8567,6 +12708,246 @@ def test_ceo_cli_status_prints_runtime_authority_without_selected_action(
                     "decision_quality_executable_can_execute_now": False,
                     "decision_quality_selected_action_is_executable_now": False,
                     "decision_quality_selected_action_blocked_by": "manual_gate_required:blocker:stop_requested",
+                    "sidecar_evidence_brief_status": "manual_data_gate_blocks_validation",
+                    "sidecar_candidate_count": 3,
+                    "sidecar_ready_visual_review_count": 3,
+                    "sidecar_fresh_data_blocked_count": 3,
+                    "sidecar_review_only_frozen_spec_count": 3,
+                    "sidecar_official_frozen_plan_exists": False,
+                    "sidecar_official_frozen_plan_status": "missing_official_frozen_plan",
+                    "sidecar_manual_data_gate_active": True,
+                    "sidecar_safe_to_run_fresh_validation": False,
+                    "sidecar_next_action": "import_or_curate_fresh_ohlcv_data",
+                    "sidecar_evidence_brief_report": "reports/ceo_runs/ceo_test/sidecar_evidence_brief.md",
+                    "sidecar_evidence_candidate_table": "reports/ceo_runs/ceo_test/sidecar_evidence_candidates.csv",
+                    "sidecar_visual_review_handoff_count": 3,
+                    "sidecar_visual_review_handoff_table": "reports/ceo_runs/ceo_test/sidecar_visual_review_handoff.csv",
+                    "sidecar_visual_review_top_candidate": "v127_daily_hot_reset_lag2_warning",
+                    "sidecar_visual_review_top_product_role": "warning_blocker",
+                    "sidecar_visual_review_top_focus": "blocker_false_positive_and_avoided_downside_review",
+                    "sidecar_visual_review_top_priority": 27.781,
+                    "sidecar_visual_review_top_question": "Was the warning visually legible before the downside move?",
+                    "sidecar_visual_review_top_gallery": (
+                        "reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/"
+                        "visual_review_packet_all_records/gallery.md"
+                    ),
+                    "sidecar_visual_review_top_labels_with_images": (
+                        "reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/"
+                        "visual_review_packet_all_records/human_review_labels_with_images.csv"
+                    ),
+                    "sidecar_champion_challenger_evidence_count": 3,
+                    "sidecar_champion_challenger_evidence_table": (
+                        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_evidence.csv"
+                    ),
+                    "sidecar_champion_challenger_quality_audit": (
+                        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.yaml"
+                    ),
+                    "sidecar_champion_challenger_quality_audit_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.md"
+                    ),
+                    "sidecar_champion_challenger_quality_status": "pass_with_advisory_quality_findings",
+                    "sidecar_champion_challenger_quality_issue_count": 2,
+                    "sidecar_champion_challenger_quality_hard_issue_count": 0,
+                    "sidecar_champion_challenger_quality_advisory_issue_count": 2,
+                    "sidecar_champion_challenger_quality_advisory_issue_summary": (
+                        "candidate_control:event_diversity_below_review_threshold"
+                    ),
+                    "sidecar_quality_remediation_plan": (
+                        "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.yaml"
+                    ),
+                    "sidecar_quality_remediation_plan_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.md"
+                    ),
+                    "sidecar_quality_remediation_plan_status": "manual_gate_quality_remediation_plan",
+                    "sidecar_quality_remediation_plan_current_required_action": (
+                        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                    ),
+                    "sidecar_quality_remediation_plan_autonomous_clearable_now_count": 0,
+                    "sidecar_quality_remediation_plan_human_visual_remediation_count": 1,
+                    "sidecar_quality_remediation_plan_diversity_control_remediation_count": 1,
+                    "sidecar_quality_remediation_plan_archive_only_count": 1,
+                    "sidecar_evidence_gap_matrix": "reports/ceo_runs/ceo_test/sidecar_evidence_gap_matrix.csv",
+                    "sidecar_candidate_readiness_summary": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_readiness_summary.csv"
+                    ),
+                    "sidecar_candidate_readiness_summary_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_readiness_summary.md"
+                    ),
+                    "sidecar_validation_queue": "reports/ceo_runs/ceo_test/sidecar_validation_queue.csv",
+                    "sidecar_validation_queue_report": "reports/ceo_runs/ceo_test/sidecar_validation_queue.md",
+                    "sidecar_champion_challenger_validation_design": (
+                        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_validation_design.yaml"
+                    ),
+                    "sidecar_champion_challenger_validation_design_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_validation_design.md"
+                    ),
+                    "sidecar_data_gate_unlock_matrix": (
+                        "reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.csv"
+                    ),
+                    "sidecar_data_gate_unlock_matrix_yaml": (
+                        "reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.yaml"
+                    ),
+                    "sidecar_data_gate_unlock_matrix_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.md"
+                    ),
+                    "sidecar_evidence_consistency_audit": (
+                        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.yaml"
+                    ),
+                    "sidecar_evidence_consistency_audit_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.md"
+                    ),
+                    "sidecar_evidence_consistency_audit_status": "pass_sidecar_consistency",
+                    "sidecar_evidence_consistency_audit_check_count": 22,
+                    "sidecar_evidence_consistency_audit_issue_count": 0,
+                    "sidecar_evidence_packet_index": "reports/ceo_runs/ceo_test/sidecar_evidence_packet_index.yaml",
+                    "sidecar_evidence_packet_index_report": "reports/ceo_runs/ceo_test/sidecar_evidence_packet_index.md",
+                    "sidecar_candidate_decision_cards": "reports/ceo_runs/ceo_test/sidecar_candidate_decision_cards.md",
+                    "sidecar_current_decision_packet": (
+                        "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.yaml"
+                    ),
+                    "sidecar_current_decision_packet_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.md"
+                    ),
+                    "sidecar_current_decision_packet_status": "manual_gate_current_decision_packet",
+                    "sidecar_current_decision_packet_decision": "hold_validation_at_manual_data_gate",
+                    "sidecar_current_decision_packet_quality_remediation_status": (
+                        "manual_gate_quality_remediation_plan"
+                    ),
+                    "sidecar_current_decision_packet_quality_remediation_required_action": (
+                        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                    ),
+                    "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count": 0,
+                    "sidecar_current_decision_packet_quality_remediation_human_visual_count": 1,
+                    "sidecar_current_decision_packet_quality_remediation_diversity_control_count": 1,
+                    "sidecar_current_decision_packet_quality_remediation_archive_only_count": 1,
+                    "sidecar_shadow_guardrail_status": "pass_shadow_only_guardrails",
+                    "sidecar_shadow_guardrail_violation_count": 0,
+                    "sidecar_shadow_guardrail_report": "reports/ceo_runs/ceo_test/sidecar_shadow_guardrail_audit.md",
+                    "sidecar_evidence_source_manifest": "reports/ceo_runs/ceo_test/sidecar_evidence_source_manifest.csv",
+                    "sidecar_evidence_source_health": "reports/ceo_runs/ceo_test/sidecar_evidence_source_health.csv",
+                    "sidecar_evidence_source_health_yaml": "reports/ceo_runs/ceo_test/sidecar_evidence_source_health.yaml",
+                    "sidecar_evidence_source_health_report": "reports/ceo_runs/ceo_test/sidecar_evidence_source_health.md",
+                    "sidecar_evidence_source_health_status": "pass_source_refs_present",
+                    "sidecar_evidence_source_health_issue_count": 0,
+                    "sidecar_evidence_source_health_missing_required": 0,
+                    "sidecar_evidence_source_health_wrong_type_required": 0,
+                    "sidecar_evidence_source_fingerprints": (
+                        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.csv"
+                    ),
+                    "sidecar_evidence_source_fingerprints_yaml": (
+                        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.yaml"
+                    ),
+                    "sidecar_evidence_source_fingerprints_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.md"
+                    ),
+                    "sidecar_evidence_source_fingerprints_status": "pass_source_fingerprints_recorded",
+                    "sidecar_evidence_source_fingerprints_issue_count": 0,
+                    "sidecar_evidence_source_fingerprints_file_count": 27,
+                    "sidecar_evidence_source_fingerprints_fingerprinted_file_count": 27,
+                    "sidecar_evidence_source_fingerprints_csv_count": 21,
+                    "sidecar_evidence_source_fingerprints_csv_row_count_recorded_count": 21,
+                    "sidecar_candidate_learning_ledger_status": "candidate_learning_ledger_written",
+                    "sidecar_candidate_learning_ledger_candidate_count": 3,
+                    "sidecar_candidate_learning_ledger_lead_count": 1,
+                    "sidecar_candidate_learning_ledger_diversity_control_count": 1,
+                    "sidecar_candidate_learning_ledger_archive_count": 1,
+                    "sidecar_candidate_learning_ledger_review_only_count": 0,
+                    "sidecar_candidate_learning_ledger_quality_blocked_count": 0,
+                    "sidecar_candidate_learning_ledger": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.csv"
+                    ),
+                    "sidecar_candidate_learning_ledger_yaml": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.yaml"
+                    ),
+                    "sidecar_candidate_learning_ledger_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.md"
+                    ),
+                    "sidecar_post_data_validation_playbook": (
+                        "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.yaml"
+                    ),
+                    "sidecar_post_data_validation_playbook_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.md"
+                    ),
+                    "sidecar_post_data_validation_playbook_status": (
+                        "manual_data_gate_blocks_post_data_playbook"
+                    ),
+                    "sidecar_post_data_validation_playbook_current_required_action": (
+                        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                    ),
+                    "sidecar_post_data_validation_playbook_candidate_count": 3,
+                    "sidecar_post_data_validation_playbook_visual_label_completion_status": (
+                        "pending_required_visual_labels"
+                    ),
+                    "sidecar_post_data_validation_playbook_visual_label_gate_passed": False,
+                    "sidecar_post_data_validation_playbook_pre_validation_blockers": (
+                        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+                    ),
+                    "sidecar_post_data_validation_playbook_can_execute_count": 0,
+                    "sidecar_learning_lead_candidate": "candidate_lead",
+                    "sidecar_learning_lead_next_required_action": (
+                        "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+                    ),
+                    "sidecar_learning_lead_validation_authority": "blocked_by_manual_data_gate",
+                    "sidecar_learning_control_candidate": "candidate_control",
+                    "sidecar_learning_control_reason": (
+                        "useful as a diversity/fragility control, not as a promotion lead"
+                    ),
+                    "sidecar_learning_control_next_allowed_action": (
+                        "after data unlock, run only diversity/fragility control validation"
+                    ),
+                    "sidecar_learning_archive_candidate": "candidate_archive",
+                    "sidecar_learning_archive_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                    "sidecar_learning_archive_next_allowed_action": (
+                        "preserve archive; require a new approved hypothesis before any promotion review"
+                    ),
+                    "sidecar_current_handoff": "reports/ceo_runs/ceo_test/sidecar_current_handoff.yaml",
+                    "sidecar_current_handoff_report": "reports/ceo_runs/ceo_test/sidecar_current_handoff.md",
+                    "sidecar_candidate_decision_matrix": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.csv"
+                    ),
+                    "sidecar_candidate_decision_matrix_report": (
+                        "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.md"
+                    ),
+                    "sidecar_candidate_decision_matrix_row_count": 3,
+                    "sidecar_frozen_spec_review_table": "reports/ceo_runs/ceo_test/sidecar_frozen_spec_review.csv",
+                    "evidence_debt_register_status": "open_evidence_debt",
+                    "evidence_debt_count": 11,
+                    "evidence_debt_candidate_count": 4,
+                    "evidence_debt_global_count": 7,
+                    "evidence_debt_archived_candidate_count": 1,
+                    "evidence_debt_next_action": "build_or_run_frozen_validation_executor",
+                    "evidence_debt_current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                    "evidence_debt_current_runtime_handoff_status": "manual_data_gate_required",
+                    "evidence_debt_strategic_blocked_by_current_handoff": True,
+                    "evidence_debt_register_report": "reports/ceo_runs/ceo_test/evidence_debt_register.md",
+                    "data_gate_brief_status": "fresh_data_gate_blocked",
+                    "data_gate_preflight_status": "not_ready",
+                    "data_gate_safe_to_run_fresh_validation": False,
+                    "data_gate_manual_gate_active": True,
+                    "data_gate_required_timeframes": ["1d", "4h"],
+                    "data_gate_csv_requirement_count": 80,
+                    "data_gate_blocked_candidate_count": 3,
+                    "data_gate_candidate_unlock_count": 3,
+                    "data_gate_role_blocker_count": 4,
+                    "data_gate_next_action": "import_or_curate_fresh_ohlcv_data",
+                    "data_gate_next_verification_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test",
+                    "data_gate_brief_report": "reports/ceo_runs/ceo_test/data_gate_brief.md",
+                    "data_gate_candidate_unlocks": "reports/ceo_runs/ceo_test/data_gate_candidate_unlocks.csv",
+                    "data_gate_import_checklist": "reports/ceo_runs/ceo_test/data_gate_import_checklist.csv",
+                    "data_gate_import_checklist_report": "reports/ceo_runs/ceo_test/data_gate_import_checklist.md",
+                    "data_gate_import_checklist_row_count": 80,
+                    "data_gate_import_checklist_pending_imports": 80,
+                    "data_gate_import_checklist_complete_ready": 0,
+                    "data_gate_import_checklist_missing_count": 0,
+                    "data_gate_import_checklist_stale_count": 80,
+                    "data_gate_handoff_audit": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml",
+                    "data_gate_handoff_audit_report": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.md",
+                    "data_gate_handoff_audit_status": "pass_data_gate_handoff_consistency",
+                    "data_gate_handoff_audit_check_count": 8,
+                    "data_gate_handoff_audit_issue_count": 0,
+                    "data_gate_symbol_matrix": "reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv",
+                    "data_gate_symbol_matrix_report": "reports/ceo_runs/ceo_test/data_gate_symbol_matrix.md",
+                    "data_gate_symbol_matrix_row_count": 20,
                 },
             }
         }
@@ -8592,6 +12973,967 @@ def test_ceo_cli_status_prints_runtime_authority_without_selected_action(
     assert "Decision quality selected action: none" in out
     assert "Decision quality runtime authority: manual_gate_required" in out
     assert "Decision quality selected action blocked by: manual_gate_required:blocker:stop_requested" in out
+    assert "Sidecar evidence brief: manual_data_gate_blocks_validation" in out
+    assert "Sidecar candidates: 3" in out
+    assert "Sidecar ready visual review: 3" in out
+    assert "Sidecar fresh-data blocked: 3" in out
+    assert "Sidecar review-only frozen specs: 3" in out
+    assert "Sidecar official frozen plan exists: False" in out
+    assert "Sidecar next action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Sidecar candidate table: reports/ceo_runs/ceo_test/sidecar_evidence_candidates.csv" in out
+    assert "Sidecar visual-review handoff table: reports/ceo_runs/ceo_test/sidecar_visual_review_handoff.csv" in out
+    assert "Sidecar visual-review top candidate: v127_daily_hot_reset_lag2_warning" in out
+    assert "Sidecar visual-review top role: warning_blocker" in out
+    assert "Sidecar visual-review top focus: blocker_false_positive_and_avoided_downside_review" in out
+    assert "Sidecar visual-review top priority: 27.781" in out
+    assert "Sidecar visual-review top question: Was the warning visually legible before the downside move?" in out
+    assert "Sidecar visual-review top gallery: reports/indicator_evidence_sprint/" in out
+    assert "Sidecar visual-review top labels: reports/indicator_evidence_sprint/" in out
+    assert (
+        "Sidecar champion/challenger evidence table: "
+        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_evidence.csv"
+    ) in out
+    assert (
+        "Sidecar champion/challenger quality audit: "
+        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.yaml"
+    ) in out
+    assert (
+        "Sidecar champion/challenger quality audit report: "
+        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.md"
+    ) in out
+    assert "Sidecar champion/challenger quality status: pass_with_advisory_quality_findings" in out
+    assert "Sidecar champion/challenger quality issues: 2" in out
+    assert "Sidecar champion/challenger quality hard/advisory issues: 0/2" in out
+    assert (
+        "Sidecar champion/challenger quality advisory summary: "
+        "candidate_control:event_diversity_below_review_threshold"
+    ) in out
+    assert (
+        "Sidecar quality remediation plan: "
+        "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.yaml"
+    ) in out
+    assert (
+        "Sidecar quality remediation plan report: "
+        "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.md"
+    ) in out
+    assert "Sidecar quality remediation plan status: manual_gate_quality_remediation_plan" in out
+    assert (
+        "Sidecar quality remediation plan required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar quality remediation autonomous/human/diversity/archive: 0/1/1/1" in out
+    assert "Sidecar evidence gap matrix: reports/ceo_runs/ceo_test/sidecar_evidence_gap_matrix.csv" in out
+    assert (
+        "Sidecar candidate readiness summary: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_readiness_summary.csv"
+    ) in out
+    assert (
+        "Sidecar candidate readiness summary report: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_readiness_summary.md"
+    ) in out
+    assert "Sidecar validation queue: reports/ceo_runs/ceo_test/sidecar_validation_queue.csv" in out
+    assert "Sidecar validation queue report: reports/ceo_runs/ceo_test/sidecar_validation_queue.md" in out
+    assert (
+        "Sidecar champion/challenger validation design: "
+        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_validation_design.yaml"
+    ) in out
+    assert (
+        "Sidecar champion/challenger validation design report: "
+        "reports/ceo_runs/ceo_test/sidecar_champion_challenger_validation_design.md"
+    ) in out
+    assert "Sidecar data-gate unlock matrix: reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.csv" in out
+    assert "Sidecar data-gate unlock matrix YAML: reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.yaml" in out
+    assert (
+        "Sidecar data-gate unlock matrix report: "
+        "reports/ceo_runs/ceo_test/sidecar_data_gate_unlock_matrix.md"
+    ) in out
+    assert (
+        "Sidecar evidence consistency audit: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.yaml"
+    ) in out
+    assert (
+        "Sidecar evidence consistency audit report: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.md"
+    ) in out
+    assert "Sidecar evidence consistency audit status: pass_sidecar_consistency" in out
+    assert "Sidecar evidence consistency audit checks/issues: 22/0" in out
+    assert "Sidecar evidence packet index: reports/ceo_runs/ceo_test/sidecar_evidence_packet_index.yaml" in out
+    assert "Sidecar evidence packet index report: reports/ceo_runs/ceo_test/sidecar_evidence_packet_index.md" in out
+    assert "Sidecar candidate decision cards: reports/ceo_runs/ceo_test/sidecar_candidate_decision_cards.md" in out
+    assert "Sidecar current decision packet: reports/ceo_runs/ceo_test/sidecar_current_decision_packet.yaml" in out
+    assert (
+        "Sidecar current decision packet report: "
+        "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.md"
+    ) in out
+    assert "Sidecar current decision packet status: manual_gate_current_decision_packet" in out
+    assert "Sidecar current decision packet decision: hold_validation_at_manual_data_gate" in out
+    assert (
+        "Sidecar current decision packet quality remediation status: "
+        "manual_gate_quality_remediation_plan"
+    ) in out
+    assert (
+        "Sidecar current decision packet quality remediation required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert (
+        "Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+        "0/1/1/1"
+    ) in out
+    assert "Sidecar shadow guardrail: pass_shadow_only_guardrails" in out
+    assert "Sidecar shadow guardrail violations: 0" in out
+    assert "Sidecar shadow guardrail report: reports/ceo_runs/ceo_test/sidecar_shadow_guardrail_audit.md" in out
+    assert "Sidecar evidence source manifest: reports/ceo_runs/ceo_test/sidecar_evidence_source_manifest.csv" in out
+    assert "Sidecar evidence source health: reports/ceo_runs/ceo_test/sidecar_evidence_source_health.csv" in out
+    assert "Sidecar evidence source health YAML: reports/ceo_runs/ceo_test/sidecar_evidence_source_health.yaml" in out
+    assert "Sidecar evidence source health report: reports/ceo_runs/ceo_test/sidecar_evidence_source_health.md" in out
+    assert "Sidecar evidence source health status: pass_source_refs_present" in out
+    assert "Sidecar evidence source health issues: 0" in out
+    assert "Sidecar evidence source health missing required refs: 0" in out
+    assert "Sidecar evidence source health wrong-type required refs: 0" in out
+    assert (
+        "Sidecar evidence source fingerprints: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.csv"
+    ) in out
+    assert (
+        "Sidecar evidence source fingerprints YAML: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.yaml"
+    ) in out
+    assert (
+        "Sidecar evidence source fingerprints report: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_source_fingerprints.md"
+    ) in out
+    assert "Sidecar evidence source fingerprints status: pass_source_fingerprints_recorded" in out
+    assert "Sidecar evidence source fingerprints issues: 0" in out
+    assert "Sidecar evidence source fingerprints files: 27/27" in out
+    assert "Sidecar evidence source fingerprints CSV row counts: 21/21" in out
+    assert (
+        "Sidecar candidate learning ledger: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.csv"
+    ) in out
+    assert (
+        "Sidecar candidate learning ledger YAML: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.yaml"
+    ) in out
+    assert (
+        "Sidecar candidate learning ledger report: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.md"
+    ) in out
+    assert "Sidecar candidate learning ledger status: candidate_learning_ledger_written" in out
+    assert "Sidecar candidate learning ledger lead/control/archive/review/blocked: 1/1/1/0/0" in out
+    assert "Sidecar learning lead candidate: candidate_lead" in out
+    assert "Sidecar learning lead next required: import or curate fresh OHLCV data" in out
+    assert "Sidecar learning lead authority: blocked_by_manual_data_gate" in out
+    assert "Sidecar learning control candidate: candidate_control" in out
+    assert "Sidecar learning control reason: useful as a diversity/fragility control" in out
+    assert "Sidecar learning archive candidate: candidate_archive" in out
+    assert "Sidecar learning archive reason: failure-mode evidence" in out
+    assert (
+        "Sidecar post-data validation playbook: "
+        "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.yaml"
+    ) in out
+    assert "Sidecar post-data playbook status: manual_data_gate_blocks_post_data_playbook" in out
+    assert (
+        "Sidecar post-data required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar post-data visual-label status/gate: pending_required_visual_labels/False" in out
+    assert (
+        "Sidecar post-data blockers: "
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    ) in out
+    assert "Sidecar post-data can-execute candidates: 0" in out
+    assert "Sidecar current handoff: reports/ceo_runs/ceo_test/sidecar_current_handoff.yaml" in out
+    assert "Sidecar current handoff report: reports/ceo_runs/ceo_test/sidecar_current_handoff.md" in out
+    assert "Sidecar candidate decision matrix: reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.csv" in out
+    assert "Sidecar candidate decision matrix rows: 3" in out
+    assert (
+        "Sidecar candidate decision matrix report: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.md"
+    ) in out
+    assert "Sidecar frozen-spec review table: reports/ceo_runs/ceo_test/sidecar_frozen_spec_review.csv" in out
+    assert "Evidence debt register: open_evidence_debt" in out
+    assert "Evidence debt count: 11" in out
+    assert "Evidence debt candidate/global/archive: 4/7/1" in out
+    assert "Evidence debt next action: build_or_run_frozen_validation_executor" in out
+    assert "Evidence debt current handoff: import_or_curate_fresh_ohlcv_data" in out
+    assert "Evidence debt handoff status: manual_data_gate_required" in out
+    assert "Evidence debt strategic blocked by handoff: True" in out
+    assert "Evidence debt report: reports/ceo_runs/ceo_test/evidence_debt_register.md" in out
+    assert "Data gate brief: fresh_data_gate_blocked" in out
+    assert "Data gate preflight: not_ready" in out
+    assert "Data gate safe fresh validation: False" in out
+    assert "Data gate required timeframes: ['1d', '4h']" in out
+    assert "Data gate CSV requirements: 80" in out
+    assert "Data gate blocked candidates: 3" in out
+    assert "Data gate candidate unlocks: 3" in out
+    assert "Data gate role blockers: 4" in out
+    assert "Data gate next action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Data gate candidate unlock table: reports/ceo_runs/ceo_test/data_gate_candidate_unlocks.csv" in out
+    assert "Data gate import checklist: reports/ceo_runs/ceo_test/data_gate_import_checklist.csv" in out
+    assert "Data gate import checklist rows/pending/ready: 80/80/0" in out
+    assert "Data gate import checklist missing/stale: 0/80" in out
+    assert "Data gate import checklist report: reports/ceo_runs/ceo_test/data_gate_import_checklist.md" in out
+    assert "Data gate handoff audit: reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml" in out
+    assert "Data gate handoff audit status: pass_data_gate_handoff_consistency" in out
+    assert "Data gate handoff audit checks/issues: 8/0" in out
+    assert "Data gate handoff audit report: reports/ceo_runs/ceo_test/data_gate_handoff_audit.md" in out
+    assert "Data gate symbol matrix: reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv" in out
+    assert "Data gate symbol matrix rows: 20" in out
+    assert "Data gate symbol matrix report: reports/ceo_runs/ceo_test/data_gate_symbol_matrix.md" in out
+
+
+def test_ceo_cli_data_gate_brief_prints_blocker_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_data_gate(options: CeoOpsOptions) -> dict[str, object]:
+        assert options.run_id == "ceo_test"
+        return {
+            "brief": {
+                "status": "fresh_data_gate_blocked",
+                "preflight_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "manual_data_gate_active": True,
+                "required_timeframes": ["1d", "4h"],
+                "csv_requirement_count": 80,
+                "blocked_candidate_count": 3,
+                "candidate_unlock_count": 3,
+                "sidecar_learning_status": "candidate_learning_ledger_written",
+                "sidecar_learning_lead_count": 1,
+                "sidecar_learning_control_count": 1,
+                "sidecar_learning_archive_count": 1,
+                "sidecar_learning_review_count": 0,
+                "sidecar_learning_blocked_count": 0,
+                "fresh_data_role_blocker_count": 9,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+                "next_verification_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test",
+            },
+            "import_plan": {
+                "required_batch_count": 2,
+                "production_effect": "none",
+            },
+            "import_checklist": {
+                "checklist_row_count": 80,
+                "pending_import_count": 80,
+                "complete_ready_count": 0,
+                "production_effect": "none",
+            },
+            "handoff_audit": {
+                "status": "pass_data_gate_handoff_consistency",
+                "check_count": 8,
+                "issue_count": 0,
+                "production_effect": "none",
+            },
+            "symbol_matrix": {
+                "symbol_count": 20,
+                "production_effect": "none",
+            },
+            "paths": {
+                "data_gate_brief": tmp_path / "reports" / "ceo_runs" / "ceo_test" / "data_gate_brief.yaml",
+                "data_gate_brief_report": tmp_path / "reports" / "ceo_runs" / "ceo_test" / "data_gate_brief.md",
+                "data_gate_csv_requirements": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_csv_requirements.csv",
+                "data_gate_candidate_unlocks": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_candidate_unlocks.csv",
+                "data_gate_import_plan": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_plan.yaml",
+                "data_gate_import_plan_report": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_plan.md",
+                "data_gate_import_batches": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_batches.csv",
+                "data_gate_import_checklist": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_checklist.csv",
+                "data_gate_import_checklist_yaml": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_checklist.yaml",
+                "data_gate_import_checklist_report": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_import_checklist.md",
+                "data_gate_handoff_audit": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_handoff_audit.yaml",
+                "data_gate_handoff_audit_report": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_handoff_audit.md",
+                "data_gate_symbol_matrix": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_symbol_matrix.csv",
+                "data_gate_symbol_matrix_report": tmp_path
+                / "reports"
+                / "ceo_runs"
+                / "ceo_test"
+                / "data_gate_symbol_matrix.md",
+            },
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_data_gate_brief", fake_data_gate)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="data-gate-brief",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Data gate brief:" in out
+    assert "CSV requirement table:" in out
+    assert "Candidate unlock table:" in out
+    assert "Import plan:" in out
+    assert "Import plan report:" in out
+    assert "Import batch table:" in out
+    assert "Import checklist:" in out
+    assert "Import checklist YAML:" in out
+    assert "Import checklist report:" in out
+    assert "Handoff audit:" in out
+    assert "Handoff audit report:" in out
+    assert "Symbol matrix:" in out
+    assert "Symbol matrix report:" in out
+    assert "Status: fresh_data_gate_blocked" in out
+    assert "Safe to run fresh validation: False" in out
+    assert "Required timeframes: ['1d', '4h']" in out
+    assert "CSV requirements: 80" in out
+    assert "Import batches: 2" in out
+    assert "Import checklist rows/pending/ready: 80/80/0" in out
+    assert "Handoff audit status: pass_data_gate_handoff_consistency" in out
+    assert "Handoff audit checks/issues: 8/0" in out
+    assert "Symbol matrix rows: 20" in out
+    assert "Blocked candidates: 3" in out
+    assert "Candidate unlocks: 3" in out
+    assert "Sidecar learning ledger: candidate_learning_ledger_written" in out
+    assert "Sidecar learning lead/control/archive/review/blocked: 1/1/1/0/0" in out
+    assert "Fresh-data role blockers: 9" in out
+    assert "Next action: import_or_curate_fresh_ohlcv_data" in out
+
+
+def test_ceo_cli_sidecar_evidence_brief_prints_candidate_table(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_sidecar(options: CeoOpsOptions) -> dict[str, object]:
+        assert options.run_id == "ceo_test"
+        root = tmp_path / "reports" / "ceo_runs" / "ceo_test"
+        return {
+            "brief": {
+                "status": "manual_data_gate_blocks_validation",
+                "candidate_count": 3,
+                "ready_visual_review_count": 3,
+                "fresh_data_blocked_count": 3,
+                "review_only_frozen_spec_count": 3,
+                "official_frozen_candidate_validation_plan_exists": False,
+                "manual_data_gate_active": True,
+                "next_action": "import_or_curate_fresh_ohlcv_data",
+            },
+            "guardrail_audit": {
+                "status": "pass_shadow_only_guardrails",
+                "violation_count": 0,
+            },
+            "champion_challenger_quality": {
+                "status": "pass_champion_challenger_quality",
+                "issue_count": 0,
+            },
+            "source_health": {
+                "status": "pass_source_refs_present",
+                "issue_count": 0,
+            },
+            "source_fingerprints": {
+                "status": "pass_source_fingerprints_recorded",
+                "issue_count": 0,
+            },
+            "consistency_audit": {
+                "status": "pass_sidecar_consistency",
+                "check_count": 22,
+                "issue_count": 0,
+            },
+            "candidate_learning_ledger": {
+                "status": "candidate_learning_ledger_written",
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 1,
+                "archive_failure_mode_count": 1,
+                "review_only_candidate_count": 0,
+                "quality_blocked_review_only_count": 0,
+            },
+            "post_data_playbook": {
+                "status": "manual_data_gate_blocks_post_data_playbook",
+                "current_required_action": "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels",
+                "visual_label_completion_status": "pending_required_visual_labels",
+                "visual_label_gate_passed": False,
+                "pre_validation_blockers": [
+                    "fresh_data_preflight_not_safe",
+                    "visual_label_completion_audit_not_passed",
+                ],
+                "candidates": [
+                    {"belief_id": "candidate_lead", "can_execute_now": False},
+                    {"belief_id": "candidate_control", "can_execute_now": False},
+                    {"belief_id": "candidate_archive", "can_execute_now": False},
+                    ],
+                },
+                "visual_label_source_patch_plan": {
+                    "source_patch_cell_count": 48,
+                    "pending_source_patch_cell_count": 48,
+                    "blocked_source_patch_cell_count": 0,
+                    "source_file_count": 1,
+                    "source_row_count": 12,
+                },
+                "visual_label_decision_context": {
+                    "status": "pending_visual_label_decision_context",
+                    "row_count": 12,
+                    "missed_upside_false_warning_probe_count": 6,
+                    "avoided_downside_warning_probe_count": 6,
+                },
+                "paths": {
+                "sidecar_evidence_brief": root / "sidecar_evidence_brief.yaml",
+                "sidecar_evidence_brief_report": root / "sidecar_evidence_brief.md",
+                "sidecar_evidence_candidates": root / "sidecar_evidence_candidates.csv",
+                "sidecar_visual_review_handoff": root / "sidecar_visual_review_handoff.csv",
+                "sidecar_visual_review_coverage": root / "sidecar_visual_review_coverage.csv",
+                "sidecar_visual_review_coverage_report": root / "sidecar_visual_review_coverage.md",
+                "sidecar_visual_label_worklist": root / "sidecar_visual_label_worklist.csv",
+                "sidecar_visual_label_worklist_report": root / "sidecar_visual_label_worklist.md",
+                "sidecar_visual_label_review_batches": root / "sidecar_visual_label_review_batches.csv",
+                "sidecar_visual_label_review_batches_report": root / "sidecar_visual_label_review_batches.md",
+                "sidecar_visual_label_progress": root / "sidecar_visual_label_progress.csv",
+                "sidecar_visual_label_progress_report": root / "sidecar_visual_label_progress.md",
+                    "sidecar_visual_label_next_batch": root / "sidecar_visual_label_next_batch.csv",
+                    "sidecar_visual_label_next_batch_report": root / "sidecar_visual_label_next_batch.md",
+                    "sidecar_visual_label_next_batch_gallery": root / "sidecar_visual_label_next_batch_gallery.md",
+                    "sidecar_visual_label_decision_context": (
+                        root / "sidecar_visual_label_decision_context.yaml"
+                    ),
+                    "sidecar_visual_label_decision_context_report": (
+                        root / "sidecar_visual_label_decision_context.md"
+                    ),
+                    "sidecar_visual_label_rubric": root / "sidecar_visual_label_rubric.yaml",
+                "sidecar_visual_label_rubric_report": root / "sidecar_visual_label_rubric.md",
+                "sidecar_visual_label_entry_sheet": root / "sidecar_visual_label_entry_sheet.csv",
+                "sidecar_visual_label_entry_sheet_report": root / "sidecar_visual_label_entry_sheet.md",
+                "sidecar_visual_label_source_update_manifest": (
+                    root / "sidecar_visual_label_source_update_manifest.csv"
+                ),
+                "sidecar_visual_label_source_update_manifest_report": (
+                    root / "sidecar_visual_label_source_update_manifest.md"
+                ),
+                "sidecar_visual_label_source_patch_plan": root / "sidecar_visual_label_source_patch_plan.csv",
+                "sidecar_visual_label_source_patch_plan_yaml": root / "sidecar_visual_label_source_patch_plan.yaml",
+                "sidecar_visual_label_source_patch_plan_report": root / "sidecar_visual_label_source_patch_plan.md",
+                "sidecar_visual_label_completion_audit": root / "sidecar_visual_label_completion_audit.csv",
+                "sidecar_visual_label_completion_audit_yaml": root / "sidecar_visual_label_completion_audit.yaml",
+                "sidecar_visual_label_completion_audit_report": root / "sidecar_visual_label_completion_audit.md",
+                "sidecar_champion_challenger_evidence": root / "sidecar_champion_challenger_evidence.csv",
+                "sidecar_champion_challenger_quality_audit": (
+                    root / "sidecar_champion_challenger_quality_audit.yaml"
+                ),
+                "sidecar_champion_challenger_quality_audit_report": (
+                    root / "sidecar_champion_challenger_quality_audit.md"
+                ),
+                "sidecar_quality_remediation_plan": root / "sidecar_quality_remediation_plan.yaml",
+                "sidecar_quality_remediation_plan_report": root / "sidecar_quality_remediation_plan.md",
+                "sidecar_evidence_gap_matrix": root / "sidecar_evidence_gap_matrix.csv",
+                "sidecar_candidate_readiness_summary": root / "sidecar_candidate_readiness_summary.csv",
+                "sidecar_candidate_readiness_summary_report": root / "sidecar_candidate_readiness_summary.md",
+                "sidecar_validation_queue": root / "sidecar_validation_queue.csv",
+                "sidecar_validation_queue_report": root / "sidecar_validation_queue.md",
+                "sidecar_champion_challenger_validation_design": (
+                    root / "sidecar_champion_challenger_validation_design.yaml"
+                ),
+                "sidecar_champion_challenger_validation_design_report": (
+                    root / "sidecar_champion_challenger_validation_design.md"
+                ),
+                "sidecar_data_gate_unlock_matrix": root / "sidecar_data_gate_unlock_matrix.csv",
+                "sidecar_data_gate_unlock_matrix_yaml": root / "sidecar_data_gate_unlock_matrix.yaml",
+                "sidecar_data_gate_unlock_matrix_report": root / "sidecar_data_gate_unlock_matrix.md",
+                "sidecar_evidence_consistency_audit": root / "sidecar_evidence_consistency_audit.yaml",
+                "sidecar_evidence_consistency_audit_report": root / "sidecar_evidence_consistency_audit.md",
+                "sidecar_evidence_packet_index": root / "sidecar_evidence_packet_index.yaml",
+                "sidecar_evidence_packet_index_report": root / "sidecar_evidence_packet_index.md",
+                "sidecar_candidate_decision_cards": root / "sidecar_candidate_decision_cards.md",
+                "sidecar_current_decision_packet": root / "sidecar_current_decision_packet.yaml",
+                "sidecar_current_decision_packet_report": root / "sidecar_current_decision_packet.md",
+                "sidecar_shadow_guardrail_audit": root / "sidecar_shadow_guardrail_audit.yaml",
+                "sidecar_shadow_guardrail_audit_report": root / "sidecar_shadow_guardrail_audit.md",
+                "sidecar_evidence_source_manifest": root / "sidecar_evidence_source_manifest.csv",
+                "sidecar_evidence_source_health": root / "sidecar_evidence_source_health.csv",
+                "sidecar_evidence_source_health_yaml": root / "sidecar_evidence_source_health.yaml",
+                "sidecar_evidence_source_health_report": root / "sidecar_evidence_source_health.md",
+                "sidecar_evidence_source_fingerprints": root / "sidecar_evidence_source_fingerprints.csv",
+                "sidecar_evidence_source_fingerprints_yaml": root / "sidecar_evidence_source_fingerprints.yaml",
+                "sidecar_evidence_source_fingerprints_report": root / "sidecar_evidence_source_fingerprints.md",
+                "sidecar_candidate_learning_ledger": root / "sidecar_candidate_learning_ledger.csv",
+                "sidecar_candidate_learning_ledger_yaml": root / "sidecar_candidate_learning_ledger.yaml",
+                "sidecar_candidate_learning_ledger_report": root / "sidecar_candidate_learning_ledger.md",
+                "sidecar_post_data_validation_playbook": root / "sidecar_post_data_validation_playbook.yaml",
+                "sidecar_post_data_validation_playbook_report": root / "sidecar_post_data_validation_playbook.md",
+                "sidecar_current_handoff": root / "sidecar_current_handoff.yaml",
+                "sidecar_current_handoff_report": root / "sidecar_current_handoff.md",
+                "sidecar_candidate_decision_matrix": root / "sidecar_candidate_decision_matrix.csv",
+                "sidecar_candidate_decision_matrix_report": root / "sidecar_candidate_decision_matrix.md",
+                "sidecar_frozen_spec_review": root / "sidecar_frozen_spec_review.csv",
+            },
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_sidecar_evidence_brief", fake_sidecar)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="sidecar-evidence-brief",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Sidecar evidence brief:" in out
+    assert "Sidecar evidence report:" in out
+    assert "Sidecar candidate table:" in out
+    assert "Sidecar visual-review handoff table:" in out
+    assert "Sidecar visual-review coverage:" in out
+    assert "Sidecar visual-review coverage report:" in out
+    assert "Sidecar visual-label worklist:" in out
+    assert "Sidecar visual-label worklist report:" in out
+    assert "Sidecar visual-label review batches:" in out
+    assert "Sidecar visual-label review batches report:" in out
+    assert "Sidecar visual-label progress:" in out
+    assert "Sidecar visual-label progress report:" in out
+    assert "Sidecar visual-label next batch:" in out
+    assert "Sidecar visual-label next batch report:" in out
+    assert "Sidecar visual-label next batch gallery:" in out
+    assert "Sidecar visual-label decision context:" in out
+    assert "Sidecar visual-label decision context report:" in out
+    assert "Sidecar visual-label decision context status/rows: pending_visual_label_decision_context/12" in out
+    assert "Sidecar visual-label decision context false/avoided probes: 6/6" in out
+    assert "Sidecar visual-label rubric:" in out
+    assert "Sidecar visual-label rubric report:" in out
+    assert "Sidecar visual-label entry sheet:" in out
+    assert "Sidecar visual-label entry sheet report:" in out
+    assert "Sidecar visual-label source update manifest:" in out
+    assert "Sidecar visual-label source update manifest report:" in out
+    assert "Sidecar visual-label source patch plan:" in out
+    assert "Sidecar visual-label source patch plan YAML:" in out
+    assert "Sidecar visual-label source patch plan report:" in out
+    assert "Sidecar visual-label source patch cells/pending/blocked: 48/48/0" in out
+    assert "Sidecar visual-label source patch files/rows: 1/12" in out
+    assert "Sidecar visual-label completion audit:" in out
+    assert "Sidecar visual-label completion audit YAML:" in out
+    assert "Sidecar visual-label completion audit report:" in out
+    assert "Sidecar champion/challenger evidence table:" in out
+    assert "Sidecar champion/challenger quality audit:" in out
+    assert "Sidecar champion/challenger quality audit report:" in out
+    assert "Sidecar quality remediation plan:" in out
+    assert "Sidecar quality remediation plan report:" in out
+    assert "Sidecar evidence gap matrix:" in out
+    assert "Sidecar candidate readiness summary:" in out
+    assert "Sidecar candidate readiness summary report:" in out
+    assert "Sidecar validation queue:" in out
+    assert "Sidecar validation queue report:" in out
+    assert "Sidecar champion/challenger validation design:" in out
+    assert "Sidecar champion/challenger validation design report:" in out
+    assert "Sidecar data-gate unlock matrix:" in out
+    assert "Sidecar data-gate unlock matrix YAML:" in out
+    assert "Sidecar data-gate unlock matrix report:" in out
+    assert "Sidecar evidence consistency audit:" in out
+    assert "Sidecar evidence consistency audit report:" in out
+    assert "Sidecar evidence consistency audit status: pass_sidecar_consistency" in out
+    assert "Sidecar evidence consistency audit checks/issues: 22/0" in out
+    assert "Sidecar evidence packet index:" in out
+    assert "Sidecar evidence packet index report:" in out
+    assert "Sidecar candidate decision cards:" in out
+    assert "Sidecar current decision packet:" in out
+    assert "Sidecar current decision packet report:" in out
+    assert "Sidecar shadow guardrail audit:" in out
+    assert "Sidecar shadow guardrail report:" in out
+    assert "Sidecar evidence source manifest:" in out
+    assert "Sidecar evidence source health:" in out
+    assert "Sidecar evidence source health YAML:" in out
+    assert "Sidecar evidence source health report:" in out
+    assert "Sidecar evidence source fingerprints:" in out
+    assert "Sidecar evidence source fingerprints YAML:" in out
+    assert "Sidecar evidence source fingerprints report:" in out
+    assert "Sidecar candidate learning ledger:" in out
+    assert "Sidecar candidate learning ledger YAML:" in out
+    assert "Sidecar candidate learning ledger report:" in out
+    assert "Sidecar post-data validation playbook:" in out
+    assert "Sidecar post-data validation playbook report:" in out
+    assert "Sidecar post-data playbook status: manual_data_gate_blocks_post_data_playbook" in out
+    assert (
+        "Sidecar post-data required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar post-data visual-label status/gate: pending_required_visual_labels/False" in out
+    assert (
+        "Sidecar post-data blockers: "
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    ) in out
+    assert "Sidecar post-data can-execute candidates: 0" in out
+    assert "Sidecar current handoff:" in out
+    assert "Sidecar current handoff report:" in out
+    assert "Sidecar candidate decision matrix:" in out
+    assert "Sidecar candidate decision matrix report:" in out
+    assert "Sidecar frozen-spec review table:" in out
+    assert "Status: manual_data_gate_blocks_validation" in out
+    assert "Guardrail status: pass_shadow_only_guardrails" in out
+    assert "Guardrail violations: 0" in out
+    assert "Champion/challenger quality status: pass_champion_challenger_quality" in out
+    assert "Champion/challenger quality issues: 0" in out
+    assert "Source health status: pass_source_refs_present" in out
+    assert "Source health issues: 0" in out
+    assert "Source fingerprints status: pass_source_fingerprints_recorded" in out
+    assert "Source fingerprints issues: 0" in out
+    assert "Candidate learning ledger status: candidate_learning_ledger_written" in out
+    assert "Candidate learning ledger lead/control/archive/review/blocked: 1/1/1/0/0" in out
+    assert "Candidate count: 3" in out
+    assert "Fresh-data blocked: 3" in out
+    assert "Review-only frozen specs: 3" in out
+    assert "Official frozen plan exists: False" in out
+    assert "Next action: import_or_curate_fresh_ohlcv_data" in out
+
+
+def test_ceo_cli_heartbeat_status_prints_data_gate_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    heartbeat_path = tmp_path / "reports" / "ceo_runs" / "ceo_test" / "heartbeat_status.yaml"
+
+    def fake_heartbeat_status(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "run_id": "ceo_test",
+            "lab_run_id": "ceo_test_lab",
+            "status": {
+                "last_block_number": 1,
+                "last_decision": "import_or_curate_fresh_ohlcv_data",
+                "continue_recommended": False,
+                "stop_requested": False,
+                "true_blocker": False,
+                "manual_gate_active": True,
+                "runtime_authority_status": "manual_gate_required",
+                "runtime_block_reason": "manual_gate_required:incident:dispatch_blocked",
+                "data_gate_status": "fresh_data_gate_blocked",
+                "data_gate_preflight_status": "not_ready",
+                "data_gate_safe_to_run_fresh_validation": False,
+                "data_gate_required_timeframes": ["1d", "4h"],
+                "data_gate_csv_requirement_count": 80,
+                "data_gate_candidate_unlock_count": 3,
+                "data_gate_next_action": "import_or_curate_fresh_ohlcv_data",
+                "data_gate_brief_report": "reports/ceo_runs/ceo_test/data_gate_brief.md",
+                "data_gate_candidate_unlocks": "reports/ceo_runs/ceo_test/data_gate_candidate_unlocks.csv",
+                "data_gate_import_checklist": "reports/ceo_runs/ceo_test/data_gate_import_checklist.csv",
+                "data_gate_import_checklist_report": "reports/ceo_runs/ceo_test/data_gate_import_checklist.md",
+                "data_gate_import_checklist_row_count": 80,
+                "data_gate_import_checklist_pending_imports": 80,
+                "data_gate_import_checklist_complete_ready": 0,
+                "data_gate_import_checklist_missing_count": 0,
+                "data_gate_import_checklist_stale_count": 80,
+                "data_gate_handoff_audit": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml",
+                "data_gate_handoff_audit_report": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.md",
+                "data_gate_handoff_audit_status": "pass_data_gate_handoff_consistency",
+                "data_gate_handoff_audit_check_count": 8,
+                "data_gate_handoff_audit_issue_count": 0,
+                "data_gate_symbol_matrix": "reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv",
+                "data_gate_symbol_matrix_report": "reports/ceo_runs/ceo_test/data_gate_symbol_matrix.md",
+                "data_gate_symbol_matrix_row_count": 20,
+                "sidecar_visual_review_top_candidate": "v127_daily_hot_reset_lag2_warning",
+                "sidecar_visual_review_top_product_role": "warning_blocker",
+                "sidecar_visual_review_top_focus": "blocker_false_positive_and_avoided_downside_review",
+                "sidecar_visual_review_top_priority": 27.781,
+                "sidecar_visual_review_top_question": "Was the warning visually legible before the downside move?",
+                "sidecar_visual_review_top_gallery": (
+                    "reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/"
+                    "visual_review_packet_all_records/gallery.md"
+                ),
+                "sidecar_visual_review_top_labels_with_images": (
+                    "reports/indicator_evidence_sprint/sidecar_reset_v127_attribution_controls/"
+                    "visual_review_packet_all_records/human_review_labels_with_images.csv"
+                ),
+                "sidecar_learning_status": "candidate_learning_ledger_written",
+                "sidecar_learning_candidate_count": 3,
+                "sidecar_learning_lead_count": 1,
+                "sidecar_learning_control_count": 1,
+                "sidecar_learning_archive_count": 1,
+                "sidecar_learning_review_count": 0,
+                "sidecar_learning_blocked_count": 0,
+                "sidecar_learning_ledger_report": "reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.md",
+                "sidecar_learning_lead_candidate": "candidate_lead",
+                "sidecar_learning_lead_next_required_action": (
+                    "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+                ),
+                "sidecar_learning_lead_validation_authority": "blocked_by_manual_data_gate",
+                "sidecar_learning_control_candidate": "candidate_control",
+                "sidecar_learning_control_reason": (
+                    "useful as a diversity/fragility control, not as a promotion lead"
+                ),
+                "sidecar_learning_control_next_allowed_action": (
+                    "after data unlock, run only diversity/fragility control validation"
+                ),
+                "sidecar_learning_archive_candidate": "candidate_archive",
+                "sidecar_learning_archive_reason": "failure-mode evidence; preserve as do-not-repeat learning",
+                "sidecar_learning_archive_next_allowed_action": (
+                    "preserve archive; require a new approved hypothesis before any promotion review"
+                ),
+                "sidecar_post_data_playbook": (
+                    "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.yaml"
+                ),
+                "sidecar_post_data_playbook_report": (
+                    "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.md"
+                ),
+                "sidecar_post_data_playbook_status": "manual_data_gate_blocks_post_data_playbook",
+                "sidecar_post_data_playbook_current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "sidecar_post_data_playbook_candidate_count": 3,
+                "sidecar_post_data_playbook_visual_label_completion_status": "pending_required_visual_labels",
+                "sidecar_post_data_playbook_visual_label_gate_passed": False,
+                "sidecar_post_data_playbook_pre_validation_blockers": (
+                    "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+                ),
+                "sidecar_post_data_playbook_can_execute_count": 0,
+                "sidecar_current_handoff": "reports/ceo_runs/ceo_test/sidecar_current_handoff.yaml",
+                "sidecar_current_handoff_report": "reports/ceo_runs/ceo_test/sidecar_current_handoff.md",
+                "sidecar_current_handoff_status": "manual_data_gate_current_handoff",
+                "sidecar_current_handoff_candidate_count": 3,
+                "sidecar_current_handoff_required_action": "import_or_curate_fresh_ohlcv_data",
+                "sidecar_current_handoff_historical_only": True,
+                "sidecar_current_handoff_stale_product_delta_snapshot_detected": True,
+                "sidecar_current_decision_packet": (
+                    "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.yaml"
+                ),
+                "sidecar_current_decision_packet_report": (
+                    "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.md"
+                ),
+                "sidecar_current_decision_packet_status": "manual_gate_current_decision_packet",
+                "sidecar_current_decision_packet_decision": "hold_validation_at_manual_data_gate",
+                "sidecar_current_decision_packet_quality_remediation_status": (
+                    "manual_gate_quality_remediation_plan"
+                ),
+                "sidecar_current_decision_packet_quality_remediation_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count": 0,
+                "sidecar_current_decision_packet_quality_remediation_human_visual_count": 1,
+                "sidecar_current_decision_packet_quality_remediation_diversity_control_count": 1,
+                "sidecar_current_decision_packet_quality_remediation_archive_only_count": 1,
+                "sidecar_candidate_decision_matrix": "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.csv",
+                "sidecar_candidate_decision_matrix_report": "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.md",
+                "sidecar_candidate_decision_matrix_row_count": 3,
+                "sidecar_evidence_consistency_audit": (
+                    "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.yaml"
+                ),
+                "sidecar_evidence_consistency_audit_report": (
+                    "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.md"
+                ),
+                "sidecar_evidence_consistency_audit_status": "pass_sidecar_consistency",
+                "sidecar_evidence_consistency_audit_check_count": 22,
+                "sidecar_evidence_consistency_audit_issue_count": 0,
+                "sidecar_quality_status": "pass_with_advisory_quality_findings",
+                "sidecar_quality_issue_count": 2,
+                "sidecar_quality_hard_issue_count": 0,
+                "sidecar_quality_advisory_issue_count": 2,
+                "sidecar_quality_advisory_issue_summary": (
+                    "candidate_control:event_diversity_below_review_threshold"
+                ),
+                "sidecar_quality_report": "reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.md",
+                "sidecar_quality_remediation_plan": (
+                    "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.yaml"
+                ),
+                "sidecar_quality_remediation_plan_report": (
+                    "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.md"
+                ),
+                "sidecar_quality_remediation_plan_status": "manual_gate_quality_remediation_plan",
+                "sidecar_quality_remediation_plan_current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "sidecar_quality_remediation_plan_autonomous_clearable_now_count": 0,
+                "sidecar_quality_remediation_plan_human_visual_remediation_count": 1,
+                "sidecar_quality_remediation_plan_diversity_control_remediation_count": 1,
+                "sidecar_quality_remediation_plan_archive_only_count": 1,
+                "evidence_debt_status": "open_evidence_debt",
+                "evidence_debt_count": 11,
+                "evidence_debt_candidate_count": 4,
+                "evidence_debt_global_count": 7,
+                "evidence_debt_archived_candidate_count": 1,
+                "evidence_debt_next_action": "build_or_run_frozen_validation_executor",
+                "evidence_debt_current_runtime_handoff_action": "import_or_curate_fresh_ohlcv_data",
+                "evidence_debt_current_runtime_handoff_status": "manual_data_gate_required",
+                "evidence_debt_strategic_blocked_by_current_handoff": True,
+                "evidence_debt_register_report": "reports/ceo_runs/ceo_test/evidence_debt_register.md",
+                "next_recommended_action": "Manual gate active.",
+            },
+            "paths": {"heartbeat_status": heartbeat_path},
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_heartbeat_status", fake_heartbeat_status)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="heartbeat-status",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Manual gate active: True" in out
+    assert "Runtime authority: manual_gate_required" in out
+    assert "Data gate: fresh_data_gate_blocked" in out
+    assert "Data gate preflight: not_ready" in out
+    assert "Data gate required timeframes: ['1d', '4h']" in out
+    assert "Data gate CSV requirements: 80" in out
+    assert "Data gate candidate unlocks: 3" in out
+    assert "Data gate next action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Data gate report: reports/ceo_runs/ceo_test/data_gate_brief.md" in out
+    assert "Data gate candidate unlock table: reports/ceo_runs/ceo_test/data_gate_candidate_unlocks.csv" in out
+    assert "Data gate import checklist: reports/ceo_runs/ceo_test/data_gate_import_checklist.csv" in out
+    assert "Data gate import checklist rows/pending/ready: 80/80/0" in out
+    assert "Data gate import checklist missing/stale: 0/80" in out
+    assert "Data gate import checklist report: reports/ceo_runs/ceo_test/data_gate_import_checklist.md" in out
+    assert "Data gate handoff audit: reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml" in out
+    assert "Data gate handoff audit status: pass_data_gate_handoff_consistency" in out
+    assert "Data gate handoff audit checks/issues: 8/0" in out
+    assert "Data gate handoff audit report: reports/ceo_runs/ceo_test/data_gate_handoff_audit.md" in out
+    assert "Data gate symbol matrix: reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv" in out
+    assert "Data gate symbol matrix rows: 20" in out
+    assert "Data gate symbol matrix report: reports/ceo_runs/ceo_test/data_gate_symbol_matrix.md" in out
+    assert "Sidecar visual-review top candidate: v127_daily_hot_reset_lag2_warning" in out
+    assert "Sidecar visual-review top role: warning_blocker" in out
+    assert "Sidecar visual-review top focus: blocker_false_positive_and_avoided_downside_review" in out
+    assert "Sidecar visual-review top priority: 27.781" in out
+    assert "Sidecar visual-review top question: Was the warning visually legible before the downside move?" in out
+    assert "Sidecar visual-review top gallery: reports/indicator_evidence_sprint/" in out
+    assert "Sidecar visual-review top labels: reports/indicator_evidence_sprint/" in out
+    assert "Sidecar learning ledger: candidate_learning_ledger_written" in out
+    assert "Sidecar learning candidates: 3" in out
+    assert "Sidecar learning lead/control/archive/review/blocked: 1/1/1/0/0" in out
+    assert "Sidecar learning lead candidate: candidate_lead" in out
+    assert "Sidecar learning lead next required: import or curate fresh OHLCV data" in out
+    assert "Sidecar learning lead authority: blocked_by_manual_data_gate" in out
+    assert "Sidecar learning control candidate: candidate_control" in out
+    assert "Sidecar learning control reason: useful as a diversity/fragility control" in out
+    assert "Sidecar learning archive candidate: candidate_archive" in out
+    assert "Sidecar learning archive reason: failure-mode evidence" in out
+    assert "Sidecar learning report: reports/ceo_runs/ceo_test/sidecar_candidate_learning_ledger.md" in out
+    assert "Sidecar post-data playbook: manual_data_gate_blocks_post_data_playbook" in out
+    assert (
+        "Sidecar post-data action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar post-data candidates: 3" in out
+    assert "Sidecar post-data visual-label status/gate: pending_required_visual_labels/False" in out
+    assert (
+        "Sidecar post-data blockers: "
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    ) in out
+    assert "Sidecar post-data can-execute candidates: 0" in out
+    assert "Sidecar post-data report: reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.md" in out
+    assert "Sidecar current handoff: reports/ceo_runs/ceo_test/sidecar_current_handoff.yaml" in out
+    assert "Sidecar current handoff report: reports/ceo_runs/ceo_test/sidecar_current_handoff.md" in out
+    assert "Sidecar current handoff status: manual_data_gate_current_handoff" in out
+    assert "Sidecar current handoff candidates: 3" in out
+    assert "Sidecar current handoff required action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Sidecar current handoff historical packet only: True" in out
+    assert "Sidecar current handoff stale product snapshot: True" in out
+    assert "Sidecar current decision packet: reports/ceo_runs/ceo_test/sidecar_current_decision_packet.yaml" in out
+    assert (
+        "Sidecar current decision packet report: "
+        "reports/ceo_runs/ceo_test/sidecar_current_decision_packet.md"
+    ) in out
+    assert "Sidecar current decision packet status: manual_gate_current_decision_packet" in out
+    assert "Sidecar current decision packet decision: hold_validation_at_manual_data_gate" in out
+    assert (
+        "Sidecar current decision packet quality remediation status: "
+        "manual_gate_quality_remediation_plan"
+    ) in out
+    assert (
+        "Sidecar current decision packet quality remediation required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert (
+        "Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+        "0/1/1/1"
+    ) in out
+    assert "Sidecar candidate decision matrix: reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.csv" in out
+    assert "Sidecar candidate decision matrix rows: 3" in out
+    assert (
+        "Sidecar candidate decision matrix report: "
+        "reports/ceo_runs/ceo_test/sidecar_candidate_decision_matrix.md"
+    ) in out
+    assert (
+        "Sidecar evidence consistency audit: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.yaml"
+    ) in out
+    assert (
+        "Sidecar evidence consistency audit report: "
+        "reports/ceo_runs/ceo_test/sidecar_evidence_consistency_audit.md"
+    ) in out
+    assert "Sidecar evidence consistency audit status: pass_sidecar_consistency" in out
+    assert "Sidecar evidence consistency audit checks/issues: 22/0" in out
+    assert "Sidecar quality status: pass_with_advisory_quality_findings" in out
+    assert "Sidecar quality hard/advisory issues: 0/2" in out
+    assert "Sidecar quality advisory summary: candidate_control:event_diversity_below_review_threshold" in out
+    assert "Sidecar quality report: reports/ceo_runs/ceo_test/sidecar_champion_challenger_quality_audit.md" in out
+    assert "Sidecar quality remediation plan: reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.yaml" in out
+    assert (
+        "Sidecar quality remediation plan report: "
+        "reports/ceo_runs/ceo_test/sidecar_quality_remediation_plan.md"
+    ) in out
+    assert "Sidecar quality remediation plan status: manual_gate_quality_remediation_plan" in out
+    assert (
+        "Sidecar quality remediation required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar quality remediation autonomous/human/diversity/archive: 0/1/1/1" in out
+    assert "Evidence debt register: open_evidence_debt" in out
+    assert "Evidence debt count: 11" in out
+    assert "Evidence debt candidate/global/archive: 4/7/1" in out
+    assert "Evidence debt next action: build_or_run_frozen_validation_executor" in out
+    assert "Evidence debt current handoff: import_or_curate_fresh_ohlcv_data" in out
+    assert "Evidence debt handoff status: manual_data_gate_required" in out
+    assert "Evidence debt strategic blocked by handoff: True" in out
+    assert "Evidence debt report: reports/ceo_runs/ceo_test/evidence_debt_register.md" in out
 
 
 def test_ceo_cli_flight_dashboard_prints_trace_summary(
@@ -8759,6 +14101,14 @@ def test_ceo_cli_executive_kpis_prints_authority_scope(
                 "kpis": {
                     "open_approval_count": 0,
                     "evidence_debt_count": 0,
+                    "candidate_count": 3,
+                    "sidecar_learning_status": "candidate_learning_ledger_written",
+                    "sidecar_learning_candidate_count": 3,
+                    "sidecar_learning_lead_count": 1,
+                    "sidecar_learning_control_count": 1,
+                    "sidecar_learning_archive_count": 1,
+                    "sidecar_learning_review_count": 0,
+                    "sidecar_learning_blocked_count": 0,
                     "trace_verdict": "pass",
                     "trace_score": 91,
                     "trace_recommended_next_action": "defer_to_runtime_authority_surface",
@@ -8789,6 +14139,10 @@ def test_ceo_cli_executive_kpis_prints_authority_scope(
     assert "Next action scope: executive_health_diagnostic_only" in out
     assert "Dispatch authority: not_granted_by_executive_kpis" in out
     assert "Runtime authority note: Dispatch authority is decided by ceo status." in out
+    assert "Candidates: 3" in out
+    assert "Sidecar learning ledger: candidate_learning_ledger_written" in out
+    assert "Sidecar learning candidates: 3" in out
+    assert "Sidecar learning lead/control/archive/review/blocked: 1/1/1/0/0" in out
 
 
 def test_ceo_cli_portfolio_allocator_prints_authority_scope(
@@ -9197,6 +14551,92 @@ def test_ceo_repair_plan_marks_symbolic_repairs_as_implementation_required(tmp_p
     assert plan["runnable_repair_count"] == 0
 
 
+def test_ceo_repair_plan_routes_manual_data_dispatch_incident_to_manual_gate(tmp_path: Path) -> None:
+    plan = ceo_ops.build_ceo_repair_plan(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "blockers": [], "production_effect": "none"},
+        incident_register={
+            "model": "riskflow_ceo_operating_incident_register_v0",
+            "incidents": [
+                {
+                    "incident_key": "dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                    "severity": "critical",
+                    "category": "dispatch_receipt",
+                    "owner_command": "repair_dispatch_blockers_before_execute_next",
+                    "closure_condition": "dispatch_receipt.status is dispatch_allowed for one bound action",
+                    "latest_evidence": {
+                        "evidence": "decision=import_or_curate_fresh_ohlcv_data reason=ceo preflight gate blocked bound dispatch"
+                    },
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+    )
+
+    item = plan["repair_items"][0]
+    assert plan["status"] == "manual_gate_first"
+    assert plan["manual_gate_required"] is True
+    assert plan["implementation_required"] is False
+    assert plan["top_repair"] == "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch"
+    assert plan["next_command"].endswith("data-gate-brief --run-id ceo_test")
+    assert item["command_kind"] == "manual_gate"
+    assert item["requires_manual_gate"] is True
+    assert item["needs_implementation"] is False
+    assert item["can_execute_autonomously"] is False
+
+
+def test_ceo_repair_plan_prioritizes_manual_data_gate_over_diagnostic_refresh(tmp_path: Path) -> None:
+    plan = ceo_ops.build_ceo_repair_plan(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        blocker_stack={
+            "model": "riskflow_ceo_blocker_stack_v0",
+            "next_command": "PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id ceo_test --enforce-memory-delta",
+            "blockers": [
+                {
+                    "rank": 1,
+                    "blocker": "trace_grade_failed",
+                    "authority": "trace_reliability",
+                    "next_action": "repair_preflight_blockers",
+                    "evidence": "blocked",
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+        incident_register={
+            "model": "riskflow_ceo_operating_incident_register_v0",
+            "incidents": [
+                {
+                    "incident_key": "dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                    "severity": "critical",
+                    "category": "dispatch_receipt",
+                    "owner_command": "repair_dispatch_blockers_before_execute_next",
+                    "closure_condition": "dispatch_receipt.status is dispatch_allowed for one bound action",
+                    "latest_evidence": {
+                        "evidence": "decision=import_or_curate_fresh_ohlcv_data reason=ceo preflight gate blocked bound dispatch"
+                    },
+                    "production_effect": "none",
+                }
+            ],
+            "production_effect": "none",
+        },
+    )
+
+    assert plan["status"] == "manual_gate_first"
+    assert plan["manual_gate_required"] is True
+    assert plan["runnable_repair_count"] == 0
+    assert plan["diagnostic_refresh_count"] == 1
+    assert plan["top_repair"] == "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch"
+    assert plan["top_repair_kind"] == "manual_gate"
+    assert plan["next_command"].endswith("data-gate-brief --run-id ceo_test")
+    assert "repair-apply" not in plan["next_command"]
+    assert plan["repair_items"][0]["command_kind"] == "manual_gate"
+    assert plan["repair_items"][1]["command_kind"] == "diagnostic_refresh"
+
+
 def test_ceo_repair_plan_targets_trust_alignment_playbook_for_artifact_coherence_incidents(tmp_path: Path) -> None:
     plan = ceo_ops.build_ceo_repair_plan(
         ceo_run_id="ceo_test",
@@ -9361,6 +14801,48 @@ def test_ceo_action_board_routes_repair_items_through_repair_apply(tmp_path: Pat
     assert "repair-apply" in primary["command"]
     assert "--repair-key blocker:stale_artifacts" in primary["command"]
     assert "artifact-coherence" not in primary["command"]
+
+
+def test_ceo_action_board_routes_manual_data_gate_to_data_gate_brief(tmp_path: Path) -> None:
+    board = ceo_ops.build_ceo_action_board(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        resumption_brief={
+            "resume_status": "blocked_preflight",
+            "next_command": "PYTHONPATH=src python3 -m riskflow ceo preflight-gate --run-id ceo_test --enforce-memory-delta",
+        },
+        dispatch_receipt={"model": "riskflow_ceo_dispatch_receipt_v0", "status": "dispatch_blocked", "safe_to_dispatch": False},
+        blocker_stack={"model": "riskflow_ceo_blocker_stack_v0", "status": "blocked", "top_blocker": "trace_grade_failed"},
+        repair_plan={
+            "model": "riskflow_ceo_repair_plan_v0",
+            "status": "manual_gate_first",
+            "top_repair": "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+            "top_repair_kind": "manual_gate",
+            "repair_items": [
+                {
+                    "repair_key": "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                    "source": "operating_incident_register",
+                    "command_kind": "manual_gate",
+                    "recommended_command": "repair_dispatch_blockers_before_execute_next",
+                    "evidence": "decision=import_or_curate_fresh_ohlcv_data reason=ceo preflight gate blocked bound dispatch",
+                    "can_execute_autonomously": False,
+                    "requires_manual_gate": True,
+                    "diagnostic_only": False,
+                    "needs_implementation": False,
+                    "closure_condition": "dispatch receipt clears",
+                }
+            ],
+        },
+        executive_kpis={"model": "riskflow_ceo_executive_kpis_v0", "status": "attention_required", "next_action": "stop_for_manual_data_import"},
+    )
+
+    primary = board["primary_action"]
+    assert board["status"] == "manual_gate_required"
+    assert primary["action_id"] == "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch"
+    assert primary["command_kind"] == "manual_gate"
+    assert primary["command"].endswith("data-gate-brief --run-id ceo_test")
+    assert primary["requires_manual_gate"] is True
+    assert primary["can_execute_now"] is False
 
 
 def test_ceo_repair_plan_is_diagnostic_only(tmp_path: Path) -> None:
@@ -10222,6 +15704,266 @@ def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: P
     run_ceo_review(options)
     run_ceo_stop(options, reason="user_requested")
     run_ceo_operator_step(options)
+    root = options.report_root / "ceo_test"
+    (root / "sidecar_current_decision_packet.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_current_decision_packet_v0",
+                "status": "manual_gate_current_decision_packet",
+                "executive_decision": "hold_validation_at_manual_data_gate",
+                "current_required_action": "import_or_curate_fresh_ohlcv_data",
+                "candidate_count": 3,
+                "quality_remediation_status": "manual_gate_quality_remediation_plan",
+                "quality_remediation_current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "quality_remediation_autonomous_clearable_now_count": 0,
+                "quality_remediation_human_visual_remediation_count": 1,
+                "quality_remediation_diversity_control_remediation_count": 1,
+                "quality_remediation_archive_only_count": 1,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_progress.csv").write_text(
+        (
+            "belief_id,human_label_progress_status,matched_label_rows,pending_label_rows,"
+            "completed_label_rows,next_batch_id\n"
+            "candidate_warning,human_visual_review_not_started,12,12,0,visual_label_batch_01\n"
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_next_batch.csv").write_text(
+        (
+            "batch_id,belief_id,row_match,source_label_file,missing_required_labels\n"
+            "visual_label_batch_01,candidate_warning,exact_variant,source_labels.csv,"
+            "visual_readability|product_role_match\n"
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_next_batch_gallery.md").write_text("# Batch Gallery\n", encoding="utf-8")
+    (root / "sidecar_visual_label_entry_sheet.csv").write_text(
+        (
+            "batch_id,belief_id,source_label_file,required_label_fields,missing_required_field_count,"
+            "source_label_file_exists,source_label_row_exists,image_exists\n"
+            "visual_label_batch_01,candidate_warning,source_labels.csv,visual_readability|product_role_match,"
+            "2,True,True,True\n"
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_source_update_manifest.csv").write_text(
+        (
+            "batch_id,belief_id,source_label_file,source_update_status,required_update_cell_count,"
+            "required_update_fields,source_label_file_exists,source_label_row_exists,image_exists\n"
+            "visual_label_batch_01,candidate_warning,source_labels.csv,pending_human_source_update,"
+            "2,visual_readability|product_role_match,True,True,True\n"
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_rubric.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "status": "ready_for_human_visual_label_review",
+                "batch_id": "visual_label_batch_01",
+                "required_label_fields": ["product_role_match", "visual_readability"],
+                "field_contracts": [{"field": "visual_readability"}, {"field": "product_role_match"}],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_completion_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "status": "pending_required_visual_labels",
+                "batch_id": "visual_label_batch_01",
+                "row_count": 1,
+                "completed_row_count": 0,
+                "missing_required_row_count": 1,
+                "invalid_label_row_count": 0,
+                "required_label_fields": ["product_role_match", "visual_readability"],
+                "next_action": "complete_required_visual_labels_in_source_rows",
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_visual_label_completion_audit.csv").write_text(
+        "batch_id,belief_id,label_completion_status\n"
+        "visual_label_batch_01,candidate_warning,missing_required_label_values\n",
+        encoding="utf-8",
+    )
+    (root / "sidecar_post_data_validation_playbook.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_sidecar_post_data_validation_playbook_v0",
+                "status": "manual_data_gate_blocks_post_data_playbook",
+                "current_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "candidate_count": 3,
+                "lead_post_data_candidate_count": 1,
+                "diversity_control_only_count": 1,
+                "archive_failure_mode_count": 1,
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "visual_label_completion_status": "pending_required_visual_labels",
+                "visual_label_gate_passed": False,
+                "quality_remediation_status": "manual_gate_quality_remediation_plan",
+                "quality_remediation_required_action": (
+                    "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                ),
+                "pre_validation_blockers": [
+                    "fresh_data_preflight_not_safe",
+                    "visual_label_completion_audit_not_passed",
+                ],
+                "candidates": [
+                    {"belief_id": "candidate_warning", "can_execute_now": False},
+                    {"belief_id": "candidate_control", "can_execute_now": False},
+                    {"belief_id": "candidate_archive", "can_execute_now": False},
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "sidecar_post_data_validation_playbook.md").write_text("# Post-Data Playbook\n", encoding="utf-8")
+    (root / "data_gate_brief.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "status": "fresh_data_gate_blocked",
+                "universe": "meme_universe_v1",
+                "data_dir": "data/raw",
+                "preflight_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "manual_data_gate_active": True,
+                "next_verification_command": (
+                    "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test"
+                ),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_brief.md").write_text("# Data Gate\n", encoding="utf-8")
+    (root / "fresh_data_preflight.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_fresh_data_preflight_v0",
+                "overall_status": "not_ready",
+                "safe_to_run_fresh_validation": False,
+                "universe": "meme_universe_v1",
+                "data_dir": "data/raw",
+                "timeframes": [
+                    {"timeframe": "1d", "status": "no_ready_assets", "active_count": 0, "asset_count": 2},
+                    {"timeframe": "4h", "status": "no_ready_assets", "active_count": 0, "asset_count": 2},
+                ],
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_import_plan.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_import_plan_v0",
+                "status": "manual_data_import_required",
+                "universe": "meme_universe_v1",
+                "data_dir": "data/raw",
+                "manual_data_gate_active": True,
+                "safe_to_run_fresh_validation": False,
+                "required_timeframes": ["1d", "4h"],
+                "required_batch_count": 2,
+                "required_csv_count": 4,
+                "candidate_unlock_count": 2,
+                "lead_post_data_candidates": "candidate_warning",
+                "diversity_control_candidates": "candidate_control",
+                "archive_failure_mode_candidates": "candidate_archive",
+                "post_import_sequence": [
+                    "Import or refresh all 4 required OHLCV CSVs under data/raw.",
+                    "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test",
+                ],
+                "next_verification_command": (
+                    "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test"
+                ),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_import_plan.md").write_text("# Import Plan\n", encoding="utf-8")
+    (root / "data_gate_import_batches.csv").write_text(
+        "batch_id,timeframe,requirement_count,production_effect\n"
+        "1d_csv_import_batch,1d,2,none\n"
+        "4h_csv_import_batch,4h,2,none\n",
+        encoding="utf-8",
+    )
+    (root / "data_gate_import_checklist.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_import_checklist_v0",
+                "status": "manual_data_import_checklist",
+                "checklist_row_count": 4,
+                "pending_import_count": 4,
+                "complete_ready_count": 0,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_import_checklist.csv").write_text(
+        "checklist_id,batch_id,symbol,timeframe,current_status,required_action,expected_path,import_status,production_effect\n"
+        "001_DOGE_1d,1d_csv_import_batch,DOGE,1d,stale,refresh_csv,data/raw/DOGE_1d.csv,pending_manual_import,none\n"
+        "002_DOGE_4h,4h_csv_import_batch,DOGE,4h,stale,refresh_csv,data/raw/DOGE_4h.csv,pending_manual_import,none\n"
+        "003_SHIB_1d,1d_csv_import_batch,SHIB,1d,stale,refresh_csv,data/raw/SHIB_1d.csv,pending_manual_import,none\n"
+        "004_SHIB_4h,4h_csv_import_batch,SHIB,4h,stale,refresh_csv,data/raw/SHIB_4h.csv,pending_manual_import,none\n",
+        encoding="utf-8",
+    )
+    (root / "data_gate_import_checklist.md").write_text("# Import Checklist\n", encoding="utf-8")
+    (root / "data_gate_handoff_audit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": "riskflow_ceo_data_gate_handoff_audit_v0",
+                "status": "pass_data_gate_handoff_consistency",
+                "check_count": 8,
+                "issue_count": 0,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "data_gate_handoff_audit.md").write_text("# Handoff Audit\n", encoding="utf-8")
+    (root / "data_gate_symbol_matrix.csv").write_text(
+        "symbol,requirement_count,required_timeframes,production_effect\n"
+        "DOGE,2,1d|4h,none\n"
+        "SHIB,2,1d|4h,none\n",
+        encoding="utf-8",
+    )
+    (root / "data_gate_symbol_matrix.md").write_text("# Symbol Matrix\n", encoding="utf-8")
+    (root / "data_gate_candidate_unlocks.csv").write_text(
+        "belief_id,unlock_status,production_effect\n"
+        "candidate_warning,blocked_by_manual_data_gate,none\n"
+        "candidate_control,blocked_by_manual_data_gate_for_diversity_check,none\n",
+        encoding="utf-8",
+    )
+    (root / "data_gate_csv_requirements.csv").write_text(
+        "symbol,timeframe,status,production_effect\n"
+        "DOGE,1d,stale,none\n"
+        "DOGE,4h,stale,none\n"
+        "SHIB,1d,stale,none\n"
+        "SHIB,4h,stale,none\n",
+        encoding="utf-8",
+    )
 
     result = run_ceo_operator_brief(options)
 
@@ -10236,6 +15978,97 @@ def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: P
     assert brief["current_situation"]["trace_grade_status"] in {"fail", "warn", "pass"}
     assert brief["trace_health"]["status"] == brief["current_situation"]["trace_grade_status"]
     assert "recommended_next_action" in brief["trace_health"]
+    assert brief["sidecar_current_decision"]["status"] == "manual_gate_current_decision_packet"
+    assert brief["sidecar_current_decision"]["decision"] == "hold_validation_at_manual_data_gate"
+    assert brief["sidecar_current_decision"]["quality_remediation_status"] == (
+        "manual_gate_quality_remediation_plan"
+    )
+    assert brief["sidecar_current_decision"]["quality_remediation_autonomous_clearable_now_count"] == 0
+    assert brief["sidecar_current_decision"]["quality_remediation_human_visual_count"] == 1
+    assert brief["sidecar_current_decision"]["quality_remediation_diversity_control_count"] == 1
+    assert brief["sidecar_current_decision"]["quality_remediation_archive_only_count"] == 1
+    assert brief["sidecar_current_decision"]["production_effect"] == "none"
+    assert brief["current_situation"]["data_gate_work_status"] == "fresh_data_gate_blocked"
+    assert brief["current_situation"]["data_gate_required_timeframes"] == "1d|4h"
+    assert brief["current_situation"]["data_gate_required_csv_count"] == 4
+    data_gate_work = brief["data_gate_work"]
+    assert data_gate_work["status"] == "fresh_data_gate_blocked"
+    assert data_gate_work["preflight_status"] == "not_ready"
+    assert data_gate_work["safe_to_run_fresh_validation"] is False
+    assert data_gate_work["required_csv_count"] == 4
+    assert data_gate_work["required_batch_count"] == 2
+    assert data_gate_work["import_checklist_row_count"] == 4
+    assert data_gate_work["import_checklist_pending_imports"] == 4
+    assert data_gate_work["import_checklist_complete_ready"] == 0
+    assert data_gate_work["import_checklist_missing_count"] == 0
+    assert data_gate_work["import_checklist_stale_count"] == 4
+    assert data_gate_work["handoff_audit_status"] == "pass_data_gate_handoff_consistency"
+    assert data_gate_work["handoff_audit_check_count"] == 8
+    assert data_gate_work["handoff_audit_issue_count"] == 0
+    assert data_gate_work["symbol_matrix_row_count"] == 2
+    assert data_gate_work["candidate_unlock_count"] == 2
+    assert data_gate_work["csv_requirement_row_count"] == 4
+    assert data_gate_work["paths"]["import_plan"].endswith("data_gate_import_plan.yaml")
+    assert data_gate_work["paths"]["import_checklist"].endswith("data_gate_import_checklist.csv")
+    assert data_gate_work["paths"]["import_checklist_report"].endswith("data_gate_import_checklist.md")
+    assert data_gate_work["paths"]["handoff_audit"].endswith("data_gate_handoff_audit.yaml")
+    assert data_gate_work["paths"]["handoff_audit_report"].endswith("data_gate_handoff_audit.md")
+    assert data_gate_work["paths"]["symbol_matrix"].endswith("data_gate_symbol_matrix.csv")
+    assert brief["current_situation"]["sidecar_visual_label_work_status"] == "pending_required_visual_labels"
+    assert brief["current_situation"]["sidecar_visual_label_next_batch_id"] == "visual_label_batch_01"
+    visual_work = brief["sidecar_visual_label_work"]
+    assert visual_work["status"] == "pending_required_visual_labels"
+    assert visual_work["next_batch_id"] == "visual_label_batch_01"
+    assert visual_work["next_batch_row_count"] == 1
+    assert visual_work["entry_sheet_missing_required_cells"] == 2
+    assert visual_work["source_update_pending_rows"] == 1
+    assert visual_work["source_update_required_cells"] == 2
+    assert visual_work["completion_audit_missing_rows"] == 1
+    assert visual_work["paths"]["next_batch"].endswith("sidecar_visual_label_next_batch.csv")
+    assert visual_work["paths"]["next_batch_gallery"].endswith("sidecar_visual_label_next_batch_gallery.md")
+    assert brief["current_situation"]["sidecar_post_data_playbook_status"] == (
+        "manual_data_gate_blocks_post_data_playbook"
+    )
+    assert brief["current_situation"]["sidecar_post_data_playbook_pre_validation_blockers"] == (
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    )
+    assert brief["current_situation"]["sidecar_post_data_playbook_can_execute_count"] == 0
+    post_data_work = brief["sidecar_post_data_work"]
+    assert post_data_work["status"] == "manual_data_gate_blocks_post_data_playbook"
+    assert post_data_work["current_required_action"] == (
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    )
+    assert post_data_work["visual_label_completion_status"] == "pending_required_visual_labels"
+    assert post_data_work["visual_label_gate_passed"] is False
+    assert post_data_work["pre_validation_blockers"] == (
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    )
+    assert post_data_work["can_execute_count"] == 0
+    assert post_data_work["paths"]["playbook"].endswith("sidecar_post_data_validation_playbook.yaml")
+    clearance = brief["manual_gate_clearance"]
+    assert clearance["model"] == "riskflow_ceo_manual_gate_clearance_packet_v0"
+    assert clearance["status"] == "manual_gate_clearance_blocked"
+    assert clearance["can_start_post_data_validation"] is False
+    assert clearance["blocked_gate_count"] == 4
+    assert clearance["blocked_gates"] == (
+        "runtime_authority|fresh_data_preflight|visual_label_completion|post_data_playbook_execution"
+    )
+    assert clearance["first_blocking_gate"] == "runtime_authority"
+    assert clearance["first_blocking_required_action"] == "clear_runtime_manual_gate"
+    assert clearance["first_blocking_evidence"] == "action_board.yaml|decision_quality.yaml|operator_brief.yaml"
+    assert [step["gate_id"] for step in clearance["clearance_sequence"]] == [
+        "runtime_authority",
+        "fresh_data_preflight",
+        "visual_label_completion",
+        "post_data_playbook_execution",
+    ]
+    assert clearance["clearance_sequence"][0]["step"] == 1
+    assert clearance["clearance_sequence"][2]["required_action"] == "complete_required_visual_labels_in_source_rows"
+    assert clearance["pending_data_imports"] == 4
+    assert clearance["pending_visual_label_cells"] == 2
+    assert clearance["post_data_can_execute_count"] == 0
+    assert result["paths"]["manual_gate_clearance_packet"].exists()
+    assert result["paths"]["manual_gate_clearance_packet_report"].exists()
     assert brief["current_situation"]["primary_kind"] == "manual_gate"
     assert brief["approval_work"]["status"] == "pending_approvals"
     assert brief["approval_work"]["pending_count"] == 1
@@ -10274,6 +16107,42 @@ def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: P
     assert "Approval Work" in report
     assert "Trace Health" in report
     assert "Manual data import required" in report
+    assert "Data Gate Work" in report
+    assert "Required CSVs: 4" in report
+    assert "Import checklist rows/pending/ready: 4/4/0" in report
+    assert "Import checklist missing/stale: 0/4" in report
+    assert "Handoff audit status/checks/issues: pass_data_gate_handoff_consistency/8/0" in report
+    assert "data_gate_import_checklist.csv" in report
+    assert "data_gate_handoff_audit.yaml" in report
+    assert "Symbol matrix rows: 2" in report
+    assert "data_gate_import_plan.yaml" in report
+    assert "data_gate_symbol_matrix.csv" in report
+    assert "Sidecar Current Decision" in report
+    assert "manual_gate_current_decision_packet" in report
+    assert "hold_validation_at_manual_data_gate" in report
+    assert "Quality remediation autonomous/human/diversity/archive: 0/1/1/1" in report
+    assert "Sidecar Visual Label Work" in report
+    assert "visual_label_batch_01" in report
+    assert "pending_required_visual_labels" in report
+    assert "Entry sheet missing required cells: 2" in report
+    assert "sidecar_visual_label_next_batch.csv" in report
+    assert "Sidecar Post-Data Playbook" in report
+    assert "Current required action: import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels" in report
+    assert "Pre-validation blockers: fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed" in report
+    assert "Can-execute candidates: 0" in report
+    assert "Manual Gate Clearance" in report
+    assert "Can start post-data validation: False" in report
+    assert "Blocked gates: 4 runtime_authority|fresh_data_preflight|visual_label_completion|post_data_playbook_execution" in report
+    assert "First blocking gate: runtime_authority" in report
+    assert "First blocking required action: clear_runtime_manual_gate" in report
+    assert "Clearance Sequence" in report
+    clearance_report = result["paths"]["manual_gate_clearance_packet_report"].read_text(encoding="utf-8")
+    assert "Riskflow Manual Gate Clearance Packet" in clearance_report
+    assert "Status: manual_gate_clearance_blocked" in clearance_report
+    assert "First blocking gate: runtime_authority" in clearance_report
+    assert "1. blocked runtime_authority required_action=clear_runtime_manual_gate" in clearance_report
+    assert "Pending data imports: 4" in clearance_report
+    assert "Pending visual-label cells: 2" in clearance_report
     assert "approval-record --run-id ceo_test --approval-id clear_stop_request" in report
     assert "Specialist Work" in report
     assert "Completed:" in report
@@ -10282,6 +16151,273 @@ def test_ceo_operator_brief_writes_plain_english_manual_gate_summary(tmp_path: P
     assert "approval_clear_stop_request" in report
     assert "Refused Actions" in report
     assert "Production effect: none." in report
+
+
+def test_ceo_cli_operator_brief_prints_sidecar_current_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    operator_brief_path = tmp_path / "operator_brief.yaml"
+    operator_brief_report_path = tmp_path / "operator_brief.md"
+
+    def fake_operator_brief(_options: CeoOpsOptions) -> dict[str, object]:
+        return {
+            "operator_brief": {
+                "status": "waiting_on_manual_gate",
+                "plain_english_summary": "CEO mode is stopped at a manual gate.",
+                "current_situation": {
+                    "effective_operator_status": "manual_gate_required",
+                    "manual_gate_active": True,
+                    "effective_operator_runtime_blocked": True,
+                    "effective_operator_runtime_block_reason": "manual_gate_required:data_gate",
+                    "primary_action": "import_or_curate_fresh_ohlcv_data",
+                    "primary_kind": "manual_gate",
+                    "decision_quality_effective_runtime_action": "import_or_curate_fresh_ohlcv_data",
+                    "decision_quality_effective_runtime_command_kind": "manual_gate",
+                    "decision_quality_effective_runtime_can_execute_now": False,
+                    "decision_quality_runtime_blocked": True,
+                    "decision_quality_runtime_block_reason": "manual_gate_required:data_gate",
+                    "decision_quality_selected_strategic_route_advisory": "import_or_curate_fresh_ohlcv_data",
+                },
+                "trace_health": {
+                    "status": "fail",
+                    "score": 50,
+                    "recommended_next_action": "stop_for_manual_data_import",
+                    "manual_data_import_required": True,
+                    "issues": ["manual_data_import_required"],
+                },
+                "approval_work": {
+                    "status": "no_pending_approvals",
+                    "pending_count": 0,
+                    "top_pending_approval_id": "",
+                    "approval_record_command": "",
+                    "approval_apply_command": "",
+                },
+                "sidecar_current_decision": {
+                    "status": "manual_gate_current_decision_packet",
+                    "decision": "hold_validation_at_manual_data_gate",
+                    "required_action": "import_or_curate_fresh_ohlcv_data",
+                    "candidate_count": 3,
+                    "quality_remediation_status": "manual_gate_quality_remediation_plan",
+                    "quality_remediation_required_action": (
+                        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                    ),
+                    "quality_remediation_autonomous_clearable_now_count": 0,
+                    "quality_remediation_human_visual_count": 4,
+                    "quality_remediation_diversity_control_count": 1,
+                    "quality_remediation_archive_only_count": 1,
+                },
+                "data_gate_work": {
+                    "status": "fresh_data_gate_blocked",
+                    "universe": "meme_universe_v1",
+                    "preflight_status": "not_ready",
+                    "safe_to_run_fresh_validation": False,
+                    "required_timeframes": "1d|12h|4h|1h",
+                    "timeframe_statuses": (
+                        "1d:no_ready_assets(0/20)|12h:no_ready_assets(0/20)|"
+                        "4h:no_ready_assets(0/20)|1h:no_ready_assets(0/20)"
+                    ),
+                    "required_csv_count": 80,
+                    "required_batch_count": 4,
+                    "import_batch_row_count": 4,
+                    "import_checklist_row_count": 80,
+                    "import_checklist_pending_imports": 80,
+                    "import_checklist_complete_ready": 0,
+                    "import_checklist_missing_count": 0,
+                    "import_checklist_stale_count": 80,
+                    "handoff_audit_status": "pass_data_gate_handoff_consistency",
+                    "handoff_audit_check_count": 8,
+                    "handoff_audit_issue_count": 0,
+                    "symbol_matrix_row_count": 20,
+                    "candidate_unlock_count": 3,
+                    "csv_requirement_row_count": 80,
+                    "next_verification_command": (
+                        "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test"
+                    ),
+                    "paths": {
+                        "import_plan": "reports/ceo_runs/ceo_test/data_gate_import_plan.yaml",
+                        "import_batches": "reports/ceo_runs/ceo_test/data_gate_import_batches.csv",
+                        "import_checklist": "reports/ceo_runs/ceo_test/data_gate_import_checklist.csv",
+                        "import_checklist_report": "reports/ceo_runs/ceo_test/data_gate_import_checklist.md",
+                        "handoff_audit": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml",
+                        "handoff_audit_report": "reports/ceo_runs/ceo_test/data_gate_handoff_audit.md",
+                        "symbol_matrix": "reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv",
+                        "candidate_unlocks": "reports/ceo_runs/ceo_test/data_gate_candidate_unlocks.csv",
+                        "csv_requirements": "reports/ceo_runs/ceo_test/data_gate_csv_requirements.csv",
+                        "fresh_data_preflight": "reports/ceo_runs/ceo_test/fresh_data_preflight.yaml",
+                    },
+                },
+                "sidecar_visual_label_work": {
+                    "status": "pending_required_visual_labels",
+                    "next_batch_id": "visual_label_batch_01",
+                    "required_fields": "false_positive_shape|product_role_match|promotion_blocker|visual_readability",
+                    "progress_matched_rows": 44,
+                    "progress_pending_rows": 44,
+                    "progress_completed_rows": 0,
+                    "next_batch_row_count": 12,
+                    "entry_sheet_row_count": 12,
+                    "entry_sheet_missing_required_cells": 48,
+                    "source_update_row_count": 12,
+                    "source_update_pending_rows": 12,
+                    "source_update_required_cells": 48,
+                    "completion_audit_rows": 12,
+                    "completion_audit_completed_rows": 0,
+                    "completion_audit_missing_rows": 12,
+                    "completion_audit_invalid_rows": 0,
+                    "paths": {
+                        "next_batch": "reports/ceo_runs/ceo_test/sidecar_visual_label_next_batch.csv",
+                        "next_batch_gallery": (
+                            "reports/ceo_runs/ceo_test/sidecar_visual_label_next_batch_gallery.md"
+                        ),
+                        "entry_sheet": "reports/ceo_runs/ceo_test/sidecar_visual_label_entry_sheet.csv",
+                        "source_update_manifest": (
+                            "reports/ceo_runs/ceo_test/sidecar_visual_label_source_update_manifest.csv"
+                        ),
+                        "rubric": "reports/ceo_runs/ceo_test/sidecar_visual_label_rubric.yaml",
+                        "completion_audit_yaml": (
+                            "reports/ceo_runs/ceo_test/sidecar_visual_label_completion_audit.yaml"
+                        ),
+                    },
+                },
+                "sidecar_post_data_work": {
+                    "status": "manual_data_gate_blocks_post_data_playbook",
+                    "current_required_action": (
+                        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+                    ),
+                    "candidate_count": 3,
+                    "visual_label_completion_status": "pending_required_visual_labels",
+                    "visual_label_gate_passed": False,
+                    "pre_validation_blockers": (
+                        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+                    ),
+                    "can_execute_count": 0,
+                    "paths": {
+                        "playbook": "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.yaml",
+                        "playbook_report": (
+                            "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.md"
+                        ),
+                    },
+                },
+                "manual_gate_clearance": {
+                    "status": "manual_gate_clearance_blocked",
+                    "can_start_post_data_validation": False,
+                    "blocked_gate_count": 4,
+                    "blocked_gates": (
+                        "runtime_authority|fresh_data_preflight|visual_label_completion|"
+                        "post_data_playbook_execution"
+                    ),
+                    "first_blocking_gate": "runtime_authority",
+                    "first_blocking_required_action": "clear_runtime_manual_gate",
+                    "pending_data_imports": 80,
+                    "pending_visual_label_cells": 48,
+                    "post_data_can_execute_count": 0,
+                },
+                "specialist_work": {
+                    "status": "blocked_role_tasks",
+                    "pending_task_count": 0,
+                    "completed_task_count": 4,
+                    "blocked_task_count": 10,
+                },
+                "recommended_next_action": "PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id ceo_test",
+            },
+            "paths": {
+                "operator_brief": operator_brief_path,
+                "operator_brief_report": operator_brief_report_path,
+                "manual_gate_clearance_packet": tmp_path / "manual_gate_clearance_packet.yaml",
+                "manual_gate_clearance_packet_report": tmp_path / "manual_gate_clearance_packet.md",
+            },
+        }
+
+    monkeypatch.setattr(cli, "run_ceo_operator_brief", fake_operator_brief)
+
+    status = cli.ceo_command(
+        SimpleNamespace(
+            ceo_action="operator-brief",
+            run_id="ceo_test",
+            lab_run_id=None,
+            source_root=tmp_path,
+            ceo_report_root=tmp_path / "reports" / "ceo_runs",
+            ops_report_root=tmp_path / "reports" / "lab_ops",
+            ops_runtime_root=tmp_path / "research" / "lab_loop" / "autonomous_runs",
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert status == 0
+    assert "Sidecar current decision status: manual_gate_current_decision_packet" in out
+    assert "Sidecar current decision: hold_validation_at_manual_data_gate" in out
+    assert "Sidecar current required action: import_or_curate_fresh_ohlcv_data" in out
+    assert "Sidecar current candidates: 3" in out
+    assert "Sidecar quality remediation status: manual_gate_quality_remediation_plan" in out
+    assert (
+        "Sidecar quality remediation required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar quality remediation autonomous/human/diversity/archive: 0/4/1/1" in out
+    assert "Manual gate clearance packet:" in out
+    assert "Manual gate clearance report:" in out
+    assert "Manual gate clearance status: manual_gate_clearance_blocked" in out
+    assert "Manual gate clearance can start post-data validation: False" in out
+    assert (
+        "Manual gate clearance blocked gates/count: "
+        "runtime_authority|fresh_data_preflight|visual_label_completion|post_data_playbook_execution/4"
+    ) in out
+    assert "Manual gate clearance first blocker/action: runtime_authority/clear_runtime_manual_gate" in out
+    assert "Manual gate clearance data/visual/can-execute: 80/48/0" in out
+    assert "Data gate work status: fresh_data_gate_blocked" in out
+    assert "Data gate universe: meme_universe_v1" in out
+    assert "Data gate preflight status: not_ready" in out
+    assert "Data gate safe fresh validation: False" in out
+    assert "Data gate required timeframes: 1d|12h|4h|1h" in out
+    assert "Data gate required CSVs: 80" in out
+    assert "Data gate required batches: 4" in out
+    assert "Data gate import checklist rows/pending/ready: 80/80/0" in out
+    assert "Data gate import checklist missing/stale: 0/80" in out
+    assert "Data gate handoff audit status/checks/issues: pass_data_gate_handoff_consistency/8/0" in out
+    assert "Data gate symbol matrix rows: 20" in out
+    assert "Data gate candidate unlocks: 3" in out
+    assert "Data gate CSV requirement rows: 80" in out
+    assert (
+        "Data gate next verification command: "
+        "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id ceo_test"
+    ) in out
+    assert "Data gate import plan: reports/ceo_runs/ceo_test/data_gate_import_plan.yaml" in out
+    assert "Data gate import checklist: reports/ceo_runs/ceo_test/data_gate_import_checklist.csv" in out
+    assert "Data gate import checklist report: reports/ceo_runs/ceo_test/data_gate_import_checklist.md" in out
+    assert "Data gate handoff audit: reports/ceo_runs/ceo_test/data_gate_handoff_audit.yaml" in out
+    assert "Data gate handoff audit report: reports/ceo_runs/ceo_test/data_gate_handoff_audit.md" in out
+    assert "Data gate symbol matrix: reports/ceo_runs/ceo_test/data_gate_symbol_matrix.csv" in out
+    assert "Sidecar visual-label work status: pending_required_visual_labels" in out
+    assert "Sidecar visual-label next batch: visual_label_batch_01" in out
+    assert "Sidecar visual-label next batch rows: 12" in out
+    assert "Sidecar visual-label entry sheet rows/missing cells: 12/48" in out
+    assert "Sidecar visual-label source update rows/pending/cells: 12/12/48" in out
+    assert "Sidecar visual-label completion audit rows/completed/missing/invalid: 12/0/12/0" in out
+    assert (
+        "Sidecar visual-label next batch file: "
+        "reports/ceo_runs/ceo_test/sidecar_visual_label_next_batch.csv"
+    ) in out
+    assert (
+        "Sidecar visual-label completion audit: "
+        "reports/ceo_runs/ceo_test/sidecar_visual_label_completion_audit.yaml"
+    ) in out
+    assert "Sidecar post-data playbook status: manual_data_gate_blocks_post_data_playbook" in out
+    assert (
+        "Sidecar post-data required action: "
+        "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    ) in out
+    assert "Sidecar post-data candidates: 3" in out
+    assert "Sidecar post-data visual-label status/gate: pending_required_visual_labels/False" in out
+    assert (
+        "Sidecar post-data blockers: "
+        "fresh_data_preflight_not_safe|visual_label_completion_audit_not_passed"
+    ) in out
+    assert "Sidecar post-data can-execute candidates: 0" in out
+    assert (
+        "Sidecar post-data playbook: "
+        "reports/ceo_runs/ceo_test/sidecar_post_data_validation_playbook.yaml"
+    ) in out
 
 
 def test_ceo_operator_brief_uses_final_refreshed_action_board(
@@ -12137,6 +18273,65 @@ def test_ceo_decision_quality_explains_selected_action_and_alternatives(tmp_path
     assert "Production effect: none." in report
 
 
+def test_ceo_decision_quality_uses_sidecar_candidates_when_product_delta_is_empty() -> None:
+    quality = ceo_ops.build_ceo_decision_quality(
+        ceo_run_id="ceo_test",
+        lab_run_id="ceo_test_lab",
+        company_status={"lab_status": {"stop_reason": ""}, "governance": {"open_lanes": []}, "true_blocker": False},
+        product_delta={"candidate_count": 0, "chart_facing_value_status": "no_product_delta_yet"},
+        infra_delta={"infra_delta_status": "clear"},
+        decision={
+            "decision": "import_or_curate_fresh_ohlcv_data",
+            "rationale": "Fresh data preflight found local OHLCV coverage below the safe validation threshold.",
+            "production_effect": "none",
+        },
+        action_board={
+            "status": "manual_gate_required",
+            "autonomy_mode": "wait_for_user_or_clear_approval",
+            "primary_action": {
+                "action_id": "incident:dispatch_blocked:ceo preflight gate blocked bound dispatch",
+                "command_kind": "manual_gate",
+                "command": "PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id ceo_test",
+                "can_execute_now": False,
+                "requires_manual_gate": True,
+            },
+        },
+        sidecar_evidence={
+            "status": "manual_data_gate_blocks_validation",
+            "candidate_count": 3,
+            "ready_visual_review_count": 3,
+            "fresh_data_blocked_count": 3,
+            "champion": "core_signal_v0",
+            "champion_challenger_status": "shadow_comparison_complete",
+            "manual_data_gate_active": True,
+            "safe_to_run_fresh_validation": False,
+            "next_action": "import_or_curate_fresh_ohlcv_data",
+        },
+    )
+
+    alternatives = {item["action_id"]: item for item in quality["alternatives"]}
+    champion = alternatives["run_champion_challenger"]
+    request_data = alternatives["request_fresh_data"]
+    broaden = alternatives["broaden_hypothesis_source"]
+    selected = alternatives["import_or_curate_fresh_ohlcv_data"]
+    assert champion["evidence"]["candidate_count"] == 3
+    assert champion["evidence"]["product_delta_candidate_count"] == 0
+    assert champion["evidence"]["sidecar_candidate_count"] == 3
+    assert champion["evidence"]["sidecar_fresh_data_blocked_count"] == 3
+    assert champion["evidence"]["champion"] == "core_signal_v0"
+    assert "champion/challenger comparison complete" in champion["rationale"]
+    assert request_data["score"] == 80
+    assert request_data["evidence"]["sidecar_manual_data_gate_active"] is True
+    assert broaden["evidence"]["sidecar_candidate_count"] == 3
+    assert selected["evidence"]["sidecar_next_action"] == "import_or_curate_fresh_ohlcv_data"
+    assert quality["evidence_refs"]["sidecar_evidence"] == "sidecar_evidence_brief.yaml"
+    assert quality["selected_action_is_executable_now"] is False
+    assert quality["production_effect"] == "none"
+    report = ceo_ops.render_ceo_decision_quality(quality)
+    assert "sidecar_candidate_count=3" in report
+    assert "sidecar_fresh_data_blocked_count=3" in report
+
+
 def test_ceo_decision_quality_separates_selected_route_from_manual_gate_authority(tmp_path: Path) -> None:
     options = _options(tmp_path, apply=True)
     _write_lab_artifacts(tmp_path, with_candidate=True)
@@ -12466,7 +18661,78 @@ def test_ceo_report_includes_operating_artifacts(tmp_path: Path) -> None:
     assert result["paths"]["capability_backlog_report"].exists()
     assert result["paths"]["fresh_withheld_validation_contract_report"].exists()
     assert result["paths"]["promotion_proposal_report"].exists()
+    assert result["paths"]["promotion_candidates"].exists()
     assert result["paths"]["evidence_debt_register_report"].exists()
+    assert result["paths"]["sidecar_evidence_brief_report"].exists()
+    assert result["paths"]["sidecar_evidence_candidates"].exists()
+    assert result["paths"]["sidecar_visual_review_handoff"].exists()
+    assert result["paths"]["sidecar_visual_review_coverage"].exists()
+    assert result["paths"]["sidecar_visual_review_coverage_report"].exists()
+    assert result["paths"]["sidecar_visual_label_worklist"].exists()
+    assert result["paths"]["sidecar_visual_label_worklist_report"].exists()
+    assert result["paths"]["sidecar_visual_label_review_batches"].exists()
+    assert result["paths"]["sidecar_visual_label_review_batches_report"].exists()
+    assert result["paths"]["sidecar_visual_label_progress"].exists()
+    assert result["paths"]["sidecar_visual_label_progress_report"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch_report"].exists()
+    assert result["paths"]["sidecar_visual_label_next_batch_gallery"].exists()
+    assert result["paths"]["sidecar_visual_label_rubric"].exists()
+    assert result["paths"]["sidecar_visual_label_rubric_report"].exists()
+    assert result["paths"]["sidecar_visual_label_entry_sheet"].exists()
+    assert result["paths"]["sidecar_visual_label_entry_sheet_report"].exists()
+    assert result["paths"]["sidecar_visual_label_source_update_manifest"].exists()
+    assert result["paths"]["sidecar_visual_label_source_update_manifest_report"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit_yaml"].exists()
+    assert result["paths"]["sidecar_visual_label_completion_audit_report"].exists()
+    assert result["paths"]["sidecar_champion_challenger_evidence"].exists()
+    assert result["paths"]["sidecar_champion_challenger_quality_audit"].exists()
+    assert result["paths"]["sidecar_champion_challenger_quality_audit_report"].exists()
+    assert result["paths"]["sidecar_quality_remediation_plan"].exists()
+    assert result["paths"]["sidecar_quality_remediation_plan_report"].exists()
+    assert result["paths"]["sidecar_evidence_gap_matrix"].exists()
+    assert result["paths"]["sidecar_candidate_readiness_summary"].exists()
+    assert result["paths"]["sidecar_candidate_readiness_summary_report"].exists()
+    assert result["paths"]["sidecar_validation_queue"].exists()
+    assert result["paths"]["sidecar_validation_queue_report"].exists()
+    assert result["paths"]["sidecar_champion_challenger_validation_design"].exists()
+    assert result["paths"]["sidecar_champion_challenger_validation_design_report"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix_yaml"].exists()
+    assert result["paths"]["sidecar_data_gate_unlock_matrix_report"].exists()
+    assert result["paths"]["sidecar_evidence_consistency_audit"].exists()
+    assert result["paths"]["sidecar_evidence_consistency_audit_report"].exists()
+    assert result["paths"]["sidecar_evidence_packet_index"].exists()
+    assert result["paths"]["sidecar_evidence_packet_index_report"].exists()
+    assert result["paths"]["sidecar_candidate_decision_cards"].exists()
+    assert result["paths"]["sidecar_current_decision_packet"].exists()
+    assert result["paths"]["sidecar_current_decision_packet_report"].exists()
+    assert result["paths"]["sidecar_shadow_guardrail_audit"].exists()
+    assert result["paths"]["sidecar_shadow_guardrail_audit_report"].exists()
+    assert result["paths"]["sidecar_evidence_source_manifest"].exists()
+    assert result["paths"]["sidecar_evidence_source_health"].exists()
+    assert result["paths"]["sidecar_evidence_source_health_yaml"].exists()
+    assert result["paths"]["sidecar_evidence_source_health_report"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints_yaml"].exists()
+    assert result["paths"]["sidecar_evidence_source_fingerprints_report"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger_yaml"].exists()
+    assert result["paths"]["sidecar_candidate_learning_ledger_report"].exists()
+    assert result["paths"]["sidecar_post_data_validation_playbook"].exists()
+    assert result["paths"]["sidecar_post_data_validation_playbook_report"].exists()
+    assert result["paths"]["sidecar_current_handoff"].exists()
+    assert result["paths"]["sidecar_current_handoff_report"].exists()
+    assert result["paths"]["sidecar_candidate_decision_matrix"].exists()
+    assert result["paths"]["sidecar_candidate_decision_matrix_report"].exists()
+    assert result["paths"]["sidecar_frozen_spec_review"].exists()
+    assert result["paths"]["data_gate_brief_report"].exists()
+    assert result["paths"]["data_gate_csv_requirements"].exists()
+    assert result["paths"]["data_gate_candidate_unlocks"].exists()
+    assert result["paths"]["data_gate_import_plan"].exists()
+    assert result["paths"]["data_gate_import_plan_report"].exists()
+    assert result["paths"]["data_gate_import_batches"].exists()
     report = result["paths"]["report"].read_text(encoding="utf-8")
     assert "CEO Operating Snapshot" in report
     assert "Portfolio allocator" in report
@@ -12576,7 +18842,108 @@ def test_ceo_report_includes_operating_artifacts(tmp_path: Path) -> None:
     assert "Org decision deltas" in report
     assert "Fresh/withheld contract status" in report
     assert "Promotion proposal status" in report
+    assert "Promotion candidates" in report
     assert "Evidence debt" in report
+    assert "Sidecar evidence brief" in report
+    assert "Sidecar candidates" in report
+    assert "Sidecar evidence candidate table" in report
+    assert "Sidecar visual-review handoff table" in report
+    assert "Sidecar visual-review coverage" in report
+    assert "Sidecar visual-review human-review started/pending" in report
+    assert "Sidecar visual-label worklist" in report
+    assert "Sidecar visual-label pending rows/candidates" in report
+    assert "Sidecar visual-label review batches" in report
+    assert "Sidecar visual-label review batch count/rows" in report
+    assert "Sidecar visual-label entry sheet" in report
+    assert "Sidecar visual-label entry sheet rows" in report
+    assert "Sidecar visual-label source update manifest" in report
+    assert "Sidecar visual-label source update rows/pending/cells" in report
+    assert "Sidecar visual-review top candidate" in report
+    assert "Sidecar visual-review top focus" in report
+    assert "Sidecar visual-review top gallery" in report
+    assert "Sidecar visual-review top labels" in report
+    assert "Sidecar champion/challenger evidence table" in report
+    assert "Sidecar champion/challenger quality audit" in report
+    assert "Sidecar champion/challenger quality status" in report
+    assert "Sidecar champion/challenger quality issues" in report
+    assert "Sidecar champion/challenger quality hard/advisory issues" in report
+    assert "Sidecar quality remediation plan" in report
+    assert "Sidecar quality remediation plan report" in report
+    assert "Sidecar quality remediation status" in report
+    assert "Sidecar quality remediation autonomous/human/diversity/archive" in report
+    assert "Sidecar evidence gap matrix" in report
+    assert "Sidecar candidate readiness summary" in report
+    assert "Sidecar candidate readiness summary report" in report
+    assert "Sidecar validation queue" in report
+    assert "Sidecar validation queue report" in report
+    assert "Sidecar champion/challenger validation design" in report
+    assert "Sidecar champion/challenger validation design report" in report
+    assert "Sidecar data-gate unlock matrix" in report
+    assert "Sidecar data-gate unlock matrix YAML" in report
+    assert "Sidecar data-gate unlock matrix report" in report
+    assert "Sidecar evidence consistency audit" in report
+    assert "Sidecar evidence consistency audit report" in report
+    assert "Sidecar evidence consistency audit status" in report
+    assert "Sidecar evidence consistency audit checks/issues" in report
+    assert "Sidecar evidence packet index" in report
+    assert "Sidecar evidence packet index report" in report
+    assert "Sidecar candidate decision cards" in report
+    assert "Sidecar current decision packet" in report
+    assert "Sidecar current decision packet report" in report
+    assert "Sidecar current decision packet status" in report
+    assert "Sidecar current decision packet decision" in report
+    assert "Sidecar current decision packet quality remediation status" in report
+    assert "Sidecar current decision packet quality remediation autonomous/human/diversity/archive" in report
+    assert "Sidecar shadow guardrail" in report
+    assert "Sidecar shadow guardrail audit" in report
+    assert "Sidecar evidence source manifest" in report
+    assert "Sidecar evidence source health" in report
+    assert "Sidecar evidence source health status" in report
+    assert "Sidecar evidence source health issues" in report
+    assert "Sidecar evidence source health missing required refs" in report
+    assert "Sidecar evidence source health wrong-type required refs" in report
+    assert "Sidecar evidence source fingerprints" in report
+    assert "Sidecar evidence source fingerprints status" in report
+    assert "Sidecar evidence source fingerprints issues" in report
+    assert "Sidecar evidence source fingerprints files" in report
+    assert "Sidecar evidence source fingerprints CSV row counts" in report
+    assert "Sidecar candidate learning ledger" in report
+    assert "Sidecar candidate learning ledger status" in report
+    assert "Sidecar candidate learning ledger lead/control/archive/review/blocked" in report
+    assert "Sidecar post-data validation playbook" in report
+    assert "Sidecar post-data validation playbook report" in report
+    assert "Sidecar post-data playbook status" in report
+    assert "Sidecar post-data required action" in report
+    assert "Sidecar post-data candidate count" in report
+    assert "Sidecar current handoff" in report
+    assert "Sidecar current handoff status" in report
+    assert "Sidecar current handoff required action" in report
+    assert "Sidecar candidate decision matrix" in report
+    assert "Sidecar candidate decision matrix report" in report
+    assert "Sidecar learning lead candidate" in report
+    assert "Sidecar learning control candidate" in report
+    assert "Sidecar learning archive candidate" in report
+    assert "Sidecar review-only frozen specs" in report
+    assert "Sidecar official frozen plan exists" in report
+    assert "Sidecar frozen-spec review table" in report
+    assert "Sidecar next action" in report
+    assert "Data gate brief" in report
+    assert "Data gate safe fresh validation" in report
+    assert "Data gate CSV requirements" in report
+    assert "Data gate CSV requirement table" in report
+    assert "Data gate blocked candidates" in report
+    assert "Data gate candidate unlocks" in report
+    assert "Data gate candidate unlock table" in report
+    assert "Data gate import plan" in report
+    assert "Data gate import plan report" in report
+    assert "Data gate import batches" in report
+    assert "Data gate import batch table" in report
+    assert "Data gate symbol matrix" in report
+    assert "Data gate symbol matrix rows" in report
+    assert "Data gate symbol matrix report" in report
+    assert "Data gate next verification" in report
+    assert "Historical Decision Packet" in report
+    assert "Current sidecar, data-gate, promotion-candidate, and CEO operating snapshot fields above" in report
 
 
 def test_ceo_review_flags_fake_progress_without_product_delta(tmp_path: Path) -> None:

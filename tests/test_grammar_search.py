@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from riskflow.cli import main
 from riskflow.grammar_search import (
     GRAMMAR_SEARCH_MODEL,
     RuleVariant,
+    build_grammar_review_label_sheet,
     chart_review_queue,
     detect_variant_events,
     duplicate_outcome_clusters,
     expand_rule_variants,
     family_timeframe_robustness,
     load_rule_search_grid,
+    render_grammar_review_packet,
     run_grammar_search,
     strict_baseline_referee,
     summarize_grammar_search_records,
     time_split_validation,
+    write_grammar_review_packet,
 )
+from riskflow.signal_grammar import GRAMMAR_FEATURE_COLUMNS, calculate_signal_grammar_features
 
 
 def _grid(tmp_path):
@@ -96,6 +101,84 @@ def test_detect_variant_events_returns_aligned_mask(tmp_path) -> None:
     assert mask.index.equals(frame.index)
     assert mask.dtype == bool
     assert mask.any()
+
+
+def test_signal_grammar_event_detector_returns_registered_event_mask() -> None:
+    frame = _analysis_frame()
+    variant = RuleVariant(
+        variant_id="test.signal_grammar_hot_reset",
+        family_id="signal_grammar_hot_reset",
+        direction="negative",
+        detector="signal_grammar_event",
+        params={"event_id": "grammar_hot_leader_reset_warning_v0", "timeframe": "1d"},
+    )
+
+    mask = detect_variant_events(frame, variant)
+
+    assert mask.index.equals(frame.index)
+    assert mask.dtype == bool
+    assert mask.any()
+
+
+def test_signal_grammar_event_detector_rejects_unknown_event_id() -> None:
+    frame = _analysis_frame()
+    variant = RuleVariant(
+        variant_id="test.bad_signal_grammar_event",
+        family_id="signal_grammar_event",
+        direction="negative",
+        detector="signal_grammar_event",
+        params={"event_id": "not_registered", "timeframe": "1d"},
+    )
+
+    with pytest.raises(ValueError, match="Unknown signal grammar event_id"):
+        detect_variant_events(frame, variant)
+
+
+def test_signal_grammar_event_combo_can_exclude_registered_event() -> None:
+    frame = _analysis_frame()
+    frame = frame.drop(columns=[column for column in GRAMMAR_FEATURE_COLUMNS if column in frame.columns])
+    frame = frame.join(calculate_signal_grammar_features(frame))
+    frame["grammar_hot_leader_reset_warning_event"] = False
+    frame["grammar_unstable_reset_warning_event"] = False
+    frame.loc[frame.index[10], "grammar_hot_leader_reset_warning_event"] = True
+    frame.loc[frame.index[11], "grammar_hot_leader_reset_warning_event"] = True
+    frame.loc[frame.index[11], "grammar_unstable_reset_warning_event"] = True
+    variant = RuleVariant(
+        variant_id="test.hot_reset_without_unstable",
+        family_id="signal_grammar_event_combo",
+        direction="negative",
+        detector="signal_grammar_event_combo",
+        params={
+            "event_ids": ["grammar_hot_leader_reset_warning_v0"],
+            "exclude_event_ids": ["grammar_unstable_reset_warning_v0"],
+            "timeframe": "1d",
+        },
+    )
+
+    mask = detect_variant_events(frame, variant)
+
+    assert mask.index.equals(frame.index)
+    assert mask.dtype == bool
+    assert mask.loc[frame.index[10]]
+    assert not mask.loc[frame.index[11]]
+
+
+def test_signal_grammar_event_combo_requires_known_required_event() -> None:
+    frame = _analysis_frame()
+    variant = RuleVariant(
+        variant_id="test.bad_signal_grammar_event_combo",
+        family_id="signal_grammar_event_combo",
+        direction="negative",
+        detector="signal_grammar_event_combo",
+        params={
+            "event_ids": ["grammar_hot_leader_reset_warning_v0"],
+            "exclude_event_ids": ["not_registered"],
+            "timeframe": "1d",
+        },
+    )
+
+    with pytest.raises(ValueError, match="Unknown signal grammar event_id"):
+        detect_variant_events(frame, variant)
 
 
 def test_second_generation_detectors_return_aligned_masks() -> None:
@@ -968,6 +1051,106 @@ def test_grammar_search_meta_summaries_build_review_outputs(tmp_path) -> None:
     assert "review_outcome" in queue.columns
     assert queue.loc[queue["timeframe"] == "4h", "review_outcome_column"].iloc[0] == "forward_relative_return_180"
     assert "validation_status" in validation.columns
+
+
+def test_grammar_review_label_sheet_buckets_warning_and_reset_controls(tmp_path) -> None:
+    queue = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "date": "2024-01-01",
+                "timeframe": "1d",
+                "event_cluster_id": "2024-01",
+                "family_id": "hot_reset_without_unstable_control",
+                "variant_id": "v1",
+                "direction": "negative",
+                "detector": "signal_grammar_event_combo",
+                "params": "{}",
+                "review_outcome_column": "forward_relative_return_30",
+                "review_outcome": -0.40,
+                "review_abs_outcome": 0.40,
+                "forward_return_30": -0.25,
+                "max_drawdown_30": -0.30,
+                "max_favorable_excursion_30": 0.05,
+            },
+            {
+                "symbol": "BBB",
+                "date": "2024-02-01",
+                "timeframe": "1d",
+                "event_cluster_id": "2024-02",
+                "family_id": "hot_reset_without_unstable_control",
+                "variant_id": "v1",
+                "direction": "negative",
+                "detector": "signal_grammar_event_combo",
+                "params": "{}",
+                "review_outcome_column": "forward_relative_return_30",
+                "review_outcome": 0.25,
+                "review_abs_outcome": 0.25,
+                "forward_return_30": 0.30,
+                "max_drawdown_30": -0.05,
+                "max_favorable_excursion_30": 0.35,
+            },
+            {
+                "symbol": "CCC",
+                "date": "2024-03-01",
+                "timeframe": "1d",
+                "event_cluster_id": "2024-03",
+                "family_id": "constructive_reset_without_unstable_control",
+                "variant_id": "v2",
+                "direction": "positive",
+                "detector": "signal_grammar_event_combo",
+                "params": "{}",
+                "review_outcome_column": "forward_relative_return_30",
+                "review_outcome": -0.20,
+                "review_abs_outcome": 0.20,
+                "forward_return_30": -0.10,
+                "max_drawdown_30": -0.18,
+                "max_favorable_excursion_30": 0.02,
+            },
+        ]
+    )
+
+    labels = build_grammar_review_label_sheet(queue, max_cases=10, max_cases_per_bucket=3)
+    rendered = render_grammar_review_packet(labels, title="Reset Review", source_queue="queue.csv")
+
+    assert set(labels["review_bucket"]) == {
+        "broad_reset_without_unstable_strong_avoided_downside",
+        "broad_reset_without_unstable_missed_upside_or_false_warning",
+        "constructive_reset_misclassified",
+    }
+    assert "human_label" in labels.columns
+    avoided = labels[labels["review_bucket"] == "broad_reset_without_unstable_strong_avoided_downside"].iloc[0]
+    assert "avoided_downside" in avoided["suggested_labels"]
+    assert "constructive_reset_misclassified" in rendered
+    small_labels = build_grammar_review_label_sheet(queue, max_cases=2, max_cases_per_bucket=3)
+    assert "constructive_reset_misclassified" in set(small_labels["review_bucket"])
+
+    queue_path = tmp_path / "queue.csv"
+    output_dir = tmp_path / "review"
+    queue.to_csv(queue_path, index=False)
+    paths = write_grammar_review_packet(queue_path, output_dir, title="Reset Review")
+
+    assert paths["labels_csv"].exists()
+    assert paths["packet_md"].exists()
+    assert "Reset Review" in paths["packet_md"].read_text(encoding="utf-8")
+
+    cli_output_dir = tmp_path / "review_cli"
+    assert (
+        main(
+            [
+                "grammar-review-packet",
+                "--queue-csv",
+                str(queue_path),
+                "--output-dir",
+                str(cli_output_dir),
+                "--title",
+                "Reset Review CLI",
+            ]
+        )
+        == 0
+    )
+    assert (cli_output_dir / "human_review_labels.csv").exists()
+    assert "Reset Review CLI" in (cli_output_dir / "human_review_packet.md").read_text(encoding="utf-8")
 
 
 def test_time_split_validation_can_use_stable_timeframe_cutoff() -> None:

@@ -27,9 +27,11 @@ from .research_outcomes import (
     split_half_medians,
     worst_cluster_median,
 )
+from .signal_grammar import GRAMMAR_EVENT_NAMES, detect_signal_grammar_events
 
 
 GRAMMAR_SEARCH_MODEL = "riskflow_grammar_search_v0"
+GRAMMAR_REVIEW_PACKET_MODEL = "riskflow_grammar_review_packet_v0"
 DEFAULT_GRAMMAR_SEARCH_GRID = "research/grammar/rule_search_grid.yaml"
 DEFAULT_TIMEFRAME_HORIZONS = {
     "1d": (3, 7, 14, 30),
@@ -45,6 +47,31 @@ DEFAULT_TIMEFRAME_COOLDOWNS = {
 }
 MAX_SYMBOL_EVENT_SHARE = 0.55
 MAX_CLUSTER_EVENT_SHARE = 0.60
+GRAMMAR_REVIEW_LABEL_COLUMNS = [
+    "review_bucket",
+    "symbol",
+    "date",
+    "timeframe",
+    "event_cluster_id",
+    "family_id",
+    "variant_id",
+    "direction",
+    "detector",
+    "review_outcome_column",
+    "review_outcome",
+    "review_abs_outcome",
+    "forward_return",
+    "max_drawdown",
+    "max_favorable_excursion",
+    "params",
+    "suggested_labels",
+    "human_label",
+    "visual_readability",
+    "product_role_match",
+    "false_positive_shape",
+    "promotion_blocker",
+    "notes",
+]
 
 
 @dataclass(frozen=True)
@@ -80,6 +107,22 @@ def _as_bool(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(False, index=frame.index, dtype=bool)
     return frame[column].fillna(False).astype(bool)
+
+
+def _grammar_event_ids(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item)]
+    raise ValueError(f"{field_name} must be a signal grammar event id or list of event ids.")
+
+
+def _validate_grammar_event_ids(event_ids: list[str]) -> None:
+    unknown = [event_id for event_id in event_ids if event_id not in GRAMMAR_EVENT_NAMES]
+    if unknown:
+        raise ValueError(f"Unknown signal grammar event_id for grammar-search: {unknown[0]!r}")
 
 
 def _crosses_above(series: pd.Series, threshold: float) -> pd.Series:
@@ -405,6 +448,32 @@ def detect_variant_events(frame: pd.DataFrame, variant: RuleVariant) -> pd.Serie
     params = variant.params
 
     detector = variant.detector
+    if detector == "signal_grammar_event":
+        event_id = str(params.get("event_id", ""))
+        if event_id not in GRAMMAR_EVENT_NAMES:
+            raise ValueError(f"Unknown signal grammar event_id for grammar-search: {event_id!r}")
+        return detect_signal_grammar_events(frame)[event_id].fillna(False).astype(bool)
+
+    if detector == "signal_grammar_event_combo":
+        required_event_ids = _grammar_event_ids(
+            params.get("event_ids", params.get("all_event_ids")),
+            field_name="event_ids",
+        )
+        excluded_event_ids = _grammar_event_ids(
+            params.get("exclude_event_ids", params.get("without_event_ids")),
+            field_name="exclude_event_ids",
+        )
+        if not required_event_ids:
+            raise ValueError("signal_grammar_event_combo requires at least one event_ids value.")
+        _validate_grammar_event_ids([*required_event_ids, *excluded_event_ids])
+        events = detect_signal_grammar_events(frame)
+        mask = pd.Series(True, index=frame.index, dtype=bool)
+        for event_id in required_event_ids:
+            mask &= events[event_id].fillna(False).astype(bool)
+        for event_id in excluded_event_ids:
+            mask &= ~events[event_id].fillna(False).astype(bool)
+        return mask.fillna(False).astype(bool)
+
     if detector == "pressure_acceptance":
         window = int(params.get("window", 20))
         min_time_above = float(params.get("min_time_above", 0.65))
@@ -1640,6 +1709,269 @@ def chart_review_queue(
     if not selected:
         return pd.DataFrame()
     return pd.concat(selected, ignore_index=True)
+
+
+def _row_timeframe_horizon(row: pd.Series) -> int:
+    column = str(row.get("review_outcome_column", ""))
+    if column.startswith("forward_relative_return_"):
+        try:
+            return int(column.rsplit("_", 1)[-1])
+        except ValueError:
+            pass
+    return timeframe_horizons(str(row.get("timeframe", "1d")))[-1]
+
+
+def _numeric_row_value(row: pd.Series, column: str) -> float:
+    if not column:
+        return np.nan
+    return float(pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0])
+
+
+def _grammar_review_bucket(row: pd.Series, *, boundary_abs_threshold: float = 0.05) -> str:
+    outcome = _numeric_row_value(row, "review_outcome")
+    direction = str(row.get("direction", "")).strip().lower()
+    family_id = str(row.get("family_id", "")).strip().lower()
+    if "constructive" in family_id:
+        if pd.isna(outcome):
+            return "constructive_reset_unknown_outcome"
+        if outcome < -boundary_abs_threshold:
+            return "constructive_reset_misclassified"
+        if abs(outcome) <= boundary_abs_threshold:
+            return "constructive_reset_boundary"
+        return "constructive_reset_candidate"
+    if "without_unstable" in family_id:
+        prefix = "broad_reset_without_unstable"
+    elif "unstable_overlap" in family_id or "unstable_reset" in family_id:
+        prefix = "unstable_reset_overlap"
+    else:
+        prefix = "broad_reset_warning"
+    if pd.isna(outcome):
+        return f"{prefix}_unknown_outcome"
+    if direction == "negative":
+        if outcome > boundary_abs_threshold:
+            return f"{prefix}_missed_upside_or_false_warning"
+        if abs(outcome) <= boundary_abs_threshold:
+            return f"{prefix}_boundary_warning"
+        if outcome <= -0.30:
+            return f"{prefix}_strong_avoided_downside"
+        return f"{prefix}_avoided_downside"
+    if outcome < -boundary_abs_threshold:
+        return f"{prefix}_negative_outcome"
+    if abs(outcome) <= boundary_abs_threshold:
+        return f"{prefix}_boundary"
+    return f"{prefix}_positive_outcome"
+
+
+def _suggested_grammar_review_labels(bucket: str) -> str:
+    labels = ["not_visually_reviewed"]
+    if "avoided_downside" in bucket:
+        labels.extend(["avoided_downside", "warning_candidate"])
+    if "missed_upside" in bucket or "false_warning" in bucket:
+        labels.extend(["missed_upside", "false_warning_candidate"])
+    if "boundary" in bucket:
+        labels.append("boundary_case")
+    if "constructive_reset_misclassified" in bucket:
+        labels.extend(["constructive_reset_misclassified", "promotion_blocker"])
+    if "without_unstable" in bucket:
+        labels.append("unstable_not_incremental_control")
+    if "unstable_reset_overlap" in bucket:
+        labels.append("unstable_subset_review")
+    return "|".join(dict.fromkeys(labels))
+
+
+def _grammar_review_bucket_priority(bucket: object) -> int:
+    text = str(bucket)
+    if "constructive_reset_misclassified" in text:
+        return 0
+    if "missed_upside" in text or "false_warning" in text:
+        return 1
+    if "strong_avoided_downside" in text:
+        return 2
+    if "avoided_downside" in text:
+        return 3
+    if "constructive_reset_candidate" in text:
+        return 4
+    if "boundary" in text:
+        return 5
+    if "unknown_outcome" in text:
+        return 99
+    return 10
+
+
+def build_grammar_review_label_sheet(
+    queue: pd.DataFrame,
+    *,
+    max_cases: int = 48,
+    max_cases_per_bucket: int = 8,
+) -> pd.DataFrame:
+    """Create a deterministic label sheet from grammar-search chart-review queue rows."""
+    if queue.empty:
+        return pd.DataFrame(columns=GRAMMAR_REVIEW_LABEL_COLUMNS)
+    review = queue.copy()
+    if "review_outcome_column" not in review.columns:
+        review["review_outcome_column"] = review["timeframe"].map(
+            lambda timeframe: f"forward_relative_return_{timeframe_horizons(str(timeframe))[-1]}"
+        )
+    if "review_outcome" not in review.columns:
+        review["review_outcome"] = [
+            _numeric_row_value(row, str(row.get("review_outcome_column", "")))
+            for _, row in review.iterrows()
+        ]
+    review["review_outcome"] = pd.to_numeric(review["review_outcome"], errors="coerce")
+    if "review_abs_outcome" not in review.columns:
+        review["review_abs_outcome"] = review["review_outcome"].abs()
+    review["review_abs_outcome"] = pd.to_numeric(review["review_abs_outcome"], errors="coerce")
+    review["review_bucket"] = review.apply(_grammar_review_bucket, axis=1)
+    review["_bucket_sort_abs"] = review["review_abs_outcome"].fillna(-1.0)
+    selected: list[pd.DataFrame] = []
+    for bucket, group in review.sort_values("_bucket_sort_abs", ascending=False).groupby("review_bucket", sort=True):
+        if "boundary" in str(bucket):
+            group = group.assign(_boundary_abs=group["review_outcome"].abs()).sort_values(
+                ["_boundary_abs", "symbol", "date"],
+                ascending=[True, True, True],
+            )
+        else:
+            group = group.sort_values(["_bucket_sort_abs", "symbol", "date"], ascending=[False, True, True])
+        selected.append(group.head(max_cases_per_bucket))
+    if selected:
+        review = pd.concat(selected, ignore_index=True)
+    else:
+        review = review.head(0)
+    review["_bucket_priority"] = review["review_bucket"].map(_grammar_review_bucket_priority)
+    review = review.sort_values(
+        ["_bucket_priority", "review_bucket", "review_abs_outcome"],
+        ascending=[True, True, False],
+    ).head(max_cases)
+
+    rows: list[dict[str, Any]] = []
+    for _, row in review.iterrows():
+        horizon = _row_timeframe_horizon(row)
+        rows.append(
+            {
+                "review_bucket": row.get("review_bucket", ""),
+                "symbol": row.get("symbol", ""),
+                "date": row.get("date", ""),
+                "timeframe": row.get("timeframe", ""),
+                "event_cluster_id": row.get("event_cluster_id", ""),
+                "family_id": row.get("family_id", ""),
+                "variant_id": row.get("variant_id", ""),
+                "direction": row.get("direction", ""),
+                "detector": row.get("detector", ""),
+                "review_outcome_column": row.get("review_outcome_column", ""),
+                "review_outcome": row.get("review_outcome", np.nan),
+                "review_abs_outcome": row.get("review_abs_outcome", np.nan),
+                "forward_return": row.get(f"forward_return_{horizon}", np.nan),
+                "max_drawdown": row.get(f"max_drawdown_{horizon}", np.nan),
+                "max_favorable_excursion": row.get(f"max_favorable_excursion_{horizon}", np.nan),
+                "params": row.get("params", ""),
+                "suggested_labels": _suggested_grammar_review_labels(str(row.get("review_bucket", ""))),
+                "human_label": "",
+                "visual_readability": "",
+                "product_role_match": "",
+                "false_positive_shape": "",
+                "promotion_blocker": "",
+                "notes": "",
+            }
+        )
+    return pd.DataFrame(rows, columns=GRAMMAR_REVIEW_LABEL_COLUMNS)
+
+
+def render_grammar_review_packet(
+    labels: pd.DataFrame,
+    *,
+    title: str = "Grammar Search Review Packet",
+    source_queue: str | Path | None = None,
+    label_sheet_path: str | Path | None = None,
+) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        "Purpose: chart-facing review packet for grammar-search candidates. This is for human review, not promotion.",
+        "",
+        "## Guardrail",
+        "",
+        "- Product behavior, rankings, states, alerts, and TradingView defaults remain unchanged.",
+        "- Treat labels as review evidence only; numeric discovery is not validation.",
+        "- Promotion remains blocked until visual labels, fresh/control validation, and approval gates pass.",
+        "",
+        "## Source",
+        "",
+        f"- Queue CSV: `{source_queue}`" if source_queue else "- Queue CSV: unknown",
+        f"- Label sheet: `{label_sheet_path}`" if label_sheet_path else "- Label sheet: generated label CSV",
+        "",
+        "## Suggested Label Vocabulary",
+        "",
+        "- `avoided_downside`: warning was readable before downside.",
+        "- `missed_upside`: warning would have blocked a meaningful upside move.",
+        "- `late_warning`: warning arrived after the useful risk-management moment.",
+        "- `not_visually_readable`: oscillator shape is not clear enough for product language.",
+        "- `constructive_reset_misclassified`: positive reset branch actually behaved like warning or chop.",
+        "- `unstable_not_incremental`: unstable subtype did not add a visibly separate warning from broad hot reset.",
+        "- `boundary_case`: outcome or visual read is too ambiguous for a clean label.",
+        "",
+        "## Summary",
+        "",
+        f"- Cases: {len(labels)}",
+    ]
+    if not labels.empty:
+        for bucket, count in labels["review_bucket"].value_counts().sort_index().items():
+            lines.append(f"- {bucket}: {int(count)}")
+    else:
+        lines.append("- No cases selected.")
+    lines.extend(["", "## Cases", ""])
+    for idx, row in labels.reset_index(drop=True).iterrows():
+        outcome = _numeric_row_value(row, "review_outcome")
+        forward_return = _numeric_row_value(row, "forward_return")
+        outcome_text = "nan" if pd.isna(outcome) else f"{outcome:.2%}"
+        forward_text = "nan" if pd.isna(forward_return) else f"{forward_return:.2%}"
+        lines.extend(
+            [
+                f"### {idx + 1}. {row.get('review_bucket')} - {row.get('symbol')} - {row.get('date')}",
+                "",
+                f"- Timeframe: `{row.get('timeframe')}`",
+                f"- Family: `{row.get('family_id')}`",
+                f"- Direction: `{row.get('direction')}`",
+                f"- Event cluster: `{row.get('event_cluster_id')}`",
+                f"- Terminal relative outcome: {outcome_text}",
+                f"- Absolute forward return: {forward_text}",
+                f"- Suggested labels: `{row.get('suggested_labels')}`",
+                f"- Variant: `{row.get('variant_id')}`",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_grammar_review_packet(
+    queue_csv: str | Path,
+    output_dir: str | Path,
+    *,
+    title: str = "Grammar Search Review Packet",
+    max_cases: int = 48,
+    max_cases_per_bucket: int = 8,
+) -> dict[str, Path]:
+    queue_path = Path(queue_csv)
+    review_dir = Path(output_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+    queue = pd.read_csv(queue_path)
+    labels = build_grammar_review_label_sheet(
+        queue,
+        max_cases=max_cases,
+        max_cases_per_bucket=max_cases_per_bucket,
+    )
+    labels_path = review_dir / "human_review_labels.csv"
+    packet_path = review_dir / "human_review_packet.md"
+    labels.to_csv(labels_path, index=False)
+    packet_path.write_text(
+        render_grammar_review_packet(
+            labels,
+            title=title,
+            source_queue=queue_path,
+            label_sheet_path=labels_path,
+        ),
+        encoding="utf-8",
+    )
+    return {"labels_csv": labels_path, "packet_md": packet_path}
 
 
 def _parse_record_dates(values: pd.Series) -> pd.Series:

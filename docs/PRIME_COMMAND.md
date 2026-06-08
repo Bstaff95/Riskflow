@@ -262,7 +262,7 @@ The Grammar Candidate Sprint now has lab-loop, lab-director, lab-meta,
 governed lab-ops, and a binding CEO autopilot layer. The preferred operating
 mode for strategic autonomous work is a Codex-supervised heartbeat loop: inspect
 `PYTHONPATH=src python3 -m riskflow ceo run-index --limit 25` when multiple run ids may exist,
-`PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>`,
+`PYTHONPATH=src python3 -m riskflow ceo heartbeat-status --run-id <run_id>` (prints manual-gate runtime authority, data-gate handoff fields, top sidecar visual-review action, sidecar-learning lead/control/archive/review/blocked split plus lead/control/archive candidate actions, and evidence-debt candidate/global/archive split when those artifacts exist),
 `PYTHONPATH=src python3 -m riskflow ceo status --run-id <run_id> --show-lab-status`,
 `PYTHONPATH=src python3 -m riskflow ceo trace-grade --run-id <run_id>`,
 `PYTHONPATH=src python3 -m riskflow ceo flight-dashboard --run-id <run_id>`,
@@ -290,6 +290,7 @@ command. The displayed action-board, decision-quality, and operator-brief
 fields are also forced to manual-gate state in that status view. It also prints existing blocker stack status, top blocker, operating incident count, dispatch receipt status,
 safe-to-dispatch state, trace-grade verdict/score/recommended next action/issues,
 and whether trace requires manual data import alongside lab status, plus replay status/issues,
+data-gate candidate unlock count/table path when a data-gate brief exists,
 operator-step replay status/count, eval-suite score/readiness blockers, artifact
 coherence status/issues, and the blocker stack's next repair command when one is
 known. It also prints resumption status and the default handoff command; if no
@@ -298,6 +299,9 @@ If a repair plan exists, it prints repair plan status, runnable repair count,
 diagnostic refresh count, top repair, top repair kind, and repair next command.
 When approvals are pending, it prints the top approval kind, reason, source,
 required user decision, authority, fingerprint, and record/apply commands.
+If an evidence-debt register exists, it prints open debt count,
+candidate/global debt split, archived non-promotional candidate count, next debt
+action, and report path.
 If a role queue exists, it prints role queue status,
 pending/completed/blocked counts, top pending specialist task, top blocked
 specialist task, top packet paths, blocked task closure command, and the next
@@ -306,6 +310,121 @@ If decision quality exists, it prints the selected strategic action, confidence,
 runtime authority, executable next action, can-execute flag,
 runtime-authorized strategic route behind any safe `execute-next` wrapper, and
 blocked-by reason.
+When `sidecar_evidence_brief.yaml` exists, decision-quality alternatives also
+surface warning/reset sidecar candidate counts, visual-review readiness,
+fresh-data blocked counts, champion, and champion/challenger status so sidecar
+candidates are not mistaken for absent generic product-delta candidates.
+`ceo sidecar-evidence-brief` also writes `sidecar_evidence_candidates.csv`, a
+sortable candidate table with product role, champion/challenger, metric
+summary, visual-review readiness, validation route, evidence debts, promotion
+ceiling, and production-effect guardrail.
+It also writes `sidecar_visual_review_handoff.csv`, a chart-review handoff with
+review questions, required labels, gallery and label-CSV paths, visual priority,
+champion/challenger context, metric summary, blockers, fresh-data gate status,
+and production guardrails.
+It also writes `sidecar_visual_label_worklist.csv` / `.md`, a candidate-matched
+row-level checklist of rendered chart examples still missing required human
+visual labels. This worklist separates exact-variant, family-timeframe, and
+family-context rows and remains review-only; it does not validate or promote a
+sidecar.
+It also writes `sidecar_visual_label_review_batches.csv` / `.md`, which splits
+the pending worklist rows into bounded human-review batches while preserving
+candidate priority, source row numbers, image paths, and review-only authority.
+It also writes `sidecar_visual_label_progress.csv` / `.md`, a candidate-level
+progress bridge that summarizes matched, pending, and completed label rows and
+names the next review batch before the champion/challenger quality audit claims
+visual-review readiness.
+It also writes `sidecar_visual_label_next_batch.csv` / `.md`, a focused
+worksheet for the current next review batch with image paths, source row
+numbers, blank label fields, and source-update instructions.
+It also writes `sidecar_visual_label_rubric.yaml` / `.md`, a shadow-only field
+contract for completing that batch consistently without treating visual review
+as validation.
+It also writes `sidecar_visual_label_completion_audit.csv` / `.yaml` / `.md`,
+which checks whether the current batch has all required fields populated with
+rubric-compatible values. This audit is review-quality evidence only; it does
+not validate, promote, or alter production behavior.
+Quick CEO status, heartbeat, and run-index surfaces also print the top
+visual-review candidate, focus, priority, gallery, and label CSV so the next
+chart-review action is visible without opening the raw handoff table.
+It also writes `sidecar_champion_challenger_evidence.csv`, a base-vs-challenger
+evidence matrix with champion baseline returns/hit rate, role delta, drawdown,
+MFE/MAE, sample breadth, event diversity, matched-null evidence, strict-survivor
+status, same-sample blockers, and a conservative operator evidence decision.
+It also writes `sidecar_champion_challenger_quality_audit.yaml` / `.md`, a
+quality audit for champion identity, challenger naming, core metric coverage,
+role-benefit fields, event-diversity concentration, validation status, and
+shadow production guardrails. Hard findings make the packet structurally
+unsafe; advisory findings preserve review-only weaknesses. Quick CEO status
+surfaces print compact hard/advisory summaries so the reason for a lead,
+control, or archived sidecar is visible without opening the raw audit YAML.
+It also writes `sidecar_evidence_gap_matrix.csv`, an evidence-readiness
+checklist with one row per candidate per required evidence dimension: forward
+relative return, hit rate, drawdown, MFE/MAE, missed-upside and
+avoided-downside, event diversity, lag/cooldown sensitivity, visual review,
+frozen-spec governance, fresh/control validation, and shadow production
+guardrails.
+It also writes `sidecar_candidate_readiness_summary.csv` / `.md`, a compact
+one-row-per-candidate triage table with readiness tier, primary blocker,
+ready/blocker/missing/advisory dimension counts, strongest same-sample signal,
+required next action, and shadow production guardrails.
+It also writes `sidecar_validation_queue.csv` / `.md`, a post-data
+fresh/control validation queue that orders candidates, records required tests
+and controls, and states stop conditions. It is inactive while the manual data
+gate is active and does not authorize validation or promotion.
+It also writes `sidecar_champion_challenger_validation_design.yaml` / `.md`, a
+pre-registered post-data validation design with champion/challenger definitions,
+required metrics, controls, acceptance criteria, stop conditions, visual-review
+refs, frozen-shape fields, evidence debts, and shadow authority scope. It does
+not execute validation or promote candidates.
+It also writes `sidecar_data_gate_unlock_matrix.csv` / `.yaml` / `.md`, a
+candidate-level fresh-data unlock handoff that records required timeframes,
+blocked timeframes, CSV requirement count, unlock status, validation authority,
+post-unlock action, and stop condition. It does not import data, execute
+validation, or promote candidates.
+It also writes `sidecar_evidence_consistency_audit.yaml` / `.md`, a
+packet-integrity audit that cross-checks candidate IDs across the evidence
+brief, validation design, data-gate unlock matrix, and shadow guardrail audit,
+and verifies manual-gate validation authority plus shadow production guardrails.
+It also writes `sidecar_evidence_packet_index.yaml` / `.md`, a sidecar package
+index with artifact paths, existence checks, CSV row counts, purpose, authority
+scope, and production-effect guardrails for fresh-session audit.
+It also writes `sidecar_candidate_decision_cards.md`, a human-readable
+shadow-only card per candidate with current handling, evidence decision,
+required next action, visual-review links, frozen-spec status, evidence debts,
+and production guardrails.
+It also writes `sidecar_shadow_guardrail_audit.yaml` / `.md`, which fails if a
+sidecar candidate escapes shadow-only handling, allows product language, claims
+production effect, or marks validation complete while the manual data gate is
+active.
+It also writes `sidecar_evidence_source_manifest.csv`, one row per candidate
+with metric-source, visual-review, frozen-spec, validation-plan, and
+evidence-debt refs for fresh-session traceability.
+It also writes `sidecar_evidence_source_health.csv` / `.yaml` / `.md`, a
+source-ref health audit that checks whether the cited metric CSVs,
+visual-review files, and review-only frozen-spec result paths exist locally and
+have the expected file or directory shape. It does not validate, promote, or
+alter production behavior.
+It also writes `sidecar_evidence_source_fingerprints.csv` / `.yaml` / `.md`,
+a provenance audit with SHA-256 fingerprints, file sizes, CSV row counts, and
+directory file counts for the locally resolved source refs. This lets a fresh
+session detect source drift without treating fingerprints as validation proof.
+It also writes `sidecar_candidate_learning_ledger.csv` / `.yaml` / `.md`, a
+candidate-learning handoff that classifies each sidecar as a lead post-data
+candidate, diversity control only, archive failure mode, review-only candidate,
+or quality-blocked review-only. The ledger ties the classification to quality
+audit status, source-health/fingerprint status, data-gate unlock status,
+validation authority, queue/design status, next allowed action, and shadow
+production guardrails. It is learning and handoff evidence only, not validation
+or promotion authority.
+Quick CEO status, heartbeat, run-index, and final reports also surface the
+current lead, diversity-control, and archive candidate IDs plus their next
+required or allowed actions from this ledger.
+If validation-referee specialist results include review-only frozen shapes, it
+also writes `sidecar_frozen_spec_review.csv` with entry lag, cooldown, outcome
+column, sample breadth, no-tuning controls, and required metrics. This is not
+the governed `frozen_candidate_validation_plan.yaml` and does not clear frozen
+validation debt.
 Do this only if there is no stop request, true blocker, promotion gate,
 unresolved self-audit intervention, failed guardrail audit, or failed preflight
 gate, unless the sole blocker is a trace-only failure routed to an explicit
@@ -347,6 +466,7 @@ Latest CEO run checkpoint as of 2026-06-07:
 - `ceo fresh-control-validation` is now a supported planner for that next action; it writes `fresh_control_validation_plan.yaml` and `.md` without promoting anything.
 - Champion/challenger now also writes `champion_challenger_visual_review_queue.yaml` / `.md` with candidate-level review questions and evidence paths for human or agent chart review.
 - `ceo fresh-data-preflight` checks local OHLCV coverage/freshness before validation and writes `fresh_data_preflight.yaml` / `.md`; ready assets include CSV hashes that snapshot authority carries into executor lineage checks.
+- `ceo data-gate-brief` writes `data_gate_brief.yaml` / `.md` plus `data_gate_csv_requirements.csv` and `data_gate_candidate_unlocks.csv` as a diagnostic handoff for manual data gates. It summarizes required timeframes, expected CSV paths/import-or-refresh actions, blocked sidecar candidates, candidate-level unlock status/validation authority, sidecar learning lead/control/archive/review/blocked counts, fresh-data role blockers, and the next preflight command; it does not import data, run validation, clear the manual gate, or authorize product language.
 - `ceo frozen-candidate-validation` converts a safe preflight plus the fresh/control plan into frozen validation specs in `frozen_candidate_validation_plan.yaml` / `.md`; it keeps candidates in shadow mode.
 - `ceo frozen-validation-executor` replays frozen specs against existing source artifacts and writes `frozen_validation_execution_result.yaml` / `.md` plus `frozen_validation_rerun_grid.yaml` when adapters are ready; this is source replay only, not fresh validation or product proof.
 - `ceo frozen-validation-rerun` runs that frozen adapter grid through grammar-search on local data and writes `frozen_validation_rerun_result.yaml` / `.md` plus CSV artifacts under `frozen_validation_rerun/`; it is still non-promotional and should route next to fresh/withheld snapshot rules and pass/fail thresholds.
@@ -356,7 +476,7 @@ Latest CEO run checkpoint as of 2026-06-07:
 - `ceo fresh-withheld-validation-executor` writes `fresh_withheld_validation_execution_result.yaml` / `.md`, refuses to run without valid snapshot authority, blocks if contract/manifest/grid/active-CSV/split-manifest fingerprints drift, and runs only the frozen grammar-search grid in shadow mode when the manifest is valid. Completed execution is not a passing validation result unless the frozen contract thresholds pass semantically: matched-null status or p-value must pass, directional forward relative return must clear the minimum, and required lag/cooldown controls need explicit pass statuses.
 - Direct validation/evidence/authority commands, including `ceo run-block`, frozen/fresh-withheld validation commands, and snapshot authority commands, are preflight-guarded. A stop request, true blocker, pending approval, failed guardrail, replay/eval gap, or unresolved hard memory delta should block them before mutation.
 - `ceo approval-queue` writes `approval_queue.yaml` / `.md` plus `approval_status.yaml` for red-authority decisions such as promotion approval or stopped-run resume/clear-stop. It surfaces the top pending approval id plus exact `approval-record` and `approval-apply` command templates. The markdown report expands each approval item with reason, source, required user decision, approval authority, fingerprint, forbidden auto actions, record/apply commands, and closure steps so a fresh session can brief the user without opening YAML. `ceo approval-record --approval-id <id> --decision <approved|rejected> --user-confirmed` only accepts a currently pending approval id, appends `approval_decision_ledger.jsonl`, and records user authority plus approval kind/source/fingerprint without applying product changes. `ceo approval-apply` rebuilds the approval queue and requires the recorded fingerprint to match the current approval item before it can close a promotion approval or clear stop files.
-- `ceo executive-kpis` writes `executive_kpis.yaml` / `.md` as a compact operating scoreboard for approvals, evidence debt, candidates, capability backlog, trace health, validation gate, top blocker, operating incidents, repair-plan status, top repair, top repair kind, repair next command, role-queue readiness, top blocked specialist finding, and product-language safety. Failed, warning, or manual-data-required trace health is an attention condition; if approvals, repairs, and trace health are clear but roles are pending or blocked, the KPI next action follows the role queue's next closure/evidence action. When the scoreboard is clear, it defers to `defer_to_runtime_authority_surface` instead of granting dispatch authority.
+- `ceo executive-kpis` writes `executive_kpis.yaml` / `.md` as a compact operating scoreboard for approvals, evidence debt, candidates, sidecar candidate-learning lead/control/archive/review/blocked counts, capability backlog, trace health, validation gate, top blocker, operating incidents, repair-plan status, top repair, top repair kind, repair next command, role-queue readiness, top blocked specialist finding, and product-language safety. Failed, warning, or manual-data-required trace health is an attention condition; if approvals, repairs, and trace health are clear but roles are pending or blocked, the KPI next action follows the role queue's next closure/evidence action. When the scoreboard is clear, it defers to `defer_to_runtime_authority_surface` instead of granting dispatch authority.
 - `ceo heartbeat-plan` writes `heartbeat_plan.yaml` / `.md`; `ceo heartbeat-tick --apply` performs one persisted heartbeat wake, refuses red gates, delegates trace-only failures to `execute-next` for bounded repair or a blocked preflight result, runs at most one bound action, and appends `heartbeat_journal.jsonl`; `ceo heartbeat-journal` renders that journal.
 - `ceo role-queue` writes `role_registry.yaml`, `role_task_queue.yaml` / `.md`, and `role_orchestration_status.yaml` by routing approvals, evidence debts, and capability gaps to specialist CEO roles. It records pending manual and autonomous counts, completed/blocked counts, the top pending task/role/owner command, expected top packet path, result-resolution mode, closure command, top autonomous pending task/packet/result command, top blocked task/role/packet/validation status/closure command/review status/result path/finding/next action, role-dispatch command, and next role-result command template; pending, blocked, or provenance-drifted tasks prevent the eval suite from claiming role-closure readiness. When no role work remains, the queue defers to `defer_to_runtime_authority_surface` rather than saying dispatch is allowed. Accepted `--status blocked` specialist results remain blocked work, but the queue now exposes the accepted finding and recommended evidence action instead of implying that another completion artifact is the next step. `ceo role-dispatch` writes `role_dispatch.yaml` / `.md` plus review-only markdown packets under `role_dispatch_packets/` with exact questions, source refs, authority limits, expected specialist-result schema, and direct top-packet fields. Approval/manual-gate tasks use `result_resolution_mode: manual_gate_blocked_record`, `approval_authority: user_only`, the approval-record command as their closure command, and a separate `--status blocked` role-result command with no specialist result artifact; they cannot be completed by a specialist YAML artifact. Evidence/capability tasks use `result_resolution_mode: specialist_result_required`. `ceo role-result --task-id <id> --status complete|blocked` validates the specialist result first, writes `role_result_validation.yaml`, and appends `role_task_ledger.jsonl` only for valid results. Completed non-manual tasks require a structured `riskflow_ceo_specialist_result_v0` YAML artifact with matching task/role ids, evidence refs, finding, next action, `product_language_allowed: false`, `production_effect: none`, and `promotion_authority: none`; accepted completions also record the resolved artifact path and SHA-256, and rebuilt role queues block closure with `validation_status: provenance_drift` if the artifact later disappears or changes hash. Promotion gates require completed validation-referee plus product-translator or risk-officer tasks to point at structured passing YAML review artifacts with explicit passing/approved review status or decision; a completed ledger row or task-level `status: complete` alone is not enough.
 - `ceo org-progress-score` writes `org_progress_score.yaml` / `.md` as a diagnostic for whether the specialist/agent layer changed decisions or merely created activity. It tracks pending, blocked, completed, accepted, merged, and unmerged role work plus decision-delta counts and fake-progress flags. It is `org_progress_diagnostic_only` with `dispatch_authority: not_granted_by_org_progress_score`.
@@ -382,12 +502,12 @@ Latest CEO run checkpoint as of 2026-06-07:
 - `ceo action-board` writes `action_board.yaml` / `.md` as the CEO operator cockpit. It refreshes resumption, repair-plan, dispatch receipt, and executive-KPI artifacts, then separates the primary action from manual gates, runnable repairs, diagnostic refreshes, implementation repairs, and blocked actions. When any manual gate exists, otherwise-runnable actions are demoted out of `runnable_repairs` into blocked actions with `blocked_by_runtime_authority: manual_gate_required`, so queue scanners cannot treat lower-priority work as safe. It is diagnostic-only and should be the first place a fresh session looks when it needs one next-action surface.
 - `ceo operator-step --apply` writes `operator_step.yaml` / `.md` as one audited CEO transaction. It refreshes the action board, executes exactly one internal bounded `execute-next` dispatch only when the board marks that dispatch safe, refreshes the board again, snapshots the before/after action boards under `operator_step_boards/`, appends `operator_step_ledger.jsonl`, and records board hashes plus the executed action's `meaningful_progress` flag. `ceo replay` validates those operator-step snapshot paths/hashes. Manual-gate, capability-gap-without-progress, and no-progress results get distinct statuses instead of being counted as useful execution. It refuses manual gates, diagnostic refreshes, implementation repairs, unsupported command kinds, and arbitrary shell commands from YAML.
 - `ceo operator-brief` writes `operator_brief.yaml` / `.md` as the plain-English CEO handoff card: current situation, trace health, primary action, effective runtime action, runtime blocked reason, advisory selected route, recommended next command, approval work status, user-confirmed approval record/apply commands, specialist work status, top specialist packet, top result-resolution mode, top closure command, top blocked specialist packet/validation/closure command/review status/result path/finding/next action, next role-result command, why, refused actions, and evidence refs.
-- `ceo artifact-coherence` writes `artifact_coherence.yaml` / `.md` and checks whether trust artifacts are from the same run/lab ids, fresh relative to the latest binding action, semantically aligned with that action's contract, backed by an immutable dispatch receipt snapshot path/hash, and still matching authority trust-artifact fingerprints recorded in that receipt snapshot. It also checks semantic agreement between action-board, decision-quality, and operator-brief; mismatches are advisory handoff problems, not direct dispatch authority. A live `stop.request` plus stale safe handoff artifacts is recorded as advisory `live_stop_runtime_authority_mismatch`. Mutable diagnostic drift from trace/replay/eval/guardrail or approval queue/status refreshes is visible but not hard-blocking by itself; missing or stale handoff diagnostics such as approval_queue, approval_status, role_task_queue, role_dispatch, role_result_validation, repair-apply, action-board, decision-quality, and operator-brief are advisory rather than direct dispatch blockers; legacy actions recorded before dispatch receipts or transition policy evidence can be `pass_with_advisory_issues` with `hard_issue_count: 0`; `memory_delta` is fingerprinted when present but not required for receipt coverage.
+- `ceo artifact-coherence` writes `artifact_coherence.yaml` / `.md` and checks whether trust artifacts are from the same run/lab ids, fresh relative to the latest binding action, semantically aligned with that action's contract, backed by an immutable dispatch receipt snapshot path/hash, and still matching authority trust-artifact fingerprints recorded in that receipt snapshot. It also checks semantic agreement between action-board, decision-quality, and operator-brief; mismatches are advisory handoff problems, not direct dispatch authority. A live `stop.request` plus stale safe handoff artifacts is recorded as advisory `live_stop_runtime_authority_mismatch`. Mutable diagnostic drift from trace/replay/eval/guardrail or approval queue/status refreshes is visible but not hard-blocking by itself; missing or stale handoff diagnostics such as approval_queue, approval_status, role_task_queue, role_dispatch, role_result_validation, repair-apply, action-board, decision-quality, and operator-brief are advisory rather than direct dispatch blockers; when the current repair plan is manual-gated or has zero runnable repairs, missing `repair_apply.yaml` is reported as `not_required_by_current_repair_plan`; legacy actions recorded before dispatch receipts or transition policy evidence can be `pass_with_advisory_issues` with `hard_issue_count: 0`; `memory_delta` is fingerprinted when present but not required for receipt coverage.
 - `ceo resumption-brief` writes `resumption_brief.yaml` / `.md` as the fresh-session cockpit handoff: stopped, blocked, diagnostic-only, or safe for one bound action, with the exact next command. It echoes preflight trace source status: verdict, score, recommended next action, issues, and manual-data flag.
-- `ceo run-index` writes `run_index.yaml` / `.md` as a CEO fleet board across recent runs: stopped, blocked, diagnostic, actionable, or missing resumption brief, with dispatch status, trace-grade verdict/score/recommended next action/manual-data flag/issues, replay status/issues, operator-step replay status/count, eval-suite score/readiness blockers, artifact-coherence status/issue count/top issue/top issue severity/top issue types, top blocker, incident count, repair-plan status, top repair, repair-apply status/closure, effective operator status/manual-gate-active state, operator-brief status/summary, decision-quality effective runtime action/runtime-blocked state, selected advisory route, runtime authority, executable action/can-execute/blocked-by fields, approval status/top approval kind/reason/source/authority/fingerprint/record-apply commands, role-result-validation status, role status/top role task, role completed/blocked counts, top blocked role task/closure/review status/result/finding/next action, resumption next command, and repair next command for each. It downgrades cached safe/actionable states when approval, dispatch, replay, eval, failed or manual-data-required trace grade, hard artifact-coherence, action-board, operator-brief, or decision-quality runtime authority disagrees. Live stop requests also override stale safe row fields: dispatch is shown blocked, operator/decision authority is manual-gated, and next command routes to `ceo approval-queue`.
+- `ceo run-index` writes `run_index.yaml` / `.md` as a CEO fleet board across recent runs: stopped, blocked, diagnostic, actionable, or missing resumption brief, with dispatch status, trace-grade verdict/score/recommended next action/manual-data flag/issues, replay status/issues, operator-step replay status/count, eval-suite score/readiness blockers, artifact-coherence status/issue count/top issue/top issue severity/top issue types, top blocker, incident count, repair-plan status, top repair, repair-apply status/closure, effective operator status/manual-gate-active state, operator-brief status/summary, decision-quality effective runtime action/runtime-blocked state, selected advisory route, runtime authority, executable action/can-execute/blocked-by fields, sidecar candidate-learning ledger status plus lead/control/archive/review/blocked counts, evidence-debt count plus candidate/global/archive split, approval status/top approval kind/reason/source/authority/fingerprint/record-apply commands, role-result-validation status, role status/top role task, role completed/blocked counts, top blocked role task/closure/review status/result/finding/next action, resumption next command, and repair next command for each. It downgrades cached safe/actionable states when approval, dispatch, replay, eval, failed or manual-data-required trace grade, hard artifact-coherence, action-board, operator-brief, or decision-quality runtime authority disagrees. Live stop requests also override stale safe row fields: dispatch is shown blocked, operator/decision authority is manual-gated, and next command routes to `ceo approval-queue`.
 - `ceo capability-backlog` writes `capability_backlog.yaml` / `.md` as a standalone research-infra backlog from capability gaps, trace gaps, visual-source gaps, data gates, and frozen-executor gaps. When empty, its next action is `defer_to_runtime_authority_surface`, not implicit permission to continue dispatching.
 - `ceo promotion-proposal` writes `promotion_proposal.yaml` / `.md` for user review only; it blocks when fresh/frozen validation or visual evidence is missing and never applies product changes.
-- `ceo evidence-debt-register` writes `evidence_debt_register.yaml` / `.md` as a per-candidate queue of missing product evidence, owner commands, and promotion blockers; it never validates or promotes candidates.
+- `ceo evidence-debt-register` writes `evidence_debt_register.yaml` / `.md` as a per-candidate queue of missing product evidence, owner commands, and promotion blockers; it never validates or promotes candidates. It separates the strategic evidence-debt action from the current runtime handoff, so a frozen-validation debt can still route the live handoff to `import_or_curate_fresh_ohlcv_data` while the manual data gate is active. Candidates classified as `archive_failure_mode` in the sidecar candidate-learning ledger stay visible as archived non-promotional learning instead of active fresh-data or validation debts.
 - `ceo report` now includes links/status for trace grade, flight dashboard, operating dashboard, portfolio allocator, mission score, strategy capital dashboard, decision quality, replay, eval suite, guardrail audit, preflight gate, dispatch receipt, blocker stack, operating incident register, repair plan, action board, operator brief, artifact coherence, resumption brief, approval queue, executive KPIs, role dispatch, capability backlog, promotion proposal, and evidence-debt register in addition to the decision packet. Its operating snapshot includes trace verdict, score, recommended next action, manual-data flag, issues, flight/portfolio/mission/strategy authority scopes, top approval kind/reason/source/authority/fingerprint, and the top blocked role review status/result path/next action/finding. It reuses freshly generated trust artifacts inside one refresh pass where possible; this is a speed optimization only, not weaker authority.
 - `obsidian-kg audit` writes `research/knowledge_graph/obsidian_kg_audit.yaml` / `.md` as a memory-quality cleanup queue; current vault audits may show older notes that predate the stricter action-metadata standard.
 - New `ceo execute-next` actions write `action_contract.yaml` before acting and `action_outcome_card.yaml` after the binding result; the outcome card records next actions, provenance, failure-avoidance status, and memory-delta requirements.

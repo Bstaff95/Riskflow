@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -31,6 +32,28 @@ CEO_PRODUCT_DELTA_MODEL = "riskflow_ceo_product_delta_scoreboard_v0"
 CEO_CHAMPION_CHALLENGER_ACTION_PLAN_MODEL = "riskflow_ceo_champion_challenger_action_plan_v0"
 CEO_CHAMPION_CHALLENGER_RESULTS_MODEL = "riskflow_ceo_champion_challenger_results_v0"
 CEO_VISUAL_REVIEW_QUEUE_MODEL = "riskflow_ceo_visual_review_queue_v0"
+CEO_SIDECAR_EVIDENCE_BRIEF_MODEL = "riskflow_ceo_sidecar_evidence_brief_v0"
+CEO_SIDECAR_VISUAL_REVIEW_COVERAGE_MODEL = "riskflow_ceo_sidecar_visual_review_coverage_v0"
+CEO_SIDECAR_VISUAL_LABEL_WORKLIST_MODEL = "riskflow_ceo_sidecar_visual_label_worklist_v0"
+CEO_SIDECAR_VISUAL_LABEL_REVIEW_BATCHES_MODEL = "riskflow_ceo_sidecar_visual_label_review_batches_v0"
+CEO_SIDECAR_VISUAL_LABEL_PROGRESS_MODEL = "riskflow_ceo_sidecar_visual_label_progress_v0"
+CEO_SIDECAR_VISUAL_LABEL_NEXT_BATCH_MODEL = "riskflow_ceo_sidecar_visual_label_next_batch_v0"
+CEO_SIDECAR_VISUAL_LABEL_RUBRIC_MODEL = "riskflow_ceo_sidecar_visual_label_rubric_v0"
+CEO_SIDECAR_VISUAL_LABEL_ENTRY_SHEET_MODEL = "riskflow_ceo_sidecar_visual_label_entry_sheet_v0"
+CEO_SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_MODEL = (
+    "riskflow_ceo_sidecar_visual_label_source_update_manifest_v0"
+)
+CEO_SIDECAR_VISUAL_LABEL_SOURCE_PATCH_PLAN_MODEL = "riskflow_ceo_sidecar_visual_label_source_patch_plan_v0"
+CEO_SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_MODEL = "riskflow_ceo_sidecar_visual_label_completion_audit_v0"
+CEO_SIDECAR_VISUAL_LABEL_DECISION_CONTEXT_MODEL = "riskflow_ceo_sidecar_visual_label_decision_context_v0"
+CEO_SIDECAR_POST_DATA_PLAYBOOK_MODEL = "riskflow_ceo_sidecar_post_data_validation_playbook_v0"
+CEO_SIDECAR_CURRENT_HANDOFF_MODEL = "riskflow_ceo_sidecar_current_handoff_v0"
+CEO_SIDECAR_CURRENT_DECISION_PACKET_MODEL = "riskflow_ceo_sidecar_current_decision_packet_v0"
+CEO_SIDECAR_QUALITY_REMEDIATION_PLAN_MODEL = "riskflow_ceo_sidecar_quality_remediation_plan_v0"
+CEO_DATA_GATE_BRIEF_MODEL = "riskflow_ceo_data_gate_brief_v0"
+CEO_DATA_GATE_IMPORT_PLAN_MODEL = "riskflow_ceo_data_gate_import_plan_v0"
+CEO_DATA_GATE_IMPORT_CHECKLIST_MODEL = "riskflow_ceo_data_gate_import_checklist_v0"
+CEO_DATA_GATE_HANDOFF_AUDIT_MODEL = "riskflow_ceo_data_gate_handoff_audit_v0"
 CEO_FRESH_CONTROL_VALIDATION_PLAN_MODEL = "riskflow_ceo_fresh_control_validation_plan_v0"
 CEO_ACTION_CONTRACT_MODEL = "riskflow_ceo_action_contract_v0"
 CEO_DISPATCH_RECEIPT_MODEL = "riskflow_ceo_dispatch_receipt_v0"
@@ -86,6 +109,7 @@ CEO_REPAIR_APPLY_MODEL = "riskflow_ceo_repair_apply_v0"
 CEO_ACTION_BOARD_MODEL = "riskflow_ceo_action_board_v0"
 CEO_OPERATOR_STEP_MODEL = "riskflow_ceo_operator_step_v0"
 CEO_OPERATOR_BRIEF_MODEL = "riskflow_ceo_operator_brief_v0"
+CEO_MANUAL_GATE_CLEARANCE_PACKET_MODEL = "riskflow_ceo_manual_gate_clearance_packet_v0"
 CEO_DECISION_QUALITY_MODEL = "riskflow_ceo_decision_quality_v0"
 CEO_ORG_PROGRESS_SCORE_MODEL = "riskflow_ceo_org_progress_score_v0"
 CEO_EVAL_FIXTURES_MODEL = "riskflow_ceo_eval_fixtures_v0"
@@ -537,6 +561,946 @@ def build_heartbeat_status(
     }
 
 
+def _heartbeat_status_with_runtime_authority(
+    payload: dict[str, Any],
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    action_board = _load_yaml_if_exists(root / "action_board.yaml")
+    operator_brief = _load_yaml_if_exists(root / "operator_brief.yaml")
+    decision_quality = _load_yaml_if_exists(root / "decision_quality.yaml")
+    data_gate_brief = _load_yaml_if_exists(root / "data_gate_brief.yaml")
+    data_gate_import_checklist_path = root / "data_gate_import_checklist.csv"
+    data_gate_import_checklist_summary = _data_gate_import_checklist_csv_summary(
+        data_gate_import_checklist_path
+    )
+    data_gate_handoff_audit = _load_yaml_if_exists(root / "data_gate_handoff_audit.yaml")
+    if not action_board and not operator_brief and not decision_quality:
+        return payload
+
+    effective_operator = _effective_operator_status(
+        action_board=action_board,
+        operator_brief=operator_brief,
+        decision_quality=decision_quality,
+    )
+    if effective_operator.get("manual_gate_active") is not True:
+        return payload
+
+    runtime_block_reason = str(effective_operator.get("runtime_block_reason") or "manual_gate_required")
+    updated = dict(payload)
+    runtime_fields: dict[str, Any] = {
+        "continue_recommended": False,
+        "stop_recommended": True,
+        "manual_gate_active": True,
+        "runtime_authority_status": "manual_gate_required",
+        "runtime_blocked": True,
+        "runtime_block_reason": runtime_block_reason,
+        "next_recommended_action": (
+            "Manual gate active. Resolve the manual gate before continuing autonomous CEO action. "
+            f"Runtime block: {runtime_block_reason}."
+        ),
+    }
+    if data_gate_brief:
+        runtime_fields.update(
+            {
+                "data_gate_status": data_gate_brief.get("status", ""),
+                "data_gate_preflight_status": data_gate_brief.get("preflight_status", ""),
+                "data_gate_safe_to_run_fresh_validation": data_gate_brief.get("safe_to_run_fresh_validation", ""),
+                "data_gate_csv_requirement_count": data_gate_brief.get("csv_requirement_count", ""),
+                "data_gate_candidate_unlock_count": data_gate_brief.get("candidate_unlock_count", ""),
+                "data_gate_required_timeframes": data_gate_brief.get("required_timeframes", []),
+                "data_gate_next_action": data_gate_brief.get("next_action", ""),
+                "data_gate_brief_report": str(root / "data_gate_brief.md") if (root / "data_gate_brief.md").exists() else "",
+                "data_gate_candidate_unlocks": (
+                    str(root / "data_gate_candidate_unlocks.csv")
+                    if (root / "data_gate_candidate_unlocks.csv").exists()
+                    else ""
+                ),
+                "data_gate_import_plan": (
+                    str(root / "data_gate_import_plan.yaml")
+                    if (root / "data_gate_import_plan.yaml").exists()
+                    else ""
+                ),
+                "data_gate_import_plan_report": (
+                    str(root / "data_gate_import_plan.md")
+                    if (root / "data_gate_import_plan.md").exists()
+                    else ""
+                ),
+                "data_gate_import_batches": (
+                    str(root / "data_gate_import_batches.csv")
+                    if (root / "data_gate_import_batches.csv").exists()
+                    else ""
+                ),
+                "data_gate_import_checklist": (
+                    str(data_gate_import_checklist_path)
+                    if data_gate_import_checklist_summary
+                    else ""
+                ),
+                "data_gate_import_checklist_yaml": (
+                    str(root / "data_gate_import_checklist.yaml")
+                    if data_gate_import_checklist_summary
+                    and (root / "data_gate_import_checklist.yaml").exists()
+                    else ""
+                ),
+                "data_gate_import_checklist_report": (
+                    str(root / "data_gate_import_checklist.md")
+                    if data_gate_import_checklist_summary
+                    and (root / "data_gate_import_checklist.md").exists()
+                    else ""
+                ),
+                "data_gate_import_checklist_row_count": (
+                    data_gate_import_checklist_summary.get("row_count", "")
+                ),
+                "data_gate_import_checklist_pending_imports": (
+                    data_gate_import_checklist_summary.get("pending_import_count", "")
+                ),
+                "data_gate_import_checklist_complete_ready": (
+                    data_gate_import_checklist_summary.get("complete_ready_count", "")
+                ),
+                "data_gate_import_checklist_missing_count": (
+                    data_gate_import_checklist_summary.get("missing_count", "")
+                ),
+                "data_gate_import_checklist_stale_count": (
+                    data_gate_import_checklist_summary.get("stale_count", "")
+                ),
+                "data_gate_handoff_audit": (
+                    str(root / "data_gate_handoff_audit.yaml")
+                    if data_gate_handoff_audit
+                    else ""
+                ),
+                "data_gate_handoff_audit_report": (
+                    str(root / "data_gate_handoff_audit.md")
+                    if data_gate_handoff_audit
+                    and (root / "data_gate_handoff_audit.md").exists()
+                    else ""
+                ),
+                "data_gate_handoff_audit_status": data_gate_handoff_audit.get("status", ""),
+                "data_gate_handoff_audit_check_count": data_gate_handoff_audit.get("check_count", ""),
+                "data_gate_handoff_audit_issue_count": data_gate_handoff_audit.get("issue_count", ""),
+                "data_gate_symbol_matrix": (
+                    str(root / "data_gate_symbol_matrix.csv")
+                    if (root / "data_gate_symbol_matrix.csv").exists()
+                    else ""
+                ),
+                "data_gate_symbol_matrix_report": (
+                    str(root / "data_gate_symbol_matrix.md")
+                    if (root / "data_gate_symbol_matrix.md").exists()
+                    else ""
+                ),
+                "data_gate_symbol_matrix_row_count": (
+                    _csv_data_row_count(root / "data_gate_symbol_matrix.csv")
+                    if (root / "data_gate_symbol_matrix.csv").exists()
+                    else ""
+                ),
+            }
+        )
+    updated.update(runtime_fields)
+    return updated
+
+
+def _sidecar_visual_review_top_action(sidecar_evidence_brief: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        candidate
+        for candidate in sidecar_evidence_brief.get("candidates", []) or []
+        if isinstance(candidate, dict)
+    ]
+    if not candidates:
+        return {}
+    ready = [
+        candidate
+        for candidate in candidates
+        if str((candidate.get("visual_review", {}) or {}).get("status", "")) == "ready_for_visual_review"
+    ]
+    top = sorted(ready or candidates, key=_sidecar_visual_priority, reverse=True)[0]
+    visual = top.get("visual_review", {}) or {}
+    metric = top.get("metric_summary", {}) or {}
+
+    def string_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item)]
+        if value in ("", None):
+            return []
+        return [str(value)]
+
+    questions = string_list(visual.get("review_questions", []) or [])
+    labels = string_list(visual.get("required_labels", []) or [])
+    return {
+        "sidecar_visual_review_top_candidate": top.get("belief_id", ""),
+        "sidecar_visual_review_top_product_role": top.get("product_role", ""),
+        "sidecar_visual_review_top_challenger": top.get("challenger", ""),
+        "sidecar_visual_review_top_status": visual.get("status", ""),
+        "sidecar_visual_review_top_focus": visual.get("focus", ""),
+        "sidecar_visual_review_top_priority": visual.get("priority", ""),
+        "sidecar_visual_review_top_question": questions[0] if questions else "",
+        "sidecar_visual_review_top_questions": questions,
+        "sidecar_visual_review_top_required_labels": labels,
+        "sidecar_visual_review_top_gallery": visual.get("gallery", ""),
+        "sidecar_visual_review_top_labels_with_images": visual.get("labels_with_images", ""),
+        "sidecar_visual_review_top_timeframe": metric.get("timeframe", ""),
+        "sidecar_visual_review_top_classification": metric.get("classification", ""),
+        "sidecar_visual_review_top_event_diversity": metric.get("event_diversity", ""),
+        "sidecar_visual_review_top_role_delta": metric.get("role_delta_vs_champion_baseline", ""),
+    }
+
+
+def _sidecar_learning_action_summary(sidecar_learning_ledger: dict[str, Any]) -> dict[str, Any]:
+    rows = [
+        row
+        for row in (
+            sidecar_learning_ledger.get("candidates", [])
+            or sidecar_learning_ledger.get("rows", [])
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        return {}
+    by_classification: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        classification = str(row.get("handling_classification", ""))
+        if classification and classification not in by_classification:
+            by_classification[classification] = row
+
+    def add(prefix: str, row: dict[str, Any]) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            f"sidecar_learning_{prefix}_candidate": row.get("belief_id", ""),
+            f"sidecar_learning_{prefix}_product_role": row.get("product_role", ""),
+            f"sidecar_learning_{prefix}_challenger": row.get("challenger", ""),
+            f"sidecar_learning_{prefix}_classification": row.get("handling_classification", ""),
+            f"sidecar_learning_{prefix}_reason": row.get("handling_reason", ""),
+            f"sidecar_learning_{prefix}_primary_blocker": row.get("primary_blocker", ""),
+            f"sidecar_learning_{prefix}_quality_status": row.get("quality_status", ""),
+            f"sidecar_learning_{prefix}_validation_authority": row.get("validation_authority", ""),
+            f"sidecar_learning_{prefix}_next_allowed_action": row.get("next_allowed_action", ""),
+            f"sidecar_learning_{prefix}_next_required_action": row.get("next_required_action", ""),
+        }
+
+    summary: dict[str, Any] = {}
+    summary.update(add("lead", by_classification.get("lead_post_data_candidate", {})))
+    summary.update(add("control", by_classification.get("diversity_control_only", {})))
+    summary.update(add("archive", by_classification.get("archive_failure_mode", {})))
+    summary.update(add("blocked", by_classification.get("quality_blocked_review_only", {})))
+    return summary
+
+
+def _sidecar_post_data_can_execute_count(playbook: dict[str, Any]) -> int:
+    return sum(1 for candidate in playbook.get("candidates", []) or [] if candidate.get("can_execute_now") is True)
+
+
+def _sidecar_post_data_payload(playbook: dict[str, Any], *, root: Path, key_prefix: str) -> dict[str, Any]:
+    if not playbook:
+        return {}
+    return {
+        f"{key_prefix}_status": playbook.get("status", ""),
+        f"{key_prefix}_current_required_action": playbook.get("current_required_action", ""),
+        f"{key_prefix}_candidate_count": playbook.get("candidate_count", ""),
+        f"{key_prefix}_visual_label_completion_status": playbook.get("visual_label_completion_status", ""),
+        f"{key_prefix}_visual_label_gate_passed": playbook.get("visual_label_gate_passed", ""),
+        f"{key_prefix}_pre_validation_blockers": _csv_list(playbook.get("pre_validation_blockers", []) or []),
+        f"{key_prefix}_can_execute_count": _sidecar_post_data_can_execute_count(playbook),
+        f"{key_prefix}": str(root / "sidecar_post_data_validation_playbook.yaml"),
+        f"{key_prefix}_report": (
+            str(root / "sidecar_post_data_validation_playbook.md")
+            if (root / "sidecar_post_data_validation_playbook.md").exists()
+            else ""
+        ),
+    }
+
+
+def _heartbeat_status_with_artifact_summaries(
+    payload: dict[str, Any],
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    sidecar_evidence_brief = _load_yaml_if_exists(root / "sidecar_evidence_brief.yaml")
+    sidecar_learning_ledger = _load_yaml_if_exists(root / "sidecar_candidate_learning_ledger.yaml")
+    sidecar_quality_audit = _load_yaml_if_exists(root / "sidecar_champion_challenger_quality_audit.yaml")
+    sidecar_quality_remediation_plan = _load_yaml_if_exists(root / "sidecar_quality_remediation_plan.yaml")
+    sidecar_consistency_audit = _load_yaml_if_exists(root / "sidecar_evidence_consistency_audit.yaml")
+    sidecar_current_handoff = _load_yaml_if_exists(root / "sidecar_current_handoff.yaml")
+    sidecar_current_decision_packet = _load_yaml_if_exists(root / "sidecar_current_decision_packet.yaml")
+    sidecar_post_data_playbook = _load_yaml_if_exists(root / "sidecar_post_data_validation_playbook.yaml")
+    evidence_debt_register = _load_yaml_if_exists(root / "evidence_debt_register.yaml")
+    sidecar_visual_coverage_path = root / "sidecar_visual_review_coverage.csv"
+    sidecar_visual_coverage_summary = _sidecar_visual_review_coverage_csv_summary(sidecar_visual_coverage_path)
+    sidecar_visual_label_worklist_path = root / "sidecar_visual_label_worklist.csv"
+    sidecar_visual_label_worklist_summary = _sidecar_visual_label_worklist_csv_summary(
+        sidecar_visual_label_worklist_path
+    )
+    sidecar_visual_label_batches_path = root / "sidecar_visual_label_review_batches.csv"
+    sidecar_visual_label_batches_summary = _sidecar_visual_label_batches_csv_summary(
+        sidecar_visual_label_batches_path
+    )
+    sidecar_visual_label_progress_path = root / "sidecar_visual_label_progress.csv"
+    sidecar_visual_label_progress_summary = _sidecar_visual_label_progress_csv_summary(
+        sidecar_visual_label_progress_path
+    )
+    sidecar_visual_label_next_batch_path = root / "sidecar_visual_label_next_batch.csv"
+    sidecar_visual_label_next_batch_summary = _sidecar_visual_label_next_batch_csv_summary(
+        sidecar_visual_label_next_batch_path
+    )
+    sidecar_visual_label_decision_context = _load_yaml_if_exists(
+        root / "sidecar_visual_label_decision_context.yaml"
+    )
+    sidecar_visual_label_rubric = _load_yaml_if_exists(root / "sidecar_visual_label_rubric.yaml")
+    sidecar_visual_label_entry_sheet_path = root / "sidecar_visual_label_entry_sheet.csv"
+    sidecar_visual_label_entry_sheet_summary = _sidecar_visual_label_entry_sheet_csv_summary(
+        sidecar_visual_label_entry_sheet_path
+    )
+    sidecar_visual_label_source_update_manifest_path = root / "sidecar_visual_label_source_update_manifest.csv"
+    sidecar_visual_label_source_update_manifest_summary = (
+        _sidecar_visual_label_source_update_manifest_csv_summary(
+            sidecar_visual_label_source_update_manifest_path
+        )
+    )
+    sidecar_visual_label_source_patch_plan_path = root / "sidecar_visual_label_source_patch_plan.csv"
+    sidecar_visual_label_source_patch_plan_summary = _sidecar_visual_label_source_patch_plan_csv_summary(
+        sidecar_visual_label_source_patch_plan_path
+    )
+    sidecar_visual_label_completion_audit = _load_yaml_if_exists(root / "sidecar_visual_label_completion_audit.yaml")
+    if (
+        not sidecar_evidence_brief
+        and not sidecar_learning_ledger
+        and not sidecar_quality_audit
+        and not sidecar_quality_remediation_plan
+        and not sidecar_consistency_audit
+        and not sidecar_current_handoff
+        and not sidecar_current_decision_packet
+        and not sidecar_post_data_playbook
+        and not evidence_debt_register
+        and not sidecar_visual_coverage_summary
+        and not sidecar_visual_label_worklist_summary
+        and not sidecar_visual_label_batches_summary
+        and not sidecar_visual_label_progress_summary
+        and not sidecar_visual_label_next_batch_summary
+        and not sidecar_visual_label_decision_context
+        and not sidecar_visual_label_rubric
+        and not sidecar_visual_label_entry_sheet_summary
+        and not sidecar_visual_label_source_update_manifest_summary
+        and not sidecar_visual_label_source_patch_plan_summary
+        and not sidecar_visual_label_completion_audit
+    ):
+        return payload
+
+    updated = dict(payload)
+    if sidecar_evidence_brief:
+        updated.update(_sidecar_visual_review_top_action(sidecar_evidence_brief))
+    if sidecar_visual_coverage_summary:
+        updated.update(
+            {
+                "sidecar_visual_review_coverage": str(sidecar_visual_coverage_path),
+                "sidecar_visual_review_coverage_report": (
+                    str(root / "sidecar_visual_review_coverage.md")
+                    if (root / "sidecar_visual_review_coverage.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_review_coverage_row_count": sidecar_visual_coverage_summary.get("row_count", ""),
+                "sidecar_visual_review_coverage_ready_count": sidecar_visual_coverage_summary.get("ready_count", ""),
+                "sidecar_visual_review_coverage_missing_count": sidecar_visual_coverage_summary.get(
+                    "missing_count",
+                    "",
+                ),
+                "sidecar_visual_review_coverage_empty_label_count": sidecar_visual_coverage_summary.get(
+                    "empty_label_count",
+                    "",
+                ),
+                "sidecar_visual_review_human_review_started_count": sidecar_visual_coverage_summary.get(
+                    "human_review_started_count",
+                    "",
+                ),
+                "sidecar_visual_review_human_review_pending_count": sidecar_visual_coverage_summary.get(
+                    "human_review_pending_count",
+                    "",
+                ),
+            }
+        )
+    if sidecar_visual_label_worklist_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_worklist": str(sidecar_visual_label_worklist_path),
+                "sidecar_visual_label_worklist_report": (
+                    str(root / "sidecar_visual_label_worklist.md")
+                    if (root / "sidecar_visual_label_worklist.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_worklist_row_count": sidecar_visual_label_worklist_summary.get(
+                    "row_count",
+                    "",
+                ),
+                "sidecar_visual_label_worklist_candidate_count": sidecar_visual_label_worklist_summary.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_worklist_exact_variant_count": sidecar_visual_label_worklist_summary.get(
+                    "exact_variant_count",
+                    "",
+                ),
+                "sidecar_visual_label_worklist_family_timeframe_count": sidecar_visual_label_worklist_summary.get(
+                    "family_timeframe_count",
+                    "",
+                ),
+                "sidecar_visual_label_worklist_family_context_count": sidecar_visual_label_worklist_summary.get(
+                    "family_context_count",
+                    "",
+                ),
+            }
+        )
+    if sidecar_visual_label_batches_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_review_batches": str(sidecar_visual_label_batches_path),
+                "sidecar_visual_label_review_batches_report": (
+                    str(root / "sidecar_visual_label_review_batches.md")
+                    if (root / "sidecar_visual_label_review_batches.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_review_batch_count": sidecar_visual_label_batches_summary.get(
+                    "batch_count",
+                    "",
+                ),
+                "sidecar_visual_label_review_batch_row_count": sidecar_visual_label_batches_summary.get(
+                    "row_count",
+                    "",
+                ),
+                "sidecar_visual_label_review_batch_candidate_count": sidecar_visual_label_batches_summary.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_review_batch_exact_variant_count": sidecar_visual_label_batches_summary.get(
+                    "exact_variant_count",
+                    "",
+                ),
+                "sidecar_visual_label_review_batch_family_timeframe_count": sidecar_visual_label_batches_summary.get(
+                    "family_timeframe_count",
+                    "",
+                ),
+                "sidecar_visual_label_review_batch_family_context_count": sidecar_visual_label_batches_summary.get(
+                    "family_context_count",
+                    "",
+                ),
+            }
+        )
+    if sidecar_visual_label_progress_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_progress": str(sidecar_visual_label_progress_path),
+                "sidecar_visual_label_progress_report": (
+                    str(root / "sidecar_visual_label_progress.md")
+                    if (root / "sidecar_visual_label_progress.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_progress_candidate_count": sidecar_visual_label_progress_summary.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_matched_rows": sidecar_visual_label_progress_summary.get(
+                    "matched_label_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_pending_rows": sidecar_visual_label_progress_summary.get(
+                    "pending_label_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_completed_rows": sidecar_visual_label_progress_summary.get(
+                    "completed_label_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_not_started_candidates": sidecar_visual_label_progress_summary.get(
+                    "not_started_candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_incomplete_candidates": sidecar_visual_label_progress_summary.get(
+                    "incomplete_candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_complete_candidates": sidecar_visual_label_progress_summary.get(
+                    "complete_candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_progress_statuses": sidecar_visual_label_progress_summary.get("statuses", ""),
+                "sidecar_visual_label_progress_next_batch_id": sidecar_visual_label_progress_summary.get(
+                    "next_batch_id",
+                    "",
+                ),
+            }
+        )
+    if sidecar_visual_label_next_batch_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_next_batch": str(sidecar_visual_label_next_batch_path),
+                "sidecar_visual_label_next_batch_report": (
+                    str(root / "sidecar_visual_label_next_batch.md")
+                    if (root / "sidecar_visual_label_next_batch.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_next_batch_gallery": (
+                    str(root / "sidecar_visual_label_next_batch_gallery.md")
+                    if (root / "sidecar_visual_label_next_batch_gallery.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_next_batch_id": sidecar_visual_label_next_batch_summary.get("batch_id", ""),
+                "sidecar_visual_label_next_batch_row_count": sidecar_visual_label_next_batch_summary.get(
+                    "row_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_candidate_count": sidecar_visual_label_next_batch_summary.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_source_file_count": sidecar_visual_label_next_batch_summary.get(
+                    "source_label_file_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_exact_variant_count": sidecar_visual_label_next_batch_summary.get(
+                    "exact_variant_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_family_timeframe_count": sidecar_visual_label_next_batch_summary.get(
+                    "family_timeframe_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_family_context_count": sidecar_visual_label_next_batch_summary.get(
+                    "family_context_count",
+                    "",
+                ),
+                "sidecar_visual_label_next_batch_missing_required_labels": (
+                    sidecar_visual_label_next_batch_summary.get("missing_required_labels", "")
+                ),
+            }
+        )
+    if sidecar_visual_label_decision_context:
+        updated.update(
+            {
+                "sidecar_visual_label_decision_context": str(root / "sidecar_visual_label_decision_context.yaml"),
+                "sidecar_visual_label_decision_context_report": (
+                    str(root / "sidecar_visual_label_decision_context.md")
+                    if (root / "sidecar_visual_label_decision_context.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_decision_context_status": (
+                    sidecar_visual_label_decision_context.get("status", "")
+                ),
+                "sidecar_visual_label_decision_context_batch_id": (
+                    sidecar_visual_label_decision_context.get("batch_id", "")
+                ),
+                "sidecar_visual_label_decision_context_row_count": (
+                    sidecar_visual_label_decision_context.get("row_count", "")
+                ),
+                "sidecar_visual_label_decision_context_context_counts": (
+                    sidecar_visual_label_decision_context.get("context_kind_counts", "")
+                ),
+                "sidecar_visual_label_decision_context_false_warning_probe_count": (
+                    sidecar_visual_label_decision_context.get("missed_upside_false_warning_probe_count", "")
+                ),
+                "sidecar_visual_label_decision_context_avoided_downside_probe_count": (
+                    sidecar_visual_label_decision_context.get("avoided_downside_warning_probe_count", "")
+                ),
+                "sidecar_visual_label_decision_context_pending_entry_cells": (
+                    sidecar_visual_label_decision_context.get("pending_entry_cells", "")
+                ),
+                "sidecar_visual_label_decision_context_entry_reference_gaps": (
+                    sidecar_visual_label_decision_context.get("entry_reference_gaps", "")
+                ),
+            }
+        )
+    if sidecar_visual_label_rubric:
+        updated.update(
+            {
+                "sidecar_visual_label_rubric": str(root / "sidecar_visual_label_rubric.yaml"),
+                "sidecar_visual_label_rubric_report": (
+                    str(root / "sidecar_visual_label_rubric.md")
+                    if (root / "sidecar_visual_label_rubric.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_rubric_status": sidecar_visual_label_rubric.get("status", ""),
+                "sidecar_visual_label_rubric_batch_id": sidecar_visual_label_rubric.get("batch_id", ""),
+                "sidecar_visual_label_rubric_required_fields": _csv_list(
+                    sidecar_visual_label_rubric.get("required_label_fields", []) or []
+                ),
+                "sidecar_visual_label_rubric_field_count": len(
+                    sidecar_visual_label_rubric.get("field_contracts", []) or []
+                ),
+            }
+        )
+    if sidecar_visual_label_entry_sheet_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_entry_sheet": str(sidecar_visual_label_entry_sheet_path),
+                "sidecar_visual_label_entry_sheet_report": (
+                    str(root / "sidecar_visual_label_entry_sheet.md")
+                    if (root / "sidecar_visual_label_entry_sheet.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_entry_sheet_batch_id": sidecar_visual_label_entry_sheet_summary.get(
+                    "batch_id",
+                    "",
+                ),
+                "sidecar_visual_label_entry_sheet_row_count": sidecar_visual_label_entry_sheet_summary.get(
+                    "row_count",
+                    "",
+                ),
+                "sidecar_visual_label_entry_sheet_candidate_count": sidecar_visual_label_entry_sheet_summary.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_visual_label_entry_sheet_source_file_count": (
+                    sidecar_visual_label_entry_sheet_summary.get("source_label_file_count", "")
+                ),
+                "sidecar_visual_label_entry_sheet_required_fields": sidecar_visual_label_entry_sheet_summary.get(
+                    "required_label_fields",
+                    "",
+                ),
+                "sidecar_visual_label_entry_sheet_missing_required_cells": (
+                    sidecar_visual_label_entry_sheet_summary.get("missing_required_cell_count", "")
+                ),
+                "sidecar_visual_label_entry_sheet_missing_source_files": (
+                    sidecar_visual_label_entry_sheet_summary.get("missing_source_label_file_count", "")
+                ),
+                "sidecar_visual_label_entry_sheet_missing_source_rows": (
+                    sidecar_visual_label_entry_sheet_summary.get("missing_source_label_row_count", "")
+                ),
+                "sidecar_visual_label_entry_sheet_missing_images": (
+                    sidecar_visual_label_entry_sheet_summary.get("missing_image_count", "")
+                ),
+            }
+        )
+    if sidecar_visual_label_source_update_manifest_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_source_update_manifest": str(
+                    sidecar_visual_label_source_update_manifest_path
+                ),
+                "sidecar_visual_label_source_update_manifest_report": (
+                    str(root / "sidecar_visual_label_source_update_manifest.md")
+                    if (root / "sidecar_visual_label_source_update_manifest.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_source_update_manifest_batch_id": (
+                    sidecar_visual_label_source_update_manifest_summary.get("batch_id", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_row_count": (
+                    sidecar_visual_label_source_update_manifest_summary.get("row_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_candidate_count": (
+                    sidecar_visual_label_source_update_manifest_summary.get("candidate_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_source_file_count": (
+                    sidecar_visual_label_source_update_manifest_summary.get("source_label_file_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_pending_update_rows": (
+                    sidecar_visual_label_source_update_manifest_summary.get("pending_update_row_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_required_update_cells": (
+                    sidecar_visual_label_source_update_manifest_summary.get("required_update_cell_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_blocked_reference_rows": (
+                    sidecar_visual_label_source_update_manifest_summary.get("blocked_reference_row_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_complete_rows": (
+                    sidecar_visual_label_source_update_manifest_summary.get("complete_row_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_required_update_fields": (
+                    sidecar_visual_label_source_update_manifest_summary.get("required_update_fields", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_missing_source_files": (
+                    sidecar_visual_label_source_update_manifest_summary.get("missing_source_label_file_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_missing_source_rows": (
+                    sidecar_visual_label_source_update_manifest_summary.get("missing_source_label_row_count", "")
+                ),
+                "sidecar_visual_label_source_update_manifest_missing_images": (
+                    sidecar_visual_label_source_update_manifest_summary.get("missing_image_count", "")
+                ),
+            }
+        )
+    if sidecar_visual_label_source_patch_plan_summary:
+        updated.update(
+            {
+                "sidecar_visual_label_source_patch_plan": str(sidecar_visual_label_source_patch_plan_path),
+                "sidecar_visual_label_source_patch_plan_yaml": (
+                    str(root / "sidecar_visual_label_source_patch_plan.yaml")
+                    if (root / "sidecar_visual_label_source_patch_plan.yaml").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_source_patch_plan_report": (
+                    str(root / "sidecar_visual_label_source_patch_plan.md")
+                    if (root / "sidecar_visual_label_source_patch_plan.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_source_patch_plan_batch_id": (
+                    sidecar_visual_label_source_patch_plan_summary.get("batch_id", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_cell_count": (
+                    sidecar_visual_label_source_patch_plan_summary.get("row_count", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_pending_cells": (
+                    sidecar_visual_label_source_patch_plan_summary.get("pending_source_patch_cell_count", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_blocked_cells": (
+                    sidecar_visual_label_source_patch_plan_summary.get("blocked_source_patch_cell_count", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_source_files": (
+                    sidecar_visual_label_source_patch_plan_summary.get("source_file_count", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_source_rows": (
+                    sidecar_visual_label_source_patch_plan_summary.get("source_row_count", "")
+                ),
+                "sidecar_visual_label_source_patch_plan_required_fields": (
+                    sidecar_visual_label_source_patch_plan_summary.get("required_update_fields", "")
+                ),
+            }
+        )
+    if sidecar_visual_label_completion_audit:
+        updated.update(
+            {
+                "sidecar_visual_label_completion_audit": str(root / "sidecar_visual_label_completion_audit.csv"),
+                "sidecar_visual_label_completion_audit_yaml": str(root / "sidecar_visual_label_completion_audit.yaml"),
+                "sidecar_visual_label_completion_audit_report": (
+                    str(root / "sidecar_visual_label_completion_audit.md")
+                    if (root / "sidecar_visual_label_completion_audit.md").exists()
+                    else ""
+                ),
+                "sidecar_visual_label_completion_audit_status": sidecar_visual_label_completion_audit.get(
+                    "status",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_batch_id": sidecar_visual_label_completion_audit.get(
+                    "batch_id",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_rows": sidecar_visual_label_completion_audit.get(
+                    "row_count",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_completed_rows": sidecar_visual_label_completion_audit.get(
+                    "completed_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_missing_rows": sidecar_visual_label_completion_audit.get(
+                    "missing_required_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_invalid_rows": sidecar_visual_label_completion_audit.get(
+                    "invalid_label_row_count",
+                    "",
+                ),
+                "sidecar_visual_label_completion_audit_next_action": sidecar_visual_label_completion_audit.get(
+                    "next_action",
+                    "",
+                ),
+            }
+        )
+    if sidecar_learning_ledger:
+        updated.update(
+            {
+                "sidecar_learning_status": sidecar_learning_ledger.get(
+                    "status",
+                    "missing_sidecar_candidate_learning_ledger",
+                ),
+                "sidecar_learning_candidate_count": sidecar_learning_ledger.get("candidate_count", ""),
+                "sidecar_learning_lead_count": sidecar_learning_ledger.get("lead_post_data_candidate_count", ""),
+                "sidecar_learning_control_count": sidecar_learning_ledger.get("diversity_control_only_count", ""),
+                "sidecar_learning_archive_count": sidecar_learning_ledger.get("archive_failure_mode_count", ""),
+                "sidecar_learning_review_count": sidecar_learning_ledger.get("review_only_candidate_count", ""),
+                "sidecar_learning_blocked_count": sidecar_learning_ledger.get(
+                    "quality_blocked_review_only_count",
+                    "",
+                ),
+                "sidecar_learning_ledger_report": (
+                    str(root / "sidecar_candidate_learning_ledger.md")
+                    if (root / "sidecar_candidate_learning_ledger.md").exists()
+                    else ""
+                ),
+                **_sidecar_learning_action_summary(sidecar_learning_ledger),
+            }
+        )
+    if sidecar_post_data_playbook:
+        updated.update(
+            _sidecar_post_data_payload(
+                sidecar_post_data_playbook,
+                root=root,
+                key_prefix="sidecar_post_data_playbook",
+            )
+        )
+    if sidecar_current_handoff:
+        historical_boundary = sidecar_current_handoff.get("historical_decision_packet_boundary", {}) or {}
+        decision_matrix_path = root / "sidecar_candidate_decision_matrix.csv"
+        decision_matrix_report_path = root / "sidecar_candidate_decision_matrix.md"
+        updated.update(
+            {
+                "sidecar_current_handoff": str(root / "sidecar_current_handoff.yaml"),
+                "sidecar_current_handoff_report": (
+                    str(root / "sidecar_current_handoff.md")
+                    if (root / "sidecar_current_handoff.md").exists()
+                    else ""
+                ),
+                "sidecar_current_handoff_status": sidecar_current_handoff.get("status", ""),
+                "sidecar_current_handoff_candidate_count": sidecar_current_handoff.get("candidate_count", ""),
+                "sidecar_current_handoff_required_action": sidecar_current_handoff.get(
+                    "current_required_action",
+                    "",
+                ),
+                "sidecar_current_handoff_historical_only": historical_boundary.get("historical_only", ""),
+                "sidecar_current_handoff_stale_product_delta_snapshot_detected": historical_boundary.get(
+                    "stale_product_delta_snapshot_detected",
+                    "",
+                ),
+                "sidecar_current_handoff_state_source": historical_boundary.get("current_state_source", ""),
+                "sidecar_candidate_decision_matrix": (
+                    str(decision_matrix_path) if decision_matrix_path.exists() else ""
+                ),
+                "sidecar_candidate_decision_matrix_report": (
+                    str(decision_matrix_report_path) if decision_matrix_report_path.exists() else ""
+                ),
+                "sidecar_candidate_decision_matrix_row_count": (
+                    _csv_data_row_count(decision_matrix_path) if decision_matrix_path.exists() else ""
+                ),
+            }
+        )
+    if sidecar_current_decision_packet:
+        updated.update(
+            {
+                "sidecar_current_decision_packet": str(root / "sidecar_current_decision_packet.yaml"),
+                "sidecar_current_decision_packet_report": (
+                    str(root / "sidecar_current_decision_packet.md")
+                    if (root / "sidecar_current_decision_packet.md").exists()
+                    else ""
+                ),
+                "sidecar_current_decision_packet_status": sidecar_current_decision_packet.get("status", ""),
+                "sidecar_current_decision_packet_decision": sidecar_current_decision_packet.get(
+                    "executive_decision",
+                    "",
+                ),
+                "sidecar_current_decision_packet_required_action": sidecar_current_decision_packet.get(
+                    "current_required_action",
+                    "",
+                ),
+                "sidecar_current_decision_packet_candidate_count": sidecar_current_decision_packet.get(
+                    "candidate_count",
+                    "",
+                ),
+                "sidecar_current_decision_packet_quality_remediation_status": (
+                    sidecar_current_decision_packet.get("quality_remediation_status", "")
+                ),
+                "sidecar_current_decision_packet_quality_remediation_required_action": (
+                    sidecar_current_decision_packet.get("quality_remediation_current_required_action", "")
+                ),
+                "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count": (
+                    sidecar_current_decision_packet.get("quality_remediation_autonomous_clearable_now_count", "")
+                ),
+                "sidecar_current_decision_packet_quality_remediation_human_visual_count": (
+                    sidecar_current_decision_packet.get("quality_remediation_human_visual_remediation_count", "")
+                ),
+                "sidecar_current_decision_packet_quality_remediation_diversity_control_count": (
+                    sidecar_current_decision_packet.get("quality_remediation_diversity_control_remediation_count", "")
+                ),
+                "sidecar_current_decision_packet_quality_remediation_archive_only_count": (
+                    sidecar_current_decision_packet.get("quality_remediation_archive_only_count", "")
+                ),
+            }
+        )
+    if sidecar_quality_audit:
+        updated.update(
+            {
+                "sidecar_quality_status": sidecar_quality_audit.get("status", ""),
+                "sidecar_quality_issue_count": sidecar_quality_audit.get("issue_count", ""),
+                "sidecar_quality_hard_issue_count": sidecar_quality_audit.get("hard_issue_count", ""),
+                "sidecar_quality_advisory_issue_count": sidecar_quality_audit.get("advisory_issue_count", ""),
+                "sidecar_quality_hard_issue_summary": _sidecar_quality_issue_summary(
+                    sidecar_quality_audit.get("hard_issues", []) or []
+                ),
+                "sidecar_quality_advisory_issue_summary": _sidecar_quality_issue_summary(
+                    sidecar_quality_audit.get("advisory_issues", []) or []
+                ),
+                "sidecar_quality_report": (
+                    str(root / "sidecar_champion_challenger_quality_audit.md")
+                    if (root / "sidecar_champion_challenger_quality_audit.md").exists()
+                    else ""
+                ),
+            }
+        )
+    if sidecar_quality_remediation_plan:
+        updated.update(
+            {
+                "sidecar_quality_remediation_plan": str(root / "sidecar_quality_remediation_plan.yaml"),
+                "sidecar_quality_remediation_plan_report": (
+                    str(root / "sidecar_quality_remediation_plan.md")
+                    if (root / "sidecar_quality_remediation_plan.md").exists()
+                    else ""
+                ),
+                "sidecar_quality_remediation_plan_status": sidecar_quality_remediation_plan.get("status", ""),
+                "sidecar_quality_remediation_plan_current_required_action": (
+                    sidecar_quality_remediation_plan.get("current_required_action", "")
+                ),
+                "sidecar_quality_remediation_plan_autonomous_clearable_now_count": (
+                    sidecar_quality_remediation_plan.get("autonomous_clearable_now_count", "")
+                ),
+                "sidecar_quality_remediation_plan_human_visual_remediation_count": (
+                    sidecar_quality_remediation_plan.get("human_visual_remediation_count", "")
+                ),
+                "sidecar_quality_remediation_plan_diversity_control_remediation_count": (
+                    sidecar_quality_remediation_plan.get("diversity_control_remediation_count", "")
+                ),
+                "sidecar_quality_remediation_plan_archive_only_count": (
+                    sidecar_quality_remediation_plan.get("archive_only_count", "")
+                ),
+            }
+        )
+    if sidecar_consistency_audit:
+        updated.update(
+            {
+                "sidecar_evidence_consistency_audit": str(root / "sidecar_evidence_consistency_audit.yaml"),
+                "sidecar_evidence_consistency_audit_report": (
+                    str(root / "sidecar_evidence_consistency_audit.md")
+                    if (root / "sidecar_evidence_consistency_audit.md").exists()
+                    else ""
+                ),
+                "sidecar_evidence_consistency_audit_status": sidecar_consistency_audit.get("status", ""),
+                "sidecar_evidence_consistency_audit_check_count": sidecar_consistency_audit.get("check_count", ""),
+                "sidecar_evidence_consistency_audit_issue_count": sidecar_consistency_audit.get("issue_count", ""),
+            }
+        )
+    if evidence_debt_register:
+        updated.update(
+            {
+                "evidence_debt_status": evidence_debt_register.get(
+                    "status",
+                    "missing_evidence_debt_register",
+                ),
+                "evidence_debt_count": evidence_debt_register.get("debt_count", ""),
+                "evidence_debt_candidate_count": evidence_debt_register.get("candidate_debt_count", ""),
+                "evidence_debt_global_count": evidence_debt_register.get("global_debt_count", ""),
+                "evidence_debt_archived_candidate_count": evidence_debt_register.get("archived_candidate_count", ""),
+                "evidence_debt_next_action": evidence_debt_register.get("next_action", ""),
+                "evidence_debt_strategic_next_action": evidence_debt_register.get("strategic_next_action", ""),
+                "evidence_debt_current_runtime_handoff_action": evidence_debt_register.get(
+                    "current_runtime_handoff_action",
+                    "",
+                ),
+                "evidence_debt_current_runtime_handoff_status": evidence_debt_register.get(
+                    "current_runtime_handoff_status",
+                    "",
+                ),
+                "evidence_debt_current_runtime_handoff_reason": evidence_debt_register.get(
+                    "current_runtime_handoff_reason",
+                    "",
+                ),
+                "evidence_debt_strategic_blocked_by_current_handoff": evidence_debt_register.get(
+                    "strategic_next_action_blocked_by_current_handoff",
+                    "",
+                ),
+                "evidence_debt_register_report": (
+                    str(root / "evidence_debt_register.md")
+                    if (root / "evidence_debt_register.md").exists()
+                    else ""
+                ),
+            }
+        )
+    return updated
+
+
 def build_product_delta_scoreboard(governance: dict[str, Any]) -> dict[str, Any]:
     lane_assignment = governance.get("lane_assignment", {})
     validation = governance.get("validation_governance", {})
@@ -683,6 +1647,10 @@ def _first_present(row: dict[str, Any], names: tuple[str, ...]) -> float | None:
     return None
 
 
+def _uses_downside_tradeoff(product_role: str, direction: str) -> bool:
+    return product_role == "warning_blocker" or (product_role == "reset_quality" and direction == "negative")
+
+
 def _ranked_metric_summary(ranked_path: Path, *, product_role: str) -> dict[str, Any]:
     if not ranked_path.exists():
         return {}
@@ -720,6 +1688,7 @@ def _ranked_metric_summary(ranked_path: Path, *, product_role: str) -> dict[str,
         key=lambda row: _safe_float(row.get("rank_score")) or 0.0,
         reverse=True,
     )[0]
+    best_direction = str(best_ranked.get("direction", "")).strip()
     baseline_medians = [
         value
         for row in rows
@@ -736,7 +1705,7 @@ def _ranked_metric_summary(ranked_path: Path, *, product_role: str) -> dict[str,
     best_median = max(medians) if medians else None
     worst_median = min(medians) if medians else None
     role = str(product_role)
-    if role == "warning_blocker":
+    if _uses_downside_tradeoff(role, best_direction):
         challenger_for_delta = worst_median if worst_median is not None else average_median
         baseline_for_delta = baseline_median if baseline_median is not None else 0.0
         role_delta = (baseline_for_delta - challenger_for_delta) if challenger_for_delta is not None else None
@@ -761,6 +1730,7 @@ def _ranked_metric_summary(ranked_path: Path, *, product_role: str) -> dict[str,
         "useful_or_watchlist_rows": len(useful),
         "best_variant_id": best_ranked.get("variant_id", ""),
         "best_family_id": best_ranked.get("family_id", ""),
+        "direction": best_direction,
         "timeframe": best_ranked.get("timeframe", ""),
         "classification": best_ranked.get("classification", ""),
         "rank_score": _safe_float(best_ranked.get("rank_score")),
@@ -861,6 +1831,7 @@ def attach_metric_sources_to_action_plan(
 
 
 def _product_metric_checklist(metric_summary: dict[str, Any], *, product_role: str) -> dict[str, Any]:
+    direction = str(metric_summary.get("direction", "")).strip()
     checks = {
         "forward_relative_return_vs_basket": metric_summary.get("median_forward_relative_return") is not None,
         "champion_baseline_delta": metric_summary.get("role_delta_vs_champion_baseline") is not None,
@@ -870,7 +1841,7 @@ def _product_metric_checklist(metric_summary: dict[str, Any], *, product_role: s
         "symbol_breadth": metric_summary.get("unique_symbols") is not None,
         "event_diversity": metric_summary.get("event_diversity") is not None,
     }
-    if product_role == "warning_blocker":
+    if _uses_downside_tradeoff(product_role, direction):
         checks["missed_upside_cost"] = metric_summary.get("missed_upside_cost") is not None
         checks["avoided_downside_benefit"] = metric_summary.get("avoided_downside_benefit") is not None
     present = [name for name, value in checks.items() if value]
@@ -2359,15 +3330,52 @@ def build_ceo_decision_quality(
     infra_delta: dict[str, Any],
     decision: dict[str, Any],
     action_board: dict[str, Any] | None = None,
+    sidecar_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lab_status = company_status.get("lab_status", {}) or {}
     governance = company_status.get("governance", {}) or {}
+    sidecar_evidence = sidecar_evidence or {}
     selected_action = str(decision.get("decision", ""))
     open_lanes = list(governance.get("open_lanes", []) or [])
     candidate_count = int(product_delta.get("candidate_count", 0) or 0)
+    sidecar_candidates = list(sidecar_evidence.get("candidates", []) or [])
+    sidecar_candidate_count = int(sidecar_evidence.get("candidate_count", 0) or len(sidecar_candidates) or 0)
+    effective_candidate_count = max(candidate_count, sidecar_candidate_count)
+    sidecar_ready_visual_count = int(sidecar_evidence.get("ready_visual_review_count", 0) or 0)
+    sidecar_fresh_blocked_count = int(sidecar_evidence.get("fresh_data_blocked_count", 0) or 0)
+    sidecar_manual_gate_active = sidecar_evidence.get("manual_data_gate_active") is True
+    sidecar_next_action = str(sidecar_evidence.get("next_action", ""))
+    sidecar_safe_fresh_validation = sidecar_evidence.get("safe_to_run_fresh_validation")
+    sidecar_champion_status = str(sidecar_evidence.get("champion_challenger_status", ""))
     stop_reason = str(lab_status.get("stop_reason", ""))
     true_blocker = bool(company_status.get("true_blocker"))
     needs_recovery = infra_delta.get("infra_delta_status") == "needs_recovery_expansion"
+    fresh_data_needed = (
+        stop_reason == "request_fresh_data"
+        or sidecar_manual_gate_active
+        or sidecar_safe_fresh_validation is False
+        or sidecar_next_action == "import_or_curate_fresh_ohlcv_data"
+    )
+    if sidecar_candidate_count and sidecar_champion_status == "shadow_comparison_complete":
+        champion_rationale = (
+            f"Sidecar evidence has {sidecar_candidate_count} shadow challenger candidates with "
+            "champion/challenger comparison complete; fresh/control validation remains blocked."
+        )
+    elif sidecar_candidate_count:
+        champion_rationale = (
+            f"Sidecar evidence has {sidecar_candidate_count} shadow challenger candidates needing "
+            "champion/challenger comparison or fresh/control validation."
+        )
+    elif candidate_count:
+        champion_rationale = "Chart-facing candidates need base-vs-challenger evidence."
+    else:
+        champion_rationale = "No chart-facing candidates are visible."
+    if sidecar_manual_gate_active or sidecar_next_action == "import_or_curate_fresh_ohlcv_data":
+        fresh_data_rationale = "Sidecar evidence is fresh-data blocked and needs manual OHLCV import or curation."
+    elif stop_reason == "request_fresh_data":
+        fresh_data_rationale = "The run explicitly requested fresher or broader data."
+    else:
+        fresh_data_rationale = "Fresh data is not the current stop reason."
     candidates = [
         _decision_quality_candidate(
             action_id="stop_true_blocker",
@@ -2378,9 +3386,19 @@ def build_ceo_decision_quality(
         ),
         _decision_quality_candidate(
             action_id="run_champion_challenger",
-            score=90 if candidate_count else 20,
-            rationale="Chart-facing candidates need base-vs-challenger evidence." if candidate_count else "No chart-facing candidates are visible.",
-            evidence={"candidate_count": candidate_count, "product_delta_status": product_delta.get("chart_facing_value_status")},
+            score=90 if effective_candidate_count else 20,
+            rationale=champion_rationale,
+            evidence={
+                "candidate_count": effective_candidate_count,
+                "product_delta_candidate_count": candidate_count,
+                "sidecar_candidate_count": sidecar_candidate_count,
+                "product_delta_status": product_delta.get("chart_facing_value_status"),
+                "sidecar_status": sidecar_evidence.get("status", ""),
+                "sidecar_ready_visual_review_count": sidecar_ready_visual_count,
+                "sidecar_fresh_data_blocked_count": sidecar_fresh_blocked_count,
+                "champion": sidecar_evidence.get("champion", ""),
+                "champion_challenger_status": sidecar_champion_status,
+            },
             selected_action=selected_action,
         ),
         _decision_quality_candidate(
@@ -2399,28 +3417,49 @@ def build_ceo_decision_quality(
         ),
         _decision_quality_candidate(
             action_id="request_fresh_data",
-            score=80 if stop_reason == "request_fresh_data" else 10,
-            rationale="The run explicitly requested fresher or broader data." if stop_reason == "request_fresh_data" else "Fresh data is not the current stop reason.",
-            evidence={"stop_reason": stop_reason},
+            score=80 if fresh_data_needed else 10,
+            rationale=fresh_data_rationale,
+            evidence={
+                "stop_reason": stop_reason,
+                "sidecar_manual_data_gate_active": sidecar_manual_gate_active,
+                "sidecar_safe_to_run_fresh_validation": sidecar_safe_fresh_validation,
+                "sidecar_next_action": sidecar_next_action,
+                "sidecar_fresh_data_blocked_count": sidecar_fresh_blocked_count,
+            },
             selected_action=selected_action,
         ),
         _decision_quality_candidate(
             action_id="broaden_hypothesis_source",
-            score=60 if not candidate_count and not open_lanes else 15,
+            score=60 if not effective_candidate_count and not open_lanes else 15,
             rationale="No candidates or lanes remain, so source broadening should come next."
-            if not candidate_count and not open_lanes
-            else "Existing candidates or lanes should be exploited before broadening.",
-            evidence={"candidate_count": candidate_count, "open_lane_count": len(open_lanes)},
+            if not effective_candidate_count and not open_lanes
+            else "Existing candidates, sidecars, or lanes should be exploited before broadening.",
+            evidence={
+                "candidate_count": effective_candidate_count,
+                "product_delta_candidate_count": candidate_count,
+                "sidecar_candidate_count": sidecar_candidate_count,
+                "open_lane_count": len(open_lanes),
+            },
             selected_action=selected_action,
         ),
     ]
     if selected_action and selected_action not in {str(item.get("action_id", "")) for item in candidates}:
+        selected_evidence = {"selected_by": "decision_override_or_specialized_route"}
+        if selected_action == sidecar_next_action:
+            selected_evidence.update(
+                {
+                    "sidecar_next_action": sidecar_next_action,
+                    "sidecar_status": sidecar_evidence.get("status", ""),
+                    "sidecar_candidate_count": sidecar_candidate_count,
+                    "sidecar_fresh_data_blocked_count": sidecar_fresh_blocked_count,
+                }
+            )
         candidates.append(
             _decision_quality_candidate(
                 action_id=selected_action,
                 score=max([int(item.get("score", 0) or 0) for item in candidates] + [50]) + 5,
                 rationale=str(decision.get("rationale", "Selected by previous action handoff or specialized dispatcher route.")),
-                evidence={"selected_by": "decision_override_or_specialized_route"},
+                evidence=selected_evidence,
                 selected_action=selected_action,
             )
         )
@@ -2455,6 +3494,7 @@ def build_ceo_decision_quality(
             "infra_delta": "research_infra_delta.yaml",
             "latest_action_result": "binding_action_result.yaml",
             "action_board": "action_board.yaml",
+            **({"sidecar_evidence": "sidecar_evidence_brief.yaml"} if sidecar_evidence else {}),
         },
         "guardrail": "Decision quality explains routing only. It does not approve execution, product language, or production changes.",
         "product_language_allowed": False,
@@ -2463,6 +3503,34 @@ def build_ceo_decision_quality(
     }
     quality.update(runtime_authority)
     return quality
+
+
+def _decision_quality_evidence_summary(evidence: dict[str, Any]) -> str:
+    summary_keys = [
+        "candidate_count",
+        "product_delta_candidate_count",
+        "sidecar_candidate_count",
+        "sidecar_ready_visual_review_count",
+        "sidecar_fresh_data_blocked_count",
+        "sidecar_manual_data_gate_active",
+        "sidecar_safe_to_run_fresh_validation",
+        "sidecar_next_action",
+        "champion",
+        "champion_challenger_status",
+        "open_lane_count",
+        "stop_reason",
+        "infra_delta_status",
+        "true_blocker",
+    ]
+    parts: list[str] = []
+    for key in summary_keys:
+        if key not in evidence:
+            continue
+        value = evidence.get(key)
+        if value in ("", None, [], {}):
+            continue
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
 
 
 def render_ceo_decision_quality(quality: dict[str, Any]) -> str:
@@ -2513,10 +3581,15 @@ def render_ceo_decision_quality(quality: dict[str, Any]) -> str:
         "",
     ]
     for item in quality.get("alternatives", []) or []:
+        evidence_summary = _decision_quality_evidence_summary(item.get("evidence", {}) or {})
+        evidence_suffix = f" evidence={evidence_summary}" if evidence_summary else ""
+        rationale_suffix = f" rationale={item.get('rationale')}" if item.get("rationale") else ""
         lines.append(
             "- "
             f"{item.get('action_id')} score={item.get('score')} "
             f"selected={item.get('selected')} why_not={item.get('why_not_selected') or 'selected'}"
+            f"{rationale_suffix}"
+            f"{evidence_suffix}"
         )
     lines.extend(["", str(quality.get("guardrail")), "Production effect: none.", ""])
     return "\n".join(lines).rstrip() + "\n"
@@ -2547,6 +3620,7 @@ def run_ceo_decision_quality(
         infra_delta=infra_delta,
         decision=decision,
         action_board=action_board_result["action_board"],
+        sidecar_evidence=_load_yaml_if_exists(root / "sidecar_evidence_brief.yaml"),
     )
     path = root / "decision_quality.yaml"
     report_path = root / "decision_quality.md"
@@ -2749,7 +3823,12 @@ def _write_artifact_set(
     return paths
 
 
-def render_promotion_candidates(product_delta: dict[str, Any]) -> str:
+def render_promotion_candidates(
+    product_delta: dict[str, Any],
+    *,
+    sidecar_evidence_brief: dict[str, Any] | None = None,
+    sidecar_candidate_learning_ledger: dict[str, Any] | None = None,
+) -> str:
     lines = [
         "# Riskflow Promotion Candidates",
         "",
@@ -2757,15 +3836,64 @@ def render_promotion_candidates(product_delta: dict[str, Any]) -> str:
         "",
     ]
     candidates = product_delta.get("candidates", []) or []
-    if not candidates:
+    sidecar_candidates = (sidecar_evidence_brief or {}).get("candidates", []) or []
+    learning_rows = (
+        (sidecar_candidate_learning_ledger or {}).get("candidates", [])
+        or (sidecar_candidate_learning_ledger or {}).get("rows", [])
+        or []
+    )
+    learning_by_id = {
+        str(row.get("belief_id", "")): row
+        for row in learning_rows
+        if isinstance(row, dict) and row.get("belief_id")
+    }
+    if not candidates and not sidecar_candidates:
         lines.append("- No chart-facing candidates identified yet.")
-    for candidate in candidates:
-        lines.append(
-            "- "
-            f"{candidate.get('belief_id')} "
-            f"role={candidate.get('product_role')} "
-            f"gate={candidate.get('current_gate')} "
-            f"status={candidate.get('comparison_status')}"
+    if candidates:
+        lines.extend(["## Product Delta Candidates", ""])
+        for candidate in candidates:
+            lines.append(
+                "- "
+                f"{candidate.get('belief_id')} "
+                f"role={candidate.get('product_role')} "
+                f"gate={candidate.get('current_gate')} "
+                f"status={candidate.get('comparison_status')}"
+            )
+    if sidecar_candidates:
+        lines.extend(
+            [
+                "## Sidecar Shadow Candidates",
+                "",
+                "These candidates are chart-facing research candidates, but they are not promotion-ready.",
+                "",
+            ]
+        )
+        for candidate in sidecar_candidates:
+            belief_id = str(candidate.get("belief_id", ""))
+            learning = learning_by_id.get(belief_id, {})
+            validation = candidate.get("validation", {}) or {}
+            metric = candidate.get("metric_summary", {}) or {}
+            lines.append(
+                "- "
+                f"{belief_id} "
+                f"role={candidate.get('product_role')} "
+                f"handling={learning.get('handling_classification') or 'unclassified_shadow_candidate'} "
+                f"authority={learning.get('validation_authority') or validation.get('validation_authority') or 'blocked_or_unset'} "
+                f"status={candidate.get('evidence_status') or 'unknown'} "
+                f"promotion_ceiling={candidate.get('promotion_ceiling') or 'shadow_candidate'} "
+                f"champion={candidate.get('champion') or 'core_signal_v0'} "
+                f"challenger={candidate.get('challenger') or 'unknown'} "
+                f"tf={metric.get('timeframe') or 'n/a'} "
+                f"next={learning.get('next_required_action') or learning.get('next_allowed_action') or candidate.get('next_required_action') or 'none'}"
+            )
+        lines.extend(
+            [
+                "",
+                "Promotion eligibility: blocked until safe fresh/control validation, passing trace, "
+                "specialist reviews, and explicit user approval.",
+                "Product language allowed: False",
+                "Production effect: none.",
+            ]
         )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -3207,6 +4335,11201 @@ def render_fresh_control_validation_report(plan: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _items_by_key(items: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    return {str(item.get(key, "")): item for item in items if item.get(key)}
+
+
+def build_ceo_sidecar_evidence_brief(
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+    champion_results: dict[str, Any],
+    visual_queue: dict[str, Any],
+    fresh_control_plan: dict[str, Any],
+    fresh_data_preflight: dict[str, Any],
+    evidence_debt_register: dict[str, Any],
+    trace_grade: dict[str, Any],
+    review_only_frozen_specs: list[dict[str, Any]] | None = None,
+    official_frozen_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    visual_by_belief = _items_by_key(visual_queue.get("items", []) or [], "belief_id")
+    validation_by_belief = _items_by_key(fresh_control_plan.get("work_items", []) or [], "belief_id")
+    frozen_specs = list(review_only_frozen_specs or [])
+    frozen_spec_by_belief = _items_by_key(frozen_specs, "belief_id")
+    debts_by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for debt in evidence_debt_register.get("debts", []) or []:
+        candidate_id = str(debt.get("candidate_id", ""))
+        if candidate_id:
+            debts_by_candidate.setdefault(candidate_id, []).append(debt)
+
+    preflight_safe = fresh_data_preflight.get("safe_to_run_fresh_validation") is True
+    manual_data_gate = (not preflight_safe) and bool(fresh_control_plan.get("fresh_required_count", 0))
+    candidates: list[dict[str, Any]] = []
+    for result in champion_results.get("results", []) or []:
+        belief_id = str(result.get("belief_id", ""))
+        metric_summary = result.get("metric_summary", {}) or {}
+        visual_item = visual_by_belief.get(belief_id, {})
+        validation_item = validation_by_belief.get(belief_id, {})
+        frozen_spec = frozen_spec_by_belief.get(belief_id, {})
+        candidate_debts = debts_by_candidate.get(belief_id, [])
+        fresh_readiness_debt = any(str(debt.get("debt_kind", "")) == "fresh_data_readiness" for debt in candidate_debts)
+        evidence_status = "shadow_review_ready"
+        if fresh_readiness_debt or manual_data_gate:
+            evidence_status = "shadow_review_ready_fresh_data_blocked"
+        elif result.get("comparison_status") != "ready_for_metric_comparison":
+            evidence_status = "metric_source_blocked"
+        elif visual_item.get("review_status") != "ready_for_visual_review":
+            evidence_status = "visual_review_blocked"
+        candidates.append(
+            {
+                "belief_id": belief_id,
+                "product_role": result.get("product_role"),
+                "champion": result.get("champion"),
+                "challenger": result.get("challenger"),
+                "comparison_status": result.get("comparison_status"),
+                "comparison_decision": result.get("decision"),
+                "evidence_status": evidence_status,
+                "metric_source_count": len(result.get("available_metric_sources", []) or []),
+                "metric_checklist": result.get("product_metric_checklist", {}),
+                "metric_summary": {
+                    "best_variant_id": metric_summary.get("best_variant_id", ""),
+                    "best_family_id": metric_summary.get("best_family_id", ""),
+                    "timeframe": metric_summary.get("timeframe", ""),
+                    "direction": metric_summary.get("direction", ""),
+                    "classification": metric_summary.get("classification", ""),
+                    "median_forward_relative_return": metric_summary.get("median_forward_relative_return"),
+                    "role_delta_vs_champion_baseline": metric_summary.get("role_delta_vs_champion_baseline"),
+                    "hit_rate": metric_summary.get("hit_rate"),
+                    "event_diversity": metric_summary.get("event_diversity"),
+                    "missed_upside_cost": metric_summary.get("missed_upside_cost"),
+                    "avoided_downside_benefit": metric_summary.get("avoided_downside_benefit"),
+                    "role_decision": metric_summary.get("role_decision", ""),
+                    "champion_baseline_median_forward_relative_return": metric_summary.get(
+                        "champion_baseline_median_forward_relative_return"
+                    ),
+                    "champion_baseline_hit_rate": metric_summary.get("champion_baseline_hit_rate"),
+                    "champion_baseline_method": metric_summary.get("champion_baseline_method", ""),
+                    "median_max_drawdown": metric_summary.get("median_max_drawdown"),
+                    "median_max_favorable_excursion": metric_summary.get("median_max_favorable_excursion"),
+                    "mfe_mae_ratio": metric_summary.get("mfe_mae_ratio"),
+                    "sample_size": metric_summary.get("sample_size"),
+                    "unique_symbols": metric_summary.get("unique_symbols"),
+                    "directional_edge_vs_unconditional": metric_summary.get("directional_edge_vs_unconditional"),
+                    "directional_edge_vs_cluster": metric_summary.get("directional_edge_vs_cluster"),
+                    "matched_null_directional_edge": metric_summary.get("matched_null_directional_edge"),
+                    "matched_null_p_value": metric_summary.get("matched_null_p_value"),
+                    "passes_both_baselines": metric_summary.get("passes_both_baselines"),
+                    "strict_survivors": metric_summary.get("strict_survivors"),
+                    "strict_survivor": metric_summary.get("strict_survivor"),
+                    "same_sample_promotion_blockers": metric_summary.get("same_sample_promotion_blockers", []),
+                    "source_notes": metric_summary.get("source_notes", ""),
+                },
+                "visual_review": {
+                    "status": visual_item.get("review_status", "missing"),
+                    "focus": visual_item.get("review_focus", ""),
+                    "priority": visual_item.get("visual_priority_score"),
+                    "review_questions": visual_item.get("review_questions", []),
+                    "required_labels": visual_item.get("required_labels", []),
+                    "gallery": visual_item.get("visual_review_gallery")
+                    or metric_summary.get("visual_review_gallery", ""),
+                    "labels_with_images": visual_item.get("visual_review_labels_with_images")
+                    or metric_summary.get("visual_review_labels_with_images", ""),
+                },
+                "validation": {
+                    "route": validation_item.get("validation_route", ""),
+                    "source_status": validation_item.get("source_status", ""),
+                    "source_count": validation_item.get("source_count", 0),
+                    "required_tests": validation_item.get("required_tests", []),
+                    "validation_completed": validation_item.get("validation_completed", False),
+                    "validation_result": validation_item.get("validation_result", "not_run"),
+                },
+                "source_refs": {
+                    "metric_sources": result.get("available_metric_sources", []) or [],
+                    "visual_evidence_sources": visual_item.get("evidence_sources", []) or [],
+                },
+                "review_only_frozen_spec": {
+                    "status": frozen_spec.get("validation_status", "missing_review_only_frozen_spec") if frozen_spec else "missing_review_only_frozen_spec",
+                    "entry_lag_bars": frozen_spec.get("entry_lag_bars", ""),
+                    "cooldown_bars": frozen_spec.get("cooldown_bars", ""),
+                    "terminal_outcome_column": frozen_spec.get("terminal_outcome_column", ""),
+                    "sample_size": frozen_spec.get("sample_size", ""),
+                    "unique_symbols": frozen_spec.get("unique_symbols", ""),
+                    "unique_event_clusters": frozen_spec.get("unique_event_clusters", ""),
+                    "same_sample_classification": frozen_spec.get("same_sample_classification", ""),
+                    "same_sample_promotion_blockers": frozen_spec.get("same_sample_promotion_blockers", []),
+                    "required_metrics": frozen_spec.get("required_metrics", []),
+                    "required_controls": frozen_spec.get("required_controls", []),
+                    "source_task_id": frozen_spec.get("source_task_id", ""),
+                    "source_result_path": frozen_spec.get("source_result_path", ""),
+                },
+                "evidence_debts": [
+                    {
+                        "debt_id": debt.get("debt_id"),
+                        "debt_kind": debt.get("debt_kind"),
+                        "blocker_type": debt.get("blocker_type"),
+                        "owner_command": debt.get("owner_command"),
+                    }
+                    for debt in candidate_debts
+                ],
+                "promotion_ceiling": "shadow_candidate",
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+
+    ready_visual = len([item for item in candidates if item.get("visual_review", {}).get("status") == "ready_for_visual_review"])
+    blocked_fresh = len([item for item in candidates if item.get("evidence_status") == "shadow_review_ready_fresh_data_blocked"])
+    review_spec_count = len(
+        [
+            item
+            for item in candidates
+            if item.get("review_only_frozen_spec", {}).get("status") == "spec_only_not_validated"
+        ]
+    )
+    official_plan_exists = bool(official_frozen_plan)
+    if not candidates:
+        status = "no_sidecar_candidates"
+        next_action = "run_champion_challenger"
+    elif manual_data_gate:
+        status = "manual_data_gate_blocks_validation"
+        next_action = "import_or_curate_fresh_ohlcv_data"
+    elif ready_visual < len(candidates):
+        status = "review_or_metric_source_gaps"
+        next_action = "complete_visual_review_or_repair_metric_sources"
+    else:
+        status = "shadow_evidence_ready_for_fresh_or_control_validation"
+        next_action = fresh_control_plan.get("next_action", "run_fresh_or_control_validation")
+
+    return {
+        "model": CEO_SIDECAR_EVIDENCE_BRIEF_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": status,
+        "candidate_count": len(candidates),
+        "ready_visual_review_count": ready_visual,
+        "fresh_data_blocked_count": blocked_fresh,
+        "review_only_frozen_spec_count": review_spec_count,
+        "official_frozen_candidate_validation_plan_exists": official_plan_exists,
+        "official_frozen_candidate_validation_plan_status": official_frozen_plan.get("status", "") if official_frozen_plan else "missing_official_frozen_plan",
+        "champion": champion_results.get("champion", "core_signal_v0"),
+        "champion_challenger_status": champion_results.get("status", ""),
+        "fresh_control_plan_status": fresh_control_plan.get("status", ""),
+        "fresh_data_preflight_status": fresh_data_preflight.get("overall_status", ""),
+        "safe_to_run_fresh_validation": preflight_safe,
+        "manual_data_gate_active": manual_data_gate,
+        "trace_grade_status": trace_grade.get("verdict", ""),
+        "trace_grade_score": trace_grade.get("score"),
+        "trace_grade_issues": trace_grade.get("issues", []),
+        "next_action": next_action,
+        "review_only_frozen_specs": frozen_specs,
+        "candidates": candidates,
+        "guardrail": (
+            "This brief summarizes shadow sidecar evidence only. It does not validate, promote, "
+            "or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_ceo_sidecar_evidence_brief(brief: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Evidence Brief",
+        "",
+        f"Generated: {brief.get('generated_at')}",
+        f"Run: {brief.get('run_id')}",
+        f"Lab run: {brief.get('lab_run_id')}",
+        f"Status: {brief.get('status')}",
+        f"Candidates: {brief.get('candidate_count')}",
+        f"Ready visual review: {brief.get('ready_visual_review_count')}",
+        f"Fresh-data blocked: {brief.get('fresh_data_blocked_count')}",
+        f"Review-only frozen specs: {brief.get('review_only_frozen_spec_count')}",
+        f"Official frozen plan exists: {brief.get('official_frozen_candidate_validation_plan_exists')}",
+        f"Manual data gate active: {brief.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}",
+        f"Trace grade: {brief.get('trace_grade_status')} score={brief.get('trace_grade_score')}",
+        f"Next action: {brief.get('next_action')}",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not brief.get("candidates"):
+        lines.append("- none")
+    for item in brief.get("candidates", []) or []:
+        metric = item.get("metric_summary", {}) or {}
+        visual = item.get("visual_review", {}) or {}
+        validation = item.get("validation", {}) or {}
+        frozen_spec = item.get("review_only_frozen_spec", {}) or {}
+        debt_kinds = [str(debt.get("debt_kind", "")) for debt in item.get("evidence_debts", []) or [] if debt.get("debt_kind")]
+        debt_text = ", ".join(debt_kinds) if debt_kinds else "none"
+        review_questions = _csv_list(visual.get("review_questions", []) or []) or "none"
+        required_labels = _csv_list(visual.get("required_labels", []) or []) or "none"
+        lines.extend(
+            [
+                f"### {item.get('belief_id')}",
+                "",
+                f"- Role: {item.get('product_role')}",
+                f"- Evidence status: {item.get('evidence_status')}",
+                f"- Champion: {item.get('champion')}",
+                f"- Challenger: {item.get('challenger')}",
+                f"- Comparison decision: {item.get('comparison_decision')}",
+                f"- Best family/timeframe: {metric.get('best_family_id') or 'none'} / {metric.get('timeframe') or 'none'}",
+                f"- Direction/classification: {metric.get('direction') or 'none'} / {metric.get('classification') or 'none'}",
+                f"- Median forward relative return: {metric.get('median_forward_relative_return')}",
+                f"- Role delta vs champion baseline: {metric.get('role_delta_vs_champion_baseline')}",
+                f"- Hit rate: {metric.get('hit_rate')}",
+                f"- Event diversity: {metric.get('event_diversity')}",
+                f"- Visual review: {visual.get('status')} focus={visual.get('focus') or 'none'} priority={visual.get('priority')}",
+                f"- Review questions: {review_questions}",
+                f"- Required visual labels: {required_labels}",
+                f"- Visual review gallery: {visual.get('gallery') or 'none'}",
+                f"- Visual review labels with images: {visual.get('labels_with_images') or 'none'}",
+                f"- Validation: route={validation.get('route') or 'none'} status={validation.get('validation_result')}",
+                f"- Review-only frozen spec: status={frozen_spec.get('status')} entry_lag={frozen_spec.get('entry_lag_bars')} cooldown={frozen_spec.get('cooldown_bars')} outcome={frozen_spec.get('terminal_outcome_column') or 'none'}",
+                f"- Evidence debts: {debt_text}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(brief.get("guardrail")),
+            f"Product language allowed: {brief.get('product_language_allowed')}",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_EVIDENCE_CANDIDATE_FIELDS = [
+    "belief_id",
+    "product_role",
+    "evidence_status",
+    "champion",
+    "challenger",
+    "comparison_status",
+    "comparison_decision",
+    "metric_source_count",
+    "metric_checklist_complete",
+    "metric_checklist_completion_ratio",
+    "metric_checklist_missing",
+    "best_variant_id",
+    "best_family_id",
+    "timeframe",
+    "direction",
+    "classification",
+    "median_forward_relative_return",
+    "role_delta_vs_champion_baseline",
+    "hit_rate",
+    "event_diversity",
+    "missed_upside_cost",
+    "avoided_downside_benefit",
+    "role_decision",
+    "visual_review_status",
+    "visual_review_focus",
+    "visual_priority",
+    "required_visual_labels",
+    "validation_route",
+    "validation_source_status",
+    "validation_source_count",
+    "validation_completed",
+    "validation_result",
+    "required_tests",
+    "review_only_frozen_spec_status",
+    "review_only_entry_lag_bars",
+    "review_only_cooldown_bars",
+    "review_only_terminal_outcome_column",
+    "review_only_sample_size",
+    "review_only_unique_symbols",
+    "review_only_unique_event_clusters",
+    "review_only_same_sample_classification",
+    "review_only_promotion_blockers",
+    "evidence_debt_ids",
+    "evidence_debt_kinds",
+    "evidence_debt_blockers",
+    "evidence_debt_owner_commands",
+    "promotion_ceiling",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _csv_list(items: list[Any]) -> str:
+    return "|".join(str(item) for item in items if str(item))
+
+
+def _sidecar_quality_issue_summary(issues: list[dict[str, Any]], *, limit: int = 3) -> str:
+    summaries: list[str] = []
+    for issue in issues[: max(0, limit)]:
+        belief_id = str(issue.get("belief_id", "") or "unknown")
+        findings = _csv_list(issue.get("findings", []) or []) or "none"
+        missing_fields = _csv_list(
+            (issue.get("missing_core_metric_fields", []) or [])
+            + (issue.get("missing_advisory_metric_fields", []) or [])
+        )
+        suffix = f" missing={missing_fields}" if missing_fields else ""
+        summaries.append(f"{belief_id}:{findings}{suffix}")
+    remaining = max(0, len(issues) - len(summaries))
+    if remaining:
+        summaries.append(f"+{remaining}_more")
+    return "; ".join(summaries)
+
+
+def _sidecar_candidate_csv_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    metric = candidate.get("metric_summary", {}) or {}
+    checklist = candidate.get("metric_checklist", {}) or {}
+    visual = candidate.get("visual_review", {}) or {}
+    validation = candidate.get("validation", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    debts = list(candidate.get("evidence_debts", []) or [])
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "evidence_status": candidate.get("evidence_status", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "comparison_status": candidate.get("comparison_status", ""),
+        "comparison_decision": candidate.get("comparison_decision", ""),
+        "metric_source_count": candidate.get("metric_source_count", ""),
+        "metric_checklist_complete": checklist.get("complete", ""),
+        "metric_checklist_completion_ratio": checklist.get("completion_ratio", ""),
+        "metric_checklist_missing": _csv_list(checklist.get("missing", []) or []),
+        "best_variant_id": metric.get("best_variant_id", ""),
+        "best_family_id": metric.get("best_family_id", ""),
+        "timeframe": metric.get("timeframe", ""),
+        "direction": metric.get("direction", ""),
+        "classification": metric.get("classification", ""),
+        "median_forward_relative_return": metric.get("median_forward_relative_return"),
+        "role_delta_vs_champion_baseline": metric.get("role_delta_vs_champion_baseline"),
+        "hit_rate": metric.get("hit_rate"),
+        "event_diversity": metric.get("event_diversity"),
+        "missed_upside_cost": metric.get("missed_upside_cost"),
+        "avoided_downside_benefit": metric.get("avoided_downside_benefit"),
+        "role_decision": metric.get("role_decision", ""),
+        "visual_review_status": visual.get("status", ""),
+        "visual_review_focus": visual.get("focus", ""),
+        "visual_priority": visual.get("priority"),
+        "required_visual_labels": _csv_list(visual.get("required_labels", []) or []),
+        "validation_route": validation.get("route", ""),
+        "validation_source_status": validation.get("source_status", ""),
+        "validation_source_count": validation.get("source_count", ""),
+        "validation_completed": validation.get("validation_completed", ""),
+        "validation_result": validation.get("validation_result", ""),
+        "required_tests": _csv_list(validation.get("required_tests", []) or []),
+        "review_only_frozen_spec_status": frozen_spec.get("status", ""),
+        "review_only_entry_lag_bars": frozen_spec.get("entry_lag_bars", ""),
+        "review_only_cooldown_bars": frozen_spec.get("cooldown_bars", ""),
+        "review_only_terminal_outcome_column": frozen_spec.get("terminal_outcome_column", ""),
+        "review_only_sample_size": frozen_spec.get("sample_size", ""),
+        "review_only_unique_symbols": frozen_spec.get("unique_symbols", ""),
+        "review_only_unique_event_clusters": frozen_spec.get("unique_event_clusters", ""),
+        "review_only_same_sample_classification": frozen_spec.get("same_sample_classification", ""),
+        "review_only_promotion_blockers": _csv_list(frozen_spec.get("same_sample_promotion_blockers", []) or []),
+        "evidence_debt_ids": _csv_list([debt.get("debt_id", "") for debt in debts]),
+        "evidence_debt_kinds": _csv_list([debt.get("debt_kind", "") for debt in debts]),
+        "evidence_debt_blockers": _csv_list([debt.get("blocker_type", "") for debt in debts]),
+        "evidence_debt_owner_commands": _csv_list([debt.get("owner_command", "") for debt in debts]),
+        "promotion_ceiling": candidate.get("promotion_ceiling", ""),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def write_sidecar_evidence_candidates(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_EVIDENCE_CANDIDATE_FIELDS)
+        writer.writeheader()
+        for candidate in candidates:
+            row = _sidecar_candidate_csv_row(candidate)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_EVIDENCE_CANDIDATE_FIELDS
+                }
+            )
+
+
+SIDECAR_FROZEN_SPEC_REVIEW_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "variant_id",
+    "family_id",
+    "detector",
+    "direction",
+    "timeframe",
+    "entry_lag_bars",
+    "cooldown_bars",
+    "terminal_outcome_column",
+    "sample_size",
+    "unique_symbols",
+    "unique_event_clusters",
+    "same_sample_classification",
+    "same_sample_promotion_blockers",
+    "required_metrics",
+    "required_controls",
+    "validation_status",
+    "recommended_next_action",
+    "source_task_id",
+    "source_result_path",
+    "official_frozen_plan_exists",
+    "product_language_allowed",
+    "production_effect",
+    "promotion_authority",
+]
+
+
+def _load_review_only_frozen_specs(root: Path) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    result_dir = root / "specialist_results"
+    if not result_dir.exists():
+        return specs
+    for path in sorted(result_dir.glob("*__frozen_validation_spec.yaml")):
+        result = _load_yaml_if_exists(path)
+        frozen_spec = result.get("frozen_spec", {}) or {}
+        if not frozen_spec:
+            continue
+        specs.append(
+            {
+                **frozen_spec,
+                "recommended_next_action": result.get("recommended_next_action", ""),
+                "source_task_id": result.get("task_id", path.stem),
+                "source_result_path": str(path),
+                "product_language_allowed": result.get("product_language_allowed", False),
+                "production_effect": result.get("production_effect", "none"),
+                "promotion_authority": result.get("promotion_authority", "none"),
+            }
+        )
+    return specs
+
+
+def write_sidecar_frozen_spec_review(
+    path: Path,
+    specs: list[dict[str, Any]],
+    *,
+    official_frozen_plan_exists: bool,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_FROZEN_SPEC_REVIEW_FIELDS)
+        writer.writeheader()
+        for spec in specs:
+            row = {
+                "belief_id": spec.get("belief_id", ""),
+                "product_role": spec.get("product_role", ""),
+                "champion": spec.get("champion", ""),
+                "challenger": spec.get("challenger", ""),
+                "variant_id": spec.get("variant_id", ""),
+                "family_id": spec.get("family_id", ""),
+                "detector": spec.get("detector", ""),
+                "direction": spec.get("direction", ""),
+                "timeframe": spec.get("timeframe", ""),
+                "entry_lag_bars": spec.get("entry_lag_bars", ""),
+                "cooldown_bars": spec.get("cooldown_bars", ""),
+                "terminal_outcome_column": spec.get("terminal_outcome_column", ""),
+                "sample_size": spec.get("sample_size", ""),
+                "unique_symbols": spec.get("unique_symbols", ""),
+                "unique_event_clusters": spec.get("unique_event_clusters", ""),
+                "same_sample_classification": spec.get("same_sample_classification", ""),
+                "same_sample_promotion_blockers": _csv_list(spec.get("same_sample_promotion_blockers", []) or []),
+                "required_metrics": _csv_list(spec.get("required_metrics", []) or []),
+                "required_controls": _csv_list(spec.get("required_controls", []) or []),
+                "validation_status": spec.get("validation_status", ""),
+                "recommended_next_action": spec.get("recommended_next_action", ""),
+                "source_task_id": spec.get("source_task_id", ""),
+                "source_result_path": spec.get("source_result_path", ""),
+                "official_frozen_plan_exists": official_frozen_plan_exists,
+                "product_language_allowed": spec.get("product_language_allowed", False),
+                "production_effect": spec.get("production_effect", "none"),
+                "promotion_authority": spec.get("promotion_authority", "none"),
+            }
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_FROZEN_SPEC_REVIEW_FIELDS
+                }
+            )
+
+
+SIDECAR_VISUAL_REVIEW_HANDOFF_FIELDS = [
+    "belief_id",
+    "product_role",
+    "review_status",
+    "review_focus",
+    "visual_priority",
+    "review_questions",
+    "required_labels",
+    "visual_review_gallery",
+    "visual_review_labels_with_images",
+    "champion",
+    "challenger",
+    "comparison_decision",
+    "best_family_id",
+    "timeframe",
+    "direction",
+    "classification",
+    "role_delta_vs_champion_baseline",
+    "hit_rate",
+    "event_diversity",
+    "same_sample_promotion_blockers",
+    "evidence_status",
+    "fresh_data_blocked",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_priority(candidate: dict[str, Any]) -> float:
+    priority = (candidate.get("visual_review", {}) or {}).get("priority", 0)
+    try:
+        return float(priority)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sidecar_visual_review_handoff_csv_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    visual = candidate.get("visual_review", {}) or {}
+    metric = candidate.get("metric_summary", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    evidence_status = str(candidate.get("evidence_status", ""))
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "review_status": visual.get("status", ""),
+        "review_focus": visual.get("focus", ""),
+        "visual_priority": visual.get("priority", ""),
+        "review_questions": _csv_list(visual.get("review_questions", []) or []),
+        "required_labels": _csv_list(visual.get("required_labels", []) or []),
+        "visual_review_gallery": visual.get("gallery", ""),
+        "visual_review_labels_with_images": visual.get("labels_with_images", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "comparison_decision": candidate.get("comparison_decision", ""),
+        "best_family_id": metric.get("best_family_id", ""),
+        "timeframe": metric.get("timeframe", ""),
+        "direction": metric.get("direction", ""),
+        "classification": metric.get("classification", ""),
+        "role_delta_vs_champion_baseline": metric.get("role_delta_vs_champion_baseline"),
+        "hit_rate": metric.get("hit_rate"),
+        "event_diversity": metric.get("event_diversity"),
+        "same_sample_promotion_blockers": _csv_list(frozen_spec.get("same_sample_promotion_blockers", []) or []),
+        "evidence_status": evidence_status,
+        "fresh_data_blocked": evidence_status == "shadow_review_ready_fresh_data_blocked",
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def write_sidecar_visual_review_handoff(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = sorted(candidates, key=_sidecar_visual_priority, reverse=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_REVIEW_HANDOFF_FIELDS)
+        writer.writeheader()
+        for candidate in sorted_candidates:
+            row = _sidecar_visual_review_handoff_csv_row(candidate)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_REVIEW_HANDOFF_FIELDS
+                }
+            )
+
+
+SIDECAR_VISUAL_REVIEW_COVERAGE_FIELDS = [
+    "belief_id",
+    "product_role",
+    "review_status",
+    "review_focus",
+    "visual_priority",
+    "review_question_count",
+    "required_label_count",
+    "required_labels",
+    "visual_review_gallery",
+    "visual_review_gallery_resolved_path",
+    "visual_review_gallery_exists",
+    "visual_review_labels_with_images",
+    "visual_review_labels_resolved_path",
+    "visual_review_labels_exists",
+    "label_row_count",
+    "human_review_completed_rows",
+    "suggested_not_visually_reviewed_rows",
+    "rendered_image_rows",
+    "review_completion_status",
+    "human_label_completion_status",
+    "fresh_data_blocked",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_label_completion(path: Path, required_labels: list[Any]) -> dict[str, Any]:
+    if not path.exists() or not path.is_file() or path.suffix.lower() != ".csv":
+        return {
+            "label_row_count": "",
+            "human_review_completed_rows": "",
+            "suggested_not_visually_reviewed_rows": "",
+            "rendered_image_rows": "",
+            "human_label_completion_status": "missing_labels",
+        }
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {
+            "label_row_count": "",
+            "human_review_completed_rows": "",
+            "suggested_not_visually_reviewed_rows": "",
+            "rendered_image_rows": "",
+            "human_label_completion_status": "labels_unreadable",
+        }
+    label_columns = ["human_label"]
+    label_columns.extend(str(label) for label in required_labels if str(label))
+    completed_rows = sum(
+        1
+        for row in rows
+        if any(str(row.get(column, "")).strip() for column in label_columns if column in row)
+    )
+    not_reviewed_rows = sum(
+        1
+        for row in rows
+        if "not_visually_reviewed" in str(row.get("suggested_labels", ""))
+    )
+    rendered_rows = sum(1 for row in rows if str(row.get("render_status", "")).strip() == "rendered")
+    if not rows:
+        status = "no_label_rows"
+    elif completed_rows == 0:
+        status = "human_review_not_started"
+    elif completed_rows < len(rows):
+        status = "human_review_in_progress"
+    else:
+        status = "human_review_labels_populated"
+    return {
+        "label_row_count": len(rows),
+        "human_review_completed_rows": completed_rows,
+        "suggested_not_visually_reviewed_rows": not_reviewed_rows,
+        "rendered_image_rows": rendered_rows,
+        "human_label_completion_status": status,
+    }
+
+
+def _sidecar_visual_coverage_status(
+    *,
+    review_status: str,
+    gallery_ref: str,
+    gallery_exists: bool,
+    labels_ref: str,
+    labels_exists: bool,
+    label_row_count: int | str,
+) -> str:
+    if review_status != "ready_for_visual_review":
+        return "not_ready_for_visual_review"
+    if not gallery_ref and not labels_ref:
+        return "missing_visual_review_refs"
+    if not gallery_exists and not labels_exists:
+        return "missing_gallery_and_labels"
+    if not gallery_exists:
+        return "missing_gallery"
+    if not labels_exists:
+        return "missing_labels"
+    if label_row_count == "":
+        return "labels_unreadable"
+    if int(label_row_count) <= 0:
+        return "empty_labels"
+    return "review_assets_ready"
+
+
+def _sidecar_visual_review_coverage_row(
+    candidate: dict[str, Any],
+    *,
+    source_root: Path,
+    run_root: Path,
+) -> dict[str, Any]:
+    visual = candidate.get("visual_review", {}) or {}
+    review_questions = visual.get("review_questions", []) or []
+    required_labels = visual.get("required_labels", []) or []
+    gallery_ref = str(visual.get("gallery", "") or "")
+    labels_ref = str(visual.get("labels_with_images", "") or "")
+    gallery_path = _resolve_sidecar_source_ref(gallery_ref, source_root=source_root, run_root=run_root)
+    labels_path = _resolve_sidecar_source_ref(labels_ref, source_root=source_root, run_root=run_root)
+    gallery_exists = bool(gallery_ref and gallery_path.exists() and gallery_path.is_file())
+    labels_exists = bool(labels_ref and labels_path.exists() and labels_path.is_file())
+    label_completion = (
+        _sidecar_visual_label_completion(labels_path, required_labels)
+        if labels_exists
+        else {
+            "label_row_count": "",
+            "human_review_completed_rows": "",
+            "suggested_not_visually_reviewed_rows": "",
+            "rendered_image_rows": "",
+            "human_label_completion_status": "missing_labels",
+        }
+    )
+    label_row_count = label_completion.get("label_row_count", "")
+    review_status = str(visual.get("status", "") or "")
+    evidence_status = str(candidate.get("evidence_status", ""))
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "review_status": review_status,
+        "review_focus": visual.get("focus", ""),
+        "visual_priority": visual.get("priority", ""),
+        "review_question_count": len(review_questions),
+        "required_label_count": len(required_labels),
+        "required_labels": _csv_list(required_labels),
+        "visual_review_gallery": gallery_ref,
+        "visual_review_gallery_resolved_path": str(gallery_path) if gallery_ref else "",
+        "visual_review_gallery_exists": gallery_exists,
+        "visual_review_labels_with_images": labels_ref,
+        "visual_review_labels_resolved_path": str(labels_path) if labels_ref else "",
+        "visual_review_labels_exists": labels_exists,
+        "label_row_count": label_row_count,
+        "human_review_completed_rows": label_completion.get("human_review_completed_rows", ""),
+        "suggested_not_visually_reviewed_rows": label_completion.get("suggested_not_visually_reviewed_rows", ""),
+        "rendered_image_rows": label_completion.get("rendered_image_rows", ""),
+        "review_completion_status": _sidecar_visual_coverage_status(
+            review_status=review_status,
+            gallery_ref=gallery_ref,
+            gallery_exists=gallery_exists,
+            labels_ref=labels_ref,
+            labels_exists=labels_exists,
+            label_row_count=label_row_count,
+        ),
+        "human_label_completion_status": label_completion.get("human_label_completion_status", ""),
+        "fresh_data_blocked": evidence_status == "shadow_review_ready_fresh_data_blocked",
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_visual_review_coverage(
+    *,
+    brief: dict[str, Any],
+    source_root: Path,
+    run_root: Path,
+) -> dict[str, Any]:
+    rows = [
+        _sidecar_visual_review_coverage_row(candidate, source_root=source_root, run_root=run_root)
+        for candidate in sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    ]
+    ready_count = sum(1 for row in rows if row.get("review_completion_status") == "review_assets_ready")
+    missing_count = sum(
+        1
+        for row in rows
+        if str(row.get("review_completion_status", "")).startswith("missing_")
+        or row.get("review_completion_status") == "labels_unreadable"
+    )
+    empty_label_count = sum(1 for row in rows if row.get("review_completion_status") == "empty_labels")
+    human_review_started_count = sum(
+        1
+        for row in rows
+        if row.get("human_label_completion_status")
+        not in {"human_review_not_started", "no_label_rows", "missing_labels", "labels_unreadable", ""}
+    )
+    human_review_pending_count = sum(
+        1
+        for row in rows
+        if row.get("human_label_completion_status") in {"human_review_not_started", "no_label_rows"}
+    )
+    return {
+        "model": CEO_SIDECAR_VISUAL_REVIEW_COVERAGE_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": (
+            "no_visual_review_candidates"
+            if not rows
+            else "visual_review_assets_ready"
+            if ready_count == len(rows)
+            else "visual_review_assets_have_gaps"
+        ),
+        "candidate_count": len(rows),
+        "review_assets_ready_count": ready_count,
+        "missing_asset_count": missing_count,
+        "empty_label_count": empty_label_count,
+        "human_review_started_count": human_review_started_count,
+        "human_review_pending_count": human_review_pending_count,
+        "rows": rows,
+        "guardrail": (
+            "This coverage audit checks visual-review asset existence and label row counts only. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_review_coverage(path: Path, coverage: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_REVIEW_COVERAGE_FIELDS)
+        writer.writeheader()
+        for row in coverage.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_REVIEW_COVERAGE_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_review_coverage(coverage: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual-Review Coverage",
+        "",
+        f"Generated: {coverage.get('generated_at')}",
+        f"Run: {coverage.get('run_id')}",
+        f"Lab run: {coverage.get('lab_run_id')}",
+        f"Status: {coverage.get('status')}",
+        f"Candidates: {coverage.get('candidate_count')}",
+        f"Review assets ready: {coverage.get('review_assets_ready_count')}",
+        f"Missing assets: {coverage.get('missing_asset_count')}",
+        f"Empty label files: {coverage.get('empty_label_count')}",
+        f"Human review started: {coverage.get('human_review_started_count')}",
+        f"Human review pending: {coverage.get('human_review_pending_count')}",
+        "",
+        "This is a visual-review asset coverage audit. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not coverage.get("rows"):
+        lines.append("- No visual-review candidates.")
+    for row in coverage.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### {row.get('belief_id')}",
+                "",
+                f"- Product role: {row.get('product_role')}",
+                f"- Review status: {row.get('review_status')}",
+                f"- Review focus: {row.get('review_focus')}",
+                f"- Visual priority: {row.get('visual_priority')}",
+                f"- Review questions: {row.get('review_question_count')}",
+                f"- Required labels: {row.get('required_labels') or 'none'}",
+                f"- Gallery: {row.get('visual_review_gallery') or 'none'}",
+                f"- Gallery exists: {row.get('visual_review_gallery_exists')}",
+                f"- Labels: {row.get('visual_review_labels_with_images') or 'none'}",
+                f"- Labels exists: {row.get('visual_review_labels_exists')}",
+                f"- Label rows: {row.get('label_row_count') if row.get('label_row_count') != '' else 'n/a'}",
+                f"- Human review completed rows: {row.get('human_review_completed_rows') if row.get('human_review_completed_rows') != '' else 'n/a'}",
+                f"- Suggested not-visually-reviewed rows: {row.get('suggested_not_visually_reviewed_rows') if row.get('suggested_not_visually_reviewed_rows') != '' else 'n/a'}",
+                f"- Rendered image rows: {row.get('rendered_image_rows') if row.get('rendered_image_rows') != '' else 'n/a'}",
+                f"- Review completion status: {row.get('review_completion_status')}",
+                f"- Human label completion status: {row.get('human_label_completion_status')}",
+                f"- Fresh-data blocked: {row.get('fresh_data_blocked')}",
+                f"- Product language allowed: {row.get('product_language_allowed')}",
+                f"- Production effect: {row.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(coverage.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_WORKLIST_FIELDS = [
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "visual_priority",
+    "candidate_family_id",
+    "candidate_timeframe",
+    "candidate_variant_id",
+    "row_match",
+    "source_label_file",
+    "source_label_row_number",
+    "review_bucket",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "event_cluster_id",
+    "family_id",
+    "variant_id",
+    "direction",
+    "review_outcome_column",
+    "review_outcome",
+    "review_abs_outcome",
+    "forward_return",
+    "max_drawdown",
+    "max_favorable_excursion",
+    "suggested_labels",
+    "human_label",
+    "visual_readability",
+    "product_role_match",
+    "false_positive_shape",
+    "promotion_blocker",
+    "missing_required_labels",
+    "human_label_status",
+    "image_path",
+    "render_status",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_row_match(candidate: dict[str, Any], label_row: dict[str, str]) -> str:
+    metric = candidate.get("metric_summary", {}) or {}
+    candidate_variant = str(metric.get("best_variant_id", "") or "")
+    candidate_family = str(metric.get("best_family_id", "") or "")
+    candidate_timeframe = str(metric.get("timeframe", "") or "")
+    row_variant = str(label_row.get("variant_id", "") or "")
+    row_family = str(label_row.get("family_id", "") or "")
+    row_timeframe = str(label_row.get("timeframe", "") or "")
+    if candidate_variant and row_variant == candidate_variant:
+        return "exact_variant"
+    if candidate_family and row_family == candidate_family and candidate_timeframe and row_timeframe == candidate_timeframe:
+        return "family_timeframe"
+    if candidate_family and row_family == candidate_family:
+        return "family_context"
+    return ""
+
+
+def _sidecar_visual_required_label_status(
+    label_row: dict[str, str],
+    required_labels: list[Any],
+) -> dict[str, Any]:
+    required = [str(label) for label in required_labels if str(label)]
+    missing = [label for label in required if not str(label_row.get(label, "") or "").strip()]
+    completed = [label for label in required if str(label_row.get(label, "") or "").strip()]
+    human_label_present = bool(str(label_row.get("human_label", "") or "").strip())
+    if not required:
+        status = "no_required_labels"
+    elif not completed and not human_label_present:
+        status = "human_review_not_started"
+    elif missing:
+        status = "human_review_incomplete"
+    else:
+        status = "human_review_labels_populated"
+    return {
+        "missing_required_labels": missing,
+        "completed_required_labels": completed,
+        "human_label_status": status,
+    }
+
+
+def _sidecar_visual_label_worklist_row(
+    *,
+    rank: int,
+    candidate: dict[str, Any],
+    label_row: dict[str, str],
+    source_label_file: str,
+    source_label_row_number: int,
+    row_match: str,
+    label_status: dict[str, Any],
+) -> dict[str, Any]:
+    metric = candidate.get("metric_summary", {}) or {}
+    visual = candidate.get("visual_review", {}) or {}
+    return {
+        "worklist_rank": rank,
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "review_focus": visual.get("focus", ""),
+        "visual_priority": visual.get("priority", ""),
+        "candidate_family_id": metric.get("best_family_id", ""),
+        "candidate_timeframe": metric.get("timeframe", ""),
+        "candidate_variant_id": metric.get("best_variant_id", ""),
+        "row_match": row_match,
+        "source_label_file": source_label_file,
+        "source_label_row_number": source_label_row_number,
+        "review_bucket": label_row.get("review_bucket", ""),
+        "symbol": label_row.get("symbol", ""),
+        "date": label_row.get("date", ""),
+        "row_timeframe": label_row.get("timeframe", ""),
+        "event_cluster_id": label_row.get("event_cluster_id", ""),
+        "family_id": label_row.get("family_id", ""),
+        "variant_id": label_row.get("variant_id", ""),
+        "direction": label_row.get("direction", ""),
+        "review_outcome_column": label_row.get("review_outcome_column", ""),
+        "review_outcome": label_row.get("review_outcome", ""),
+        "review_abs_outcome": label_row.get("review_abs_outcome", ""),
+        "forward_return": label_row.get("forward_return", ""),
+        "max_drawdown": label_row.get("max_drawdown", ""),
+        "max_favorable_excursion": label_row.get("max_favorable_excursion", ""),
+        "suggested_labels": label_row.get("suggested_labels", ""),
+        "human_label": label_row.get("human_label", ""),
+        "visual_readability": label_row.get("visual_readability", ""),
+        "product_role_match": label_row.get("product_role_match", ""),
+        "false_positive_shape": label_row.get("false_positive_shape", ""),
+        "promotion_blocker": label_row.get("promotion_blocker", ""),
+        "missing_required_labels": _csv_list(label_status.get("missing_required_labels", []) or []),
+        "human_label_status": label_status.get("human_label_status", ""),
+        "image_path": label_row.get("image_path", ""),
+        "render_status": label_row.get("render_status", ""),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _sidecar_visual_label_candidate_summary(
+    *,
+    candidate: dict[str, Any],
+    pending_rows: list[dict[str, Any]],
+    matched_row_count: int,
+) -> dict[str, Any]:
+    visual = candidate.get("visual_review", {}) or {}
+    metric = candidate.get("metric_summary", {}) or {}
+    exact_count = sum(1 for row in pending_rows if row.get("row_match") == "exact_variant")
+    timeframe_count = sum(1 for row in pending_rows if row.get("row_match") == "family_timeframe")
+    context_count = sum(1 for row in pending_rows if row.get("row_match") == "family_context")
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "review_focus": visual.get("focus", ""),
+        "visual_priority": visual.get("priority", ""),
+        "required_labels": _csv_list(visual.get("required_labels", []) or []),
+        "candidate_family_id": metric.get("best_family_id", ""),
+        "candidate_timeframe": metric.get("timeframe", ""),
+        "matched_label_rows": matched_row_count,
+        "pending_label_rows": len(pending_rows),
+        "exact_variant_pending_rows": exact_count,
+        "family_timeframe_pending_rows": timeframe_count,
+        "family_context_pending_rows": context_count,
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _read_sidecar_visual_label_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists() or not path.is_file() or path.suffix.lower() != ".csv":
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
+    except OSError:
+        return []
+
+
+def build_sidecar_visual_label_worklist(
+    *,
+    brief: dict[str, Any],
+    visual_review_coverage: dict[str, Any],
+    source_root: Path,
+    run_root: Path,
+) -> dict[str, Any]:
+    source_rows_by_file: dict[str, list[dict[str, str]]] = {}
+    candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    worklist_rows: list[dict[str, Any]] = []
+    candidate_summaries: list[dict[str, Any]] = []
+    matched_source_keys: set[tuple[str, int]] = set()
+    coverage_by_belief = {
+        str(row.get("belief_id", "")): row
+        for row in (visual_review_coverage.get("rows", []) or [])
+        if row.get("belief_id")
+    }
+
+    pending_rows_by_candidate: dict[str, list[dict[str, Any]]] = {}
+    matched_counts_by_candidate: dict[str, int] = {}
+    for candidate in candidates:
+        belief_id = str(candidate.get("belief_id", ""))
+        visual = candidate.get("visual_review", {}) or {}
+        label_ref = str(visual.get("labels_with_images", "") or "")
+        label_path = _resolve_sidecar_source_ref(label_ref, source_root=source_root, run_root=run_root)
+        label_file_key = label_ref or str(label_path)
+        if label_file_key not in source_rows_by_file:
+            source_rows_by_file[label_file_key] = _read_sidecar_visual_label_rows(label_path)
+        label_rows = source_rows_by_file[label_file_key]
+        required_labels = list(visual.get("required_labels", []) or [])
+        candidate_pending: list[dict[str, Any]] = []
+        matched_count = 0
+        for row_number, label_row in enumerate(label_rows, start=1):
+            row_match = _sidecar_visual_row_match(candidate, label_row)
+            if not row_match:
+                continue
+            matched_count += 1
+            matched_source_keys.add((label_file_key, row_number))
+            label_status = _sidecar_visual_required_label_status(label_row, required_labels)
+            if label_status.get("human_label_status") == "human_review_labels_populated":
+                continue
+            candidate_pending.append(
+                _sidecar_visual_label_worklist_row(
+                    rank=0,
+                    candidate=candidate,
+                    label_row=label_row,
+                    source_label_file=label_file_key,
+                    source_label_row_number=row_number,
+                    row_match=row_match,
+                    label_status=label_status,
+                )
+            )
+        pending_rows_by_candidate[belief_id] = candidate_pending
+        matched_counts_by_candidate[belief_id] = matched_count
+        candidate_summaries.append(
+            _sidecar_visual_label_candidate_summary(
+                candidate=candidate,
+                pending_rows=candidate_pending,
+                matched_row_count=matched_count,
+            )
+        )
+
+    match_order = {"exact_variant": 0, "family_timeframe": 1, "family_context": 2}
+    for pending_rows in pending_rows_by_candidate.values():
+        worklist_rows.extend(pending_rows)
+    worklist_rows.sort(
+        key=lambda row: (
+            -_to_float_or_none(row.get("visual_priority")) if _to_float_or_none(row.get("visual_priority")) is not None else 0,
+            match_order.get(str(row.get("row_match", "")), 9),
+            int(row.get("source_label_row_number", 0) or 0),
+        )
+    )
+    for index, row in enumerate(worklist_rows, start=1):
+        row["worklist_rank"] = index
+
+    source_label_row_count = sum(len(rows) for rows in source_rows_by_file.values())
+    unmatched_source_row_count = max(0, source_label_row_count - len(matched_source_keys))
+    pending_count = len(worklist_rows)
+    if not candidates:
+        status = "no_visual_review_candidates"
+        next_action = "build_sidecar_candidates_before_visual_label_review"
+    elif source_label_row_count == 0:
+        status = "no_visual_label_source_rows"
+        next_action = "regenerate_visual_review_label_packet"
+    elif not matched_source_keys:
+        status = "no_candidate_matched_label_rows"
+        next_action = "repair_visual_label_candidate_family_mapping"
+    elif pending_count:
+        status = "pending_human_visual_review_labels"
+        next_action = "complete_candidate_matched_human_visual_labels"
+    else:
+        status = "human_visual_review_labels_populated"
+        next_action = "rerun_sidecar_evidence_brief_and_role_queue"
+    coverage_statuses = _csv_list(
+        sorted(
+            {
+                str(row.get("human_label_completion_status", ""))
+                for row in coverage_by_belief.values()
+                if row.get("human_label_completion_status")
+            }
+        )
+    )
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_WORKLIST_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": status,
+        "candidate_count": len(candidates),
+        "source_label_file_count": len(source_rows_by_file),
+        "source_label_row_count": source_label_row_count,
+        "candidate_matched_source_row_count": len(matched_source_keys),
+        "unmatched_source_row_count": unmatched_source_row_count,
+        "pending_label_row_count": pending_count,
+        "coverage_human_label_statuses": coverage_statuses,
+        "next_action": next_action,
+        "candidate_summaries": candidate_summaries,
+        "rows": worklist_rows,
+        "guardrail": (
+            "This worklist filters candidate-matched rows that still need human visual labels. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_worklist(path: Path, worklist: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_WORKLIST_FIELDS)
+        writer.writeheader()
+        for row in worklist.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_WORKLIST_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_worklist(worklist: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Worklist",
+        "",
+        f"Generated: {worklist.get('generated_at')}",
+        f"Run: {worklist.get('run_id')}",
+        f"Lab run: {worklist.get('lab_run_id')}",
+        f"Status: {worklist.get('status')}",
+        f"Candidates: {worklist.get('candidate_count')}",
+        f"Source label files: {worklist.get('source_label_file_count')}",
+        f"Source label rows: {worklist.get('source_label_row_count')}",
+        f"Candidate-matched source rows: {worklist.get('candidate_matched_source_row_count')}",
+        f"Unmatched source rows: {worklist.get('unmatched_source_row_count')}",
+        f"Pending label rows: {worklist.get('pending_label_row_count')}",
+        f"Coverage human-label statuses: {worklist.get('coverage_human_label_statuses') or 'none'}",
+        f"Next action: {worklist.get('next_action')}",
+        "",
+        "This is a human-review worklist. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Candidate Summary",
+        "",
+    ]
+    if not worklist.get("candidate_summaries"):
+        lines.append("- none")
+    for summary in worklist.get("candidate_summaries", []) or []:
+        lines.extend(
+            [
+                f"### {summary.get('belief_id')}",
+                "",
+                f"- Product role: {summary.get('product_role')}",
+                f"- Review focus: {summary.get('review_focus')}",
+                f"- Visual priority: {summary.get('visual_priority')}",
+                f"- Candidate family/timeframe: {summary.get('candidate_family_id') or 'none'} / {summary.get('candidate_timeframe') or 'none'}",
+                f"- Required labels: {summary.get('required_labels') or 'none'}",
+                f"- Matched label rows: {summary.get('matched_label_rows')}",
+                f"- Pending label rows: {summary.get('pending_label_rows')}",
+                f"- Exact/family-timeframe/context pending: {summary.get('exact_variant_pending_rows')}/"
+                f"{summary.get('family_timeframe_pending_rows')}/"
+                f"{summary.get('family_context_pending_rows')}",
+                f"- Product language allowed: {summary.get('product_language_allowed')}",
+                f"- Production effect: {summary.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(["## Top Pending Rows", ""])
+    if not worklist.get("rows"):
+        lines.append("- none")
+    for row in (worklist.get("rows", []) or [])[:20]:
+        lines.append(
+            "- "
+            f"#{row.get('worklist_rank')} {row.get('belief_id')} "
+            f"{row.get('symbol')} {row.get('date')} {row.get('row_timeframe')} "
+            f"bucket={row.get('review_bucket')} match={row.get('row_match')} "
+            f"missing={row.get('missing_required_labels') or 'none'} "
+            f"image={row.get('image_path') or 'none'}"
+        )
+    if len(worklist.get("rows", []) or []) > 20:
+        lines.append(f"- +{len(worklist.get('rows', []) or []) - 20} more rows in CSV")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(worklist.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_REVIEW_BATCH_SIZE = 12
+
+SIDECAR_VISUAL_LABEL_BATCH_FIELDS = [
+    "batch_id",
+    "batch_rank",
+    "batch_focus",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "visual_priority",
+    "row_match",
+    "source_label_file",
+    "source_label_row_number",
+    "review_bucket",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "event_cluster_id",
+    "family_id",
+    "variant_id",
+    "review_outcome_column",
+    "review_outcome",
+    "forward_return",
+    "max_drawdown",
+    "max_favorable_excursion",
+    "suggested_labels",
+    "missing_required_labels",
+    "human_label_status",
+    "image_path",
+    "render_status",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_label_batch_focus(rows: list[dict[str, Any]]) -> str:
+    candidate_ids = [str(row.get("belief_id", "")) for row in rows if row.get("belief_id")]
+    unique_candidates = sorted(set(candidate_ids))
+    if not unique_candidates:
+        return "empty_visual_label_batch"
+    if len(unique_candidates) > 1:
+        return "mixed_candidate_visual_label_review"
+    candidate_id = unique_candidates[0]
+    role = str((rows[0] if rows else {}).get("product_role", ""))
+    if role == "reset_quality":
+        return f"{candidate_id}_reset_quality_review"
+    return f"{candidate_id}_warning_review"
+
+
+def _sidecar_visual_label_batch_summary(
+    *,
+    rows: list[dict[str, Any]],
+    batch_rank: int,
+) -> dict[str, Any]:
+    batch_id = f"visual_label_batch_{batch_rank:02d}"
+    candidate_ids = sorted({str(row.get("belief_id", "")) for row in rows if row.get("belief_id")})
+    worklist_ranks = [
+        int(row.get("worklist_rank", 0) or 0)
+        for row in rows
+        if str(row.get("worklist_rank", "")).strip()
+    ]
+    return {
+        "batch_id": batch_id,
+        "batch_rank": batch_rank,
+        "batch_focus": _sidecar_visual_label_batch_focus(rows),
+        "row_count": len(rows),
+        "candidate_count": len(candidate_ids),
+        "candidate_ids": _csv_list(candidate_ids),
+        "worklist_rank_start": min(worklist_ranks) if worklist_ranks else "",
+        "worklist_rank_end": max(worklist_ranks) if worklist_ranks else "",
+        "exact_variant_count": sum(1 for row in rows if row.get("row_match") == "exact_variant"),
+        "family_timeframe_count": sum(1 for row in rows if row.get("row_match") == "family_timeframe"),
+        "family_context_count": sum(1 for row in rows if row.get("row_match") == "family_context"),
+        "review_bucket_count": len({str(row.get("review_bucket", "")) for row in rows if row.get("review_bucket")}),
+        "symbol_count": len({str(row.get("symbol", "")) for row in rows if row.get("symbol")}),
+        "missing_required_labels": _csv_list(
+            sorted(
+                {
+                    label
+                    for row in rows
+                    for label in str(row.get("missing_required_labels", "")).split("|")
+                    if label
+                }
+            )
+        ),
+        "next_action": "complete_human_visual_labels_for_this_batch" if rows else "no_batch_rows",
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_visual_label_review_batches(
+    *,
+    worklist: dict[str, Any],
+    batch_size: int = SIDECAR_VISUAL_LABEL_REVIEW_BATCH_SIZE,
+) -> dict[str, Any]:
+    pending_rows = list(worklist.get("rows", []) or [])
+    normalized_batch_size = max(1, int(batch_size or SIDECAR_VISUAL_LABEL_REVIEW_BATCH_SIZE))
+    batches: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for batch_index, start in enumerate(range(0, len(pending_rows), normalized_batch_size), start=1):
+        batch_rows = pending_rows[start : start + normalized_batch_size]
+        batch_summary = _sidecar_visual_label_batch_summary(rows=batch_rows, batch_rank=batch_index)
+        batches.append(batch_summary)
+        for row_index, worklist_row in enumerate(batch_rows, start=1):
+            rows.append(
+                {
+                    "batch_id": batch_summary["batch_id"],
+                    "batch_rank": batch_summary["batch_rank"],
+                    "batch_focus": batch_summary["batch_focus"],
+                    "batch_row_index": row_index,
+                    "worklist_rank": worklist_row.get("worklist_rank", ""),
+                    "belief_id": worklist_row.get("belief_id", ""),
+                    "product_role": worklist_row.get("product_role", ""),
+                    "review_focus": worklist_row.get("review_focus", ""),
+                    "visual_priority": worklist_row.get("visual_priority", ""),
+                    "row_match": worklist_row.get("row_match", ""),
+                    "source_label_file": worklist_row.get("source_label_file", ""),
+                    "source_label_row_number": worklist_row.get("source_label_row_number", ""),
+                    "review_bucket": worklist_row.get("review_bucket", ""),
+                    "symbol": worklist_row.get("symbol", ""),
+                    "date": worklist_row.get("date", ""),
+                    "row_timeframe": worklist_row.get("row_timeframe", ""),
+                    "event_cluster_id": worklist_row.get("event_cluster_id", ""),
+                    "family_id": worklist_row.get("family_id", ""),
+                    "variant_id": worklist_row.get("variant_id", ""),
+                    "review_outcome_column": worklist_row.get("review_outcome_column", ""),
+                    "review_outcome": worklist_row.get("review_outcome", ""),
+                    "forward_return": worklist_row.get("forward_return", ""),
+                    "max_drawdown": worklist_row.get("max_drawdown", ""),
+                    "max_favorable_excursion": worklist_row.get("max_favorable_excursion", ""),
+                    "suggested_labels": worklist_row.get("suggested_labels", ""),
+                    "missing_required_labels": worklist_row.get("missing_required_labels", ""),
+                    "human_label_status": worklist_row.get("human_label_status", ""),
+                    "image_path": worklist_row.get("image_path", ""),
+                    "render_status": worklist_row.get("render_status", ""),
+                    "product_language_allowed": False,
+                    "production_effect": "none",
+                }
+            )
+    candidate_ids = sorted({str(row.get("belief_id", "")) for row in pending_rows if row.get("belief_id")})
+    status = "pending_human_visual_review_batches" if pending_rows else "no_pending_human_visual_review_batches"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_REVIEW_BATCHES_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": worklist.get("run_id", ""),
+        "lab_run_id": worklist.get("lab_run_id", ""),
+        "status": status,
+        "batch_size": normalized_batch_size,
+        "batch_count": len(batches),
+        "pending_label_row_count": len(pending_rows),
+        "candidate_count": len(candidate_ids),
+        "candidate_ids": _csv_list(candidate_ids),
+        "worklist_status": worklist.get("status", ""),
+        "next_action": "complete_next_visual_label_review_batch" if pending_rows else "rerun_sidecar_evidence_brief",
+        "batches": batches,
+        "rows": rows,
+        "guardrail": (
+            "These batches partition pending human visual-label worklist rows only. "
+            "They do not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_review_batches(path: Path, batches: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_BATCH_FIELDS)
+        writer.writeheader()
+        for row in batches.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_BATCH_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_review_batches(batches: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Review Batches",
+        "",
+        f"Generated: {batches.get('generated_at')}",
+        f"Run: {batches.get('run_id')}",
+        f"Lab run: {batches.get('lab_run_id')}",
+        f"Status: {batches.get('status')}",
+        f"Batch size: {batches.get('batch_size')}",
+        f"Batches: {batches.get('batch_count')}",
+        f"Pending label rows: {batches.get('pending_label_row_count')}",
+        f"Candidates: {batches.get('candidate_count')}",
+        f"Candidate ids: {batches.get('candidate_ids') or 'none'}",
+        f"Worklist status: {batches.get('worklist_status')}",
+        f"Next action: {batches.get('next_action')}",
+        "",
+        "This is a human-review batching artifact. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Batches",
+        "",
+    ]
+    if not batches.get("batches"):
+        lines.append("- none")
+    rows_by_batch: dict[str, list[dict[str, Any]]] = {}
+    for row in batches.get("rows", []) or []:
+        rows_by_batch.setdefault(str(row.get("batch_id", "")), []).append(row)
+    for batch in batches.get("batches", []) or []:
+        batch_rows = rows_by_batch.get(str(batch.get("batch_id", "")), [])
+        lines.extend(
+            [
+                f"### {batch.get('batch_id')}",
+                "",
+                f"- Focus: {batch.get('batch_focus')}",
+                f"- Rows: {batch.get('row_count')}",
+                f"- Candidate ids: {batch.get('candidate_ids') or 'none'}",
+                f"- Worklist rank range: {batch.get('worklist_rank_start')} - {batch.get('worklist_rank_end')}",
+                f"- Exact/family-timeframe/context rows: {batch.get('exact_variant_count')}/"
+                f"{batch.get('family_timeframe_count')}/"
+                f"{batch.get('family_context_count')}",
+                f"- Review buckets: {batch.get('review_bucket_count')}",
+                f"- Symbols: {batch.get('symbol_count')}",
+                f"- Missing labels: {batch.get('missing_required_labels') or 'none'}",
+                f"- Next action: {batch.get('next_action')}",
+                "",
+            ]
+        )
+        for row in batch_rows[:5]:
+            lines.append(
+                "- "
+                f"#{row.get('worklist_rank')} {row.get('belief_id')} "
+                f"{row.get('symbol')} {row.get('date')} {row.get('row_timeframe')} "
+                f"bucket={row.get('review_bucket')} match={row.get('row_match')} "
+                f"image={row.get('image_path') or 'none'}"
+            )
+        if len(batch_rows) > 5:
+            lines.append(f"- +{len(batch_rows) - 5} more rows in CSV")
+        lines.append("")
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(batches.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_PROGRESS_FIELDS = [
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "visual_priority",
+    "matched_label_rows",
+    "pending_label_rows",
+    "completed_label_rows",
+    "exact_variant_pending_rows",
+    "family_timeframe_pending_rows",
+    "family_context_pending_rows",
+    "human_label_progress_status",
+    "next_batch_id",
+    "next_batch_rank",
+    "next_batch_row_count",
+    "next_batch_worklist_rank_start",
+    "next_batch_worklist_rank_end",
+    "missing_required_labels",
+    "next_action",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_label_progress_status(
+    *,
+    matched_label_rows: int,
+    pending_label_rows: int,
+    completed_label_rows: int,
+    worklist_status: str,
+) -> str:
+    if matched_label_rows <= 0 and worklist_status == "no_visual_label_source_rows":
+        return "no_visual_label_source_rows"
+    if matched_label_rows <= 0:
+        return "no_candidate_matched_label_rows"
+    if pending_label_rows <= 0:
+        return "human_visual_review_labels_populated"
+    if completed_label_rows <= 0:
+        return "human_visual_review_not_started"
+    return "human_visual_review_incomplete"
+
+
+def build_sidecar_visual_label_progress(
+    *,
+    worklist: dict[str, Any],
+    batches: dict[str, Any],
+) -> dict[str, Any]:
+    rows_by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for row in batches.get("rows", []) or []:
+        belief_id = str(row.get("belief_id", ""))
+        if belief_id:
+            rows_by_candidate.setdefault(belief_id, []).append(row)
+
+    batch_summary_by_id = {
+        str(batch.get("batch_id", "")): batch
+        for batch in batches.get("batches", []) or []
+        if batch.get("batch_id")
+    }
+    progress_rows: list[dict[str, Any]] = []
+    for summary in worklist.get("candidate_summaries", []) or []:
+        belief_id = str(summary.get("belief_id", ""))
+        pending_rows = int(summary.get("pending_label_rows", 0) or 0)
+        matched_rows = int(summary.get("matched_label_rows", 0) or 0)
+        completed_rows = max(0, matched_rows - pending_rows)
+        candidate_batch_rows = sorted(
+            rows_by_candidate.get(belief_id, []),
+            key=lambda row: (
+                int(row.get("batch_rank", 0) or 0),
+                int(row.get("batch_row_index", 0) or 0),
+            ),
+        )
+        next_batch_row = candidate_batch_rows[0] if candidate_batch_rows else {}
+        next_batch_id = str(next_batch_row.get("batch_id", "") or "")
+        next_batch = batch_summary_by_id.get(next_batch_id, {})
+        missing_required_labels = _csv_list(
+            sorted(
+                {
+                    label
+                    for row in candidate_batch_rows
+                    for label in str(row.get("missing_required_labels", "")).split("|")
+                    if label
+                }
+            )
+        )
+        progress_status = _sidecar_visual_label_progress_status(
+            matched_label_rows=matched_rows,
+            pending_label_rows=pending_rows,
+            completed_label_rows=completed_rows,
+            worklist_status=str(worklist.get("status", "")),
+        )
+        if pending_rows and next_batch_id:
+            next_action = f"complete_{next_batch_id}"
+        elif pending_rows:
+            next_action = "complete_candidate_matched_human_visual_labels"
+        elif matched_rows:
+            next_action = "rerun_sidecar_evidence_brief_and_role_queue"
+        else:
+            next_action = str(worklist.get("next_action", "")) or "repair_visual_label_candidate_mapping"
+        progress_rows.append(
+            {
+                "belief_id": belief_id,
+                "product_role": summary.get("product_role", ""),
+                "review_focus": summary.get("review_focus", ""),
+                "visual_priority": summary.get("visual_priority", ""),
+                "matched_label_rows": matched_rows,
+                "pending_label_rows": pending_rows,
+                "completed_label_rows": completed_rows,
+                "exact_variant_pending_rows": summary.get("exact_variant_pending_rows", 0),
+                "family_timeframe_pending_rows": summary.get("family_timeframe_pending_rows", 0),
+                "family_context_pending_rows": summary.get("family_context_pending_rows", 0),
+                "human_label_progress_status": progress_status,
+                "next_batch_id": next_batch_id,
+                "next_batch_rank": next_batch_row.get("batch_rank", ""),
+                "next_batch_row_count": next_batch.get("row_count", ""),
+                "next_batch_worklist_rank_start": next_batch.get("worklist_rank_start", ""),
+                "next_batch_worklist_rank_end": next_batch.get("worklist_rank_end", ""),
+                "missing_required_labels": missing_required_labels or summary.get("required_labels", ""),
+                "next_action": next_action,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+
+    pending_count = sum(int(row.get("pending_label_rows", 0) or 0) for row in progress_rows)
+    completed_count = sum(int(row.get("completed_label_rows", 0) or 0) for row in progress_rows)
+    populated_count = sum(
+        1
+        for row in progress_rows
+        if row.get("human_label_progress_status") == "human_visual_review_labels_populated"
+    )
+    not_started_count = sum(
+        1
+        for row in progress_rows
+        if row.get("human_label_progress_status") == "human_visual_review_not_started"
+    )
+    incomplete_count = sum(
+        1
+        for row in progress_rows
+        if row.get("human_label_progress_status") == "human_visual_review_incomplete"
+    )
+    if not progress_rows:
+        status = "no_visual_label_progress_candidates"
+    elif any(row.get("human_label_progress_status") == "no_visual_label_source_rows" for row in progress_rows):
+        status = "no_visual_label_source_rows"
+    elif any(row.get("human_label_progress_status") == "no_candidate_matched_label_rows" for row in progress_rows):
+        status = "no_candidate_matched_label_rows"
+    elif pending_count:
+        status = "pending_human_visual_label_progress"
+    else:
+        status = "human_visual_label_progress_complete"
+    next_batch_ids = [
+        str(row.get("next_batch_id", ""))
+        for row in progress_rows
+        if row.get("next_batch_id")
+    ]
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_PROGRESS_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": worklist.get("run_id", ""),
+        "lab_run_id": worklist.get("lab_run_id", ""),
+        "status": status,
+        "candidate_count": len(progress_rows),
+        "matched_label_row_count": sum(int(row.get("matched_label_rows", 0) or 0) for row in progress_rows),
+        "pending_label_row_count": pending_count,
+        "completed_label_row_count": completed_count,
+        "not_started_candidate_count": not_started_count,
+        "incomplete_candidate_count": incomplete_count,
+        "complete_candidate_count": populated_count,
+        "batch_count": batches.get("batch_count", 0),
+        "next_batch_id": next_batch_ids[0] if next_batch_ids else "",
+        "worklist_status": worklist.get("status", ""),
+        "next_action": f"complete_{next_batch_ids[0]}" if next_batch_ids else worklist.get("next_action", ""),
+        "rows": progress_rows,
+        "guardrail": (
+            "This progress artifact summarizes human visual-label completion debt by candidate. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_progress(path: Path, progress: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_PROGRESS_FIELDS)
+        writer.writeheader()
+        for row in progress.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_PROGRESS_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_progress(progress: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Progress",
+        "",
+        f"Generated: {progress.get('generated_at')}",
+        f"Run: {progress.get('run_id')}",
+        f"Lab run: {progress.get('lab_run_id')}",
+        f"Status: {progress.get('status')}",
+        f"Candidates: {progress.get('candidate_count')}",
+        f"Matched label rows: {progress.get('matched_label_row_count')}",
+        f"Pending label rows: {progress.get('pending_label_row_count')}",
+        f"Completed label rows: {progress.get('completed_label_row_count')}",
+        (
+            "Candidate progress not-started/incomplete/complete: "
+            f"{progress.get('not_started_candidate_count')}/"
+            f"{progress.get('incomplete_candidate_count')}/"
+            f"{progress.get('complete_candidate_count')}"
+        ),
+        f"Review batches: {progress.get('batch_count')}",
+        f"Next batch: {progress.get('next_batch_id') or 'none'}",
+        f"Worklist status: {progress.get('worklist_status')}",
+        f"Next action: {progress.get('next_action') or 'none'}",
+        "",
+        "This is a human-review progress artifact. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not progress.get("rows"):
+        lines.append("- none")
+    for row in progress.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### {row.get('belief_id')}",
+                "",
+                f"- Product role: {row.get('product_role')}",
+                f"- Review focus: {row.get('review_focus')}",
+                f"- Status: {row.get('human_label_progress_status')}",
+                f"- Matched/pending/completed rows: {row.get('matched_label_rows')}/"
+                f"{row.get('pending_label_rows')}/{row.get('completed_label_rows')}",
+                f"- Exact/family-timeframe/context pending: {row.get('exact_variant_pending_rows')}/"
+                f"{row.get('family_timeframe_pending_rows')}/"
+                f"{row.get('family_context_pending_rows')}",
+                f"- Next batch: {row.get('next_batch_id') or 'none'}",
+                f"- Next batch rows/ranks: {row.get('next_batch_row_count') or 'n/a'} / "
+                f"{row.get('next_batch_worklist_rank_start') or 'n/a'}-"
+                f"{row.get('next_batch_worklist_rank_end') or 'n/a'}",
+                f"- Missing labels: {row.get('missing_required_labels') or 'none'}",
+                f"- Next action: {row.get('next_action') or 'none'}",
+                f"- Product language allowed: {row.get('product_language_allowed')}",
+                f"- Production effect: {row.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(progress.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_NEXT_BATCH_FIELDS = [
+    "batch_id",
+    "batch_rank",
+    "batch_focus",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "visual_priority",
+    "row_match",
+    "source_label_file",
+    "source_label_row_number",
+    "review_bucket",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "event_cluster_id",
+    "family_id",
+    "variant_id",
+    "review_outcome_column",
+    "review_outcome",
+    "forward_return",
+    "max_drawdown",
+    "max_favorable_excursion",
+    "suggested_labels",
+    "human_label",
+    "visual_readability",
+    "product_role_match",
+    "false_positive_shape",
+    "promotion_blocker",
+    "missing_required_labels",
+    "human_label_status",
+    "image_path",
+    "render_status",
+    "source_update_instruction",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def build_sidecar_visual_label_next_batch_packet(
+    *,
+    worklist: dict[str, Any],
+    batches: dict[str, Any],
+    progress: dict[str, Any],
+) -> dict[str, Any]:
+    next_batch_id = str(progress.get("next_batch_id", "") or "")
+    if not next_batch_id:
+        batch_ids = [str(batch.get("batch_id", "")) for batch in batches.get("batches", []) or [] if batch.get("batch_id")]
+        next_batch_id = batch_ids[0] if batch_ids else ""
+    batch_summary = next(
+        (batch for batch in batches.get("batches", []) or [] if str(batch.get("batch_id", "")) == next_batch_id),
+        {},
+    )
+    worklist_by_rank = {
+        str(row.get("worklist_rank", "")): row
+        for row in worklist.get("rows", []) or []
+        if str(row.get("worklist_rank", "")).strip()
+    }
+    rows: list[dict[str, Any]] = []
+    for batch_row in batches.get("rows", []) or []:
+        if str(batch_row.get("batch_id", "")) != next_batch_id:
+            continue
+        worklist_row = worklist_by_rank.get(str(batch_row.get("worklist_rank", "")), {})
+        source_label_file = batch_row.get("source_label_file", "") or worklist_row.get("source_label_file", "")
+        source_row_number = batch_row.get("source_label_row_number", "") or worklist_row.get(
+            "source_label_row_number",
+            "",
+        )
+        update_instruction = (
+            f"fill_required_labels_in_source_row:{source_label_file}#{source_row_number}"
+            if source_label_file and source_row_number
+            else "fill_required_labels_in_source_label_csv"
+        )
+        rows.append(
+            {
+                "batch_id": batch_row.get("batch_id", ""),
+                "batch_rank": batch_row.get("batch_rank", ""),
+                "batch_focus": batch_row.get("batch_focus", ""),
+                "batch_row_index": batch_row.get("batch_row_index", ""),
+                "worklist_rank": batch_row.get("worklist_rank", ""),
+                "belief_id": batch_row.get("belief_id", ""),
+                "product_role": batch_row.get("product_role", ""),
+                "review_focus": batch_row.get("review_focus", ""),
+                "visual_priority": batch_row.get("visual_priority", ""),
+                "row_match": batch_row.get("row_match", ""),
+                "source_label_file": source_label_file,
+                "source_label_row_number": source_row_number,
+                "review_bucket": batch_row.get("review_bucket", ""),
+                "symbol": batch_row.get("symbol", ""),
+                "date": batch_row.get("date", ""),
+                "row_timeframe": batch_row.get("row_timeframe", ""),
+                "event_cluster_id": batch_row.get("event_cluster_id", ""),
+                "family_id": batch_row.get("family_id", ""),
+                "variant_id": batch_row.get("variant_id", ""),
+                "review_outcome_column": batch_row.get("review_outcome_column", ""),
+                "review_outcome": batch_row.get("review_outcome", ""),
+                "forward_return": batch_row.get("forward_return", ""),
+                "max_drawdown": batch_row.get("max_drawdown", ""),
+                "max_favorable_excursion": batch_row.get("max_favorable_excursion", ""),
+                "suggested_labels": batch_row.get("suggested_labels", ""),
+                "human_label": worklist_row.get("human_label", ""),
+                "visual_readability": worklist_row.get("visual_readability", ""),
+                "product_role_match": worklist_row.get("product_role_match", ""),
+                "false_positive_shape": worklist_row.get("false_positive_shape", ""),
+                "promotion_blocker": worklist_row.get("promotion_blocker", ""),
+                "missing_required_labels": batch_row.get("missing_required_labels", ""),
+                "human_label_status": batch_row.get("human_label_status", ""),
+                "image_path": batch_row.get("image_path", ""),
+                "render_status": batch_row.get("render_status", ""),
+                "source_update_instruction": update_instruction,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    candidate_ids = sorted({str(row.get("belief_id", "")) for row in rows if row.get("belief_id")})
+    source_files = sorted({str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")})
+    status = "pending_human_visual_label_next_batch" if rows else "no_pending_human_visual_label_next_batch"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_NEXT_BATCH_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": worklist.get("run_id", ""),
+        "lab_run_id": worklist.get("lab_run_id", ""),
+        "status": status,
+        "batch_id": next_batch_id,
+        "batch_rank": batch_summary.get("batch_rank", ""),
+        "batch_focus": batch_summary.get("batch_focus", ""),
+        "row_count": len(rows),
+        "candidate_count": len(candidate_ids),
+        "candidate_ids": _csv_list(candidate_ids),
+        "source_label_file_count": len(source_files),
+        "source_label_files": _csv_list(source_files),
+        "worklist_rank_start": batch_summary.get("worklist_rank_start", ""),
+        "worklist_rank_end": batch_summary.get("worklist_rank_end", ""),
+        "missing_required_labels": batch_summary.get("missing_required_labels", ""),
+        "next_action": "complete_this_visual_label_batch" if rows else batches.get("next_action", ""),
+        "rows": rows,
+        "guardrail": (
+            "This packet isolates the next human visual-label batch as a worksheet. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_next_batch(path: Path, packet: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_NEXT_BATCH_FIELDS)
+        writer.writeheader()
+        for row in packet.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_NEXT_BATCH_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_next_batch(packet: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Next Batch",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Run: {packet.get('run_id')}",
+        f"Lab run: {packet.get('lab_run_id')}",
+        f"Status: {packet.get('status')}",
+        f"Batch: {packet.get('batch_id') or 'none'}",
+        f"Focus: {packet.get('batch_focus') or 'none'}",
+        f"Rows: {packet.get('row_count')}",
+        f"Candidates: {packet.get('candidate_count')}",
+        f"Candidate ids: {packet.get('candidate_ids') or 'none'}",
+        f"Source label files: {packet.get('source_label_files') or 'none'}",
+        f"Worklist rank range: {packet.get('worklist_rank_start') or 'n/a'} - {packet.get('worklist_rank_end') or 'n/a'}",
+        f"Missing labels: {packet.get('missing_required_labels') or 'none'}",
+        f"Next action: {packet.get('next_action') or 'none'}",
+        "",
+        "This is the focused worksheet for the next human visual-label batch. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Rows",
+        "",
+    ]
+    if not packet.get("rows"):
+        lines.append("- none")
+    for row in packet.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('belief_id')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Batch row: {row.get('batch_row_index')}",
+                f"- Product role: {row.get('product_role')}",
+                f"- Review bucket: {row.get('review_bucket')}",
+                f"- Match type: {row.get('row_match')}",
+                f"- Forward/MDD/MFE: {row.get('forward_return') or 'n/a'} / {row.get('max_drawdown') or 'n/a'} / {row.get('max_favorable_excursion') or 'n/a'}",
+                f"- Suggested labels: {row.get('suggested_labels') or 'none'}",
+                f"- Missing labels: {row.get('missing_required_labels') or 'none'}",
+                f"- Image: {row.get('image_path') or 'none'}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                f"- Current labels: human_label={row.get('human_label') or 'blank'} visual_readability={row.get('visual_readability') or 'blank'} product_role_match={row.get('product_role_match') or 'blank'} false_positive_shape={row.get('false_positive_shape') or 'blank'} promotion_blocker={row.get('promotion_blocker') or 'blank'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(packet.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sidecar_markdown_relative_path(markdown_path: Path, raw_path: Any) -> str:
+    path_text = str(raw_path or "").strip()
+    if not path_text:
+        return ""
+    if path_text.startswith(("http://", "https://", "#")):
+        return path_text
+    path = Path(path_text)
+    if path.is_absolute():
+        return path.as_posix()
+    try:
+        return Path(os.path.relpath(path, start=markdown_path.parent)).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _sidecar_visual_label_entry_rows_by_rank(entry_sheet: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not entry_sheet:
+        return {}
+    return {
+        str(row.get("worklist_rank", "")).strip(): row
+        for row in entry_sheet.get("rows", []) or []
+        if str(row.get("worklist_rank", "")).strip()
+    }
+
+
+def _sidecar_bool_label(value: Any) -> str:
+    if value is True:
+        return "True"
+    if value is False:
+        return "False"
+    text = str(value or "").strip()
+    if text.lower() == "true":
+        return "True"
+    if text.lower() == "false":
+        return "False"
+    return text or "n/a"
+
+
+def render_sidecar_visual_label_next_batch_gallery(
+    packet: dict[str, Any],
+    *,
+    rubric: dict[str, Any],
+    gallery_path: Path,
+    entry_sheet: dict[str, Any] | None = None,
+) -> str:
+    entry_rows_by_rank = _sidecar_visual_label_entry_rows_by_rank(entry_sheet)
+    reference_gap_summary = (
+        "n/a/n/a/n/a"
+        if entry_sheet is None
+        else (
+            f"{entry_sheet.get('missing_source_label_file_count', 0)}/"
+            f"{entry_sheet.get('missing_source_label_row_count', 0)}/"
+            f"{entry_sheet.get('missing_image_count', 0)}"
+        )
+    )
+    lines = [
+        "# Riskflow Sidecar Visual Label Next Batch Gallery",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Run: {packet.get('run_id')}",
+        f"Lab run: {packet.get('lab_run_id')}",
+        f"Status: {packet.get('status')}",
+        f"Batch: {packet.get('batch_id') or 'none'}",
+        f"Focus: {packet.get('batch_focus') or 'none'}",
+        f"Rows: {packet.get('row_count')}",
+        f"Candidates: {packet.get('candidate_count')}",
+        f"Candidate ids: {packet.get('candidate_ids') or 'none'}",
+        f"Missing labels: {packet.get('missing_required_labels') or 'none'}",
+        f"Entry sheet status: {(entry_sheet or {}).get('status', 'not_provided')}",
+        f"Source/image reference gaps source-file/source-row/image: {reference_gap_summary}",
+        "",
+        "This gallery embeds only the current visual-label batch images. Write labels back to the source_label_file rows named under each image, then rerun the completion audit.",
+        "",
+        "## Required Fields",
+        "",
+    ]
+    required_fields = rubric.get("required_label_fields", []) or []
+    if required_fields:
+        for field in required_fields:
+            lines.append(f"- {field}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Allowed Values", ""])
+    field_contracts = rubric.get("field_contracts", []) or []
+    if field_contracts:
+        for field in field_contracts:
+            lines.append(
+                f"- {field.get('field')}: {_csv_list(field.get('preferred_values', []) or []) or 'none'}"
+            )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Images", ""])
+    if not packet.get("rows"):
+        lines.append("- none")
+    for row in packet.get("rows", []) or []:
+        image_ref = _sidecar_markdown_relative_path(gallery_path, row.get("image_path", ""))
+        entry_row = entry_rows_by_rank.get(str(row.get("worklist_rank", "")).strip(), {})
+        image_exists = _sidecar_bool_label(entry_row.get("image_exists")) if entry_row else "n/a"
+        source_file_exists = (
+            _sidecar_bool_label(entry_row.get("source_label_file_exists")) if entry_row else "n/a"
+        )
+        source_row_exists = (
+            _sidecar_bool_label(entry_row.get("source_label_row_exists")) if entry_row else "n/a"
+        )
+        entry_row_status = str(entry_row.get("entry_row_status") or "n/a") if entry_row else "n/a"
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Candidate: {row.get('belief_id')} role={row.get('product_role')}",
+                f"- Review bucket/match: {row.get('review_bucket')} / {row.get('row_match')}",
+                f"- Forward/MDD/MFE: {row.get('forward_return') or 'n/a'} / {row.get('max_drawdown') or 'n/a'} / {row.get('max_favorable_excursion') or 'n/a'}",
+                f"- Suggested labels: {row.get('suggested_labels') or 'none'}",
+                f"- Missing labels: {row.get('missing_required_labels') or 'none'}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                f"- Source label file: {row.get('source_label_file') or 'none'} row={row.get('source_label_row_number') or 'none'}",
+                f"- Image exists: {image_exists}",
+                (
+                    f"- Source refs: file_exists={source_file_exists} "
+                    f"row_exists={source_row_exists} entry_status={entry_row_status}"
+                ),
+                "",
+            ]
+        )
+        if image_ref:
+            lines.extend([f"![{row.get('symbol')} {row.get('date')}]({image_ref})", ""])
+        else:
+            lines.extend(["Image: none", ""])
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            "This gallery is a derived human-review aid for the current visual-label batch. It does not validate, promote, write labels, or alter production Riskflow behavior.",
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_RUBRIC_FIELDS = [
+    {
+        "field": "visual_readability",
+        "required": True,
+        "purpose": "Judge whether the chart makes the warning/reset condition legible before the relevant move.",
+        "preferred_values": [
+            "clear_before_event",
+            "ambiguous",
+            "not_legible",
+            "chart_or_image_missing",
+        ],
+    },
+    {
+        "field": "product_role_match",
+        "required": True,
+        "purpose": "Judge whether the visual example supports the candidate's claimed product role.",
+        "preferred_values": [
+            "supports_warning_blocker",
+            "supports_reset_quality",
+            "supports_control_or_archive",
+            "contradicts_role",
+            "ambiguous",
+        ],
+    },
+    {
+        "field": "false_positive_shape",
+        "required": True,
+        "purpose": "Classify the visible warning/reset outcome shape without treating it as validation.",
+        "preferred_values": [
+            "avoided_downside_warning",
+            "missed_upside_false_warning",
+            "late_or_after_move_warning",
+            "chop_only_context",
+            "not_applicable",
+            "ambiguous",
+        ],
+    },
+    {
+        "field": "promotion_blocker",
+        "required": True,
+        "purpose": "Record visual or evidence reasons this row should block promotion review.",
+        "preferred_values": [
+            "none",
+            "visual_not_legible",
+            "role_mismatch",
+            "missed_upside_cost",
+            "insufficient_context",
+            "needs_fresh_data",
+            "ambiguous",
+        ],
+    },
+    {
+        "field": "human_label",
+        "required": False,
+        "purpose": "Optional concise reviewer tag for the row-level visual read.",
+        "preferred_values": [
+            "warning_confirmed",
+            "false_warning",
+            "reset_quality_support",
+            "archive_failure_mode",
+            "ambiguous",
+        ],
+    },
+]
+
+
+def _sidecar_visual_label_required_fields(packet: dict[str, Any]) -> list[str]:
+    fields = {
+        label
+        for row in packet.get("rows", []) or []
+        for label in str(row.get("missing_required_labels", "")).split("|")
+        if label
+    }
+    if not fields:
+        fields = {
+            label
+            for label in str(packet.get("missing_required_labels", "")).split("|")
+            if label
+        }
+    return sorted(fields)
+
+
+def build_sidecar_visual_label_rubric(
+    *,
+    next_batch: dict[str, Any],
+    progress: dict[str, Any],
+) -> dict[str, Any]:
+    rows = list(next_batch.get("rows", []) or [])
+    required_fields = _sidecar_visual_label_required_fields(next_batch)
+    field_contracts = [
+        field
+        for field in SIDECAR_VISUAL_LABEL_RUBRIC_FIELDS
+        if field["field"] in set(required_fields) or field["field"] == "human_label"
+    ]
+    source_files = sorted({str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")})
+    source_update_instructions = [
+        str(row.get("source_update_instruction", ""))
+        for row in rows
+        if row.get("source_update_instruction")
+    ]
+    candidate_ids = sorted({str(row.get("belief_id", "")) for row in rows if row.get("belief_id")})
+    batch_id = str(next_batch.get("batch_id", "") or progress.get("next_batch_id", "") or "")
+    status = "ready_for_human_visual_label_review" if rows else "no_pending_visual_label_rubric_required"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_RUBRIC_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": next_batch.get("run_id", progress.get("run_id", "")),
+        "lab_run_id": next_batch.get("lab_run_id", progress.get("lab_run_id", "")),
+        "status": status,
+        "batch_id": batch_id,
+        "batch_focus": next_batch.get("batch_focus", ""),
+        "row_count": len(rows),
+        "candidate_count": len(candidate_ids),
+        "candidate_ids": candidate_ids,
+        "source_label_files": source_files,
+        "required_label_fields": required_fields,
+        "optional_label_fields": ["human_label"],
+        "field_contracts": field_contracts,
+        "source_update_instruction_count": len(source_update_instructions),
+        "source_update_instructions": source_update_instructions,
+        "acceptance_criteria": [
+            "Populate every field listed in each row's missing_required_labels value.",
+            "Write completed labels back to the source_label_file row named by source_update_instruction.",
+            "Keep worksheet CSV/MD files derived; rerun sidecar-evidence-brief after source labels are updated.",
+            "Treat completed labels as visual-review evidence only, not validation or promotion authority.",
+        ],
+        "completion_check": (
+            f"PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief --run-id {next_batch.get('run_id', '')}"
+        ),
+        "guardrail": (
+            "This rubric defines human visual-label fields and completion criteria for the next "
+            "sidecar review batch. It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_visual_label_rubric(rubric: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Rubric",
+        "",
+        f"Generated: {rubric.get('generated_at')}",
+        f"Run: {rubric.get('run_id')}",
+        f"Lab run: {rubric.get('lab_run_id')}",
+        f"Status: {rubric.get('status')}",
+        f"Batch: {rubric.get('batch_id') or 'none'}",
+        f"Focus: {rubric.get('batch_focus') or 'none'}",
+        f"Rows: {rubric.get('row_count')}",
+        f"Candidates: {rubric.get('candidate_count')}",
+        f"Candidate ids: {_csv_list(rubric.get('candidate_ids', []) or []) or 'none'}",
+        f"Source label files: {_csv_list(rubric.get('source_label_files', []) or []) or 'none'}",
+        f"Required label fields: {_csv_list(rubric.get('required_label_fields', []) or []) or 'none'}",
+        f"Optional label fields: {_csv_list(rubric.get('optional_label_fields', []) or []) or 'none'}",
+        "",
+        "This rubric standardizes the human visual-label pass. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Field Contracts",
+        "",
+    ]
+    if not rubric.get("field_contracts"):
+        lines.append("- none")
+    for field in rubric.get("field_contracts", []) or []:
+        lines.extend(
+            [
+                f"### {field.get('field')}",
+                "",
+                f"- Required: {field.get('required')}",
+                f"- Purpose: {field.get('purpose')}",
+                f"- Preferred values: {_csv_list(field.get('preferred_values', []) or []) or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(["## Acceptance Criteria", ""])
+    for item in rubric.get("acceptance_criteria", []) or []:
+        lines.append(f"- {item}")
+    lines.extend(
+        [
+            "",
+            "## Source Updates",
+            "",
+            f"- Source update instructions: {rubric.get('source_update_instruction_count')}",
+            f"- Completion check: {rubric.get('completion_check') or 'none'}",
+        ]
+    )
+    for instruction in (rubric.get("source_update_instructions", []) or [])[:12]:
+        lines.append(f"- {instruction}")
+    if len(rubric.get("source_update_instructions", []) or []) > 12:
+        lines.append(f"- +{len(rubric.get('source_update_instructions', []) or []) - 12} more instructions in YAML")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(rubric.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _visual_label_context_kind(row: dict[str, Any]) -> str:
+    labels = {item for item in str(row.get("suggested_labels", "")).split("|") if item}
+    bucket = str(row.get("review_bucket", ""))
+    if "missed_upside" in labels or "false_warning_candidate" in labels or "missed_upside" in bucket:
+        return "missed_upside_false_warning_probe"
+    if "avoided_downside" in labels or "warning_candidate" in labels or "avoided_downside" in bucket:
+        return "avoided_downside_warning_probe"
+    if str(row.get("product_role", "")) == "reset_quality":
+        return "reset_quality_probe"
+    return "ambiguous_visual_review_probe"
+
+
+def _visual_label_numeric_summary(rows: list[dict[str, Any]], field: str) -> dict[str, Any]:
+    values = sorted(value for row in rows if (value := _safe_float(row.get(field))) is not None)
+    if not values:
+        return {"min": "", "median": "", "max": ""}
+    middle = len(values) // 2
+    median = values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2.0
+    return {"min": values[0], "median": median, "max": values[-1]}
+
+
+def _visual_label_decision_prompt(context_kind: str) -> str:
+    if context_kind == "missed_upside_false_warning_probe":
+        return "Does the warning appear to block constructive upside or arrive too early for the chart context?"
+    if context_kind == "avoided_downside_warning_probe":
+        return "Was the warning visually legible before the downside move it is meant to avoid?"
+    if context_kind == "reset_quality_probe":
+        return "Does the reset structure look constructive enough to support reset-quality learning?"
+    return "Classify whether the chart visually supports the claimed product role."
+
+
+def _visual_label_context_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        context_kind = _visual_label_context_kind(row)
+        key = (context_kind, str(row.get("review_bucket", "")))
+        buckets.setdefault(key, []).append(row)
+    summaries: list[dict[str, Any]] = []
+    for (context_kind, review_bucket), bucket_rows in sorted(
+        buckets.items(),
+        key=lambda item: (item[0][0], item[0][1]),
+    ):
+        symbols = sorted({str(row.get("symbol", "")) for row in bucket_rows if row.get("symbol")})
+        candidate_ids = sorted({str(row.get("belief_id", "")) for row in bucket_rows if row.get("belief_id")})
+        summaries.append(
+            {
+                "context_kind": context_kind,
+                "review_bucket": review_bucket,
+                "row_count": len(bucket_rows),
+                "candidate_count": len(candidate_ids),
+                "candidate_ids": candidate_ids,
+                "symbols": symbols,
+                "symbol_count": len(symbols),
+                "forward_return": _visual_label_numeric_summary(bucket_rows, "forward_return"),
+                "max_drawdown": _visual_label_numeric_summary(bucket_rows, "max_drawdown"),
+                "max_favorable_excursion": _visual_label_numeric_summary(
+                    bucket_rows,
+                    "max_favorable_excursion",
+                ),
+                "decision_prompt": _visual_label_decision_prompt(context_kind),
+            }
+        )
+    return summaries
+
+
+def build_sidecar_visual_label_decision_context(
+    *,
+    next_batch: dict[str, Any],
+    rubric: dict[str, Any],
+    entry_sheet: dict[str, Any],
+    source_patch_plan: dict[str, Any],
+    completion_audit: dict[str, Any],
+) -> dict[str, Any]:
+    rows = list(next_batch.get("rows", []) or [])
+    context_rows = []
+    for row in rows:
+        context_kind = _visual_label_context_kind(row)
+        context_rows.append(
+            {
+                "worklist_rank": row.get("worklist_rank", ""),
+                "batch_row_index": row.get("batch_row_index", ""),
+                "belief_id": row.get("belief_id", ""),
+                "product_role": row.get("product_role", ""),
+                "context_kind": context_kind,
+                "decision_prompt": _visual_label_decision_prompt(context_kind),
+                "review_bucket": row.get("review_bucket", ""),
+                "symbol": row.get("symbol", ""),
+                "date": row.get("date", ""),
+                "row_timeframe": row.get("row_timeframe", ""),
+                "forward_return": row.get("forward_return", ""),
+                "max_drawdown": row.get("max_drawdown", ""),
+                "max_favorable_excursion": row.get("max_favorable_excursion", ""),
+                "suggested_labels": row.get("suggested_labels", ""),
+                "missing_required_labels": row.get("missing_required_labels", ""),
+                "source_update_instruction": row.get("source_update_instruction", ""),
+                "image_path": row.get("image_path", ""),
+            }
+        )
+    context_kind_counts = _count_strings([row.get("context_kind", "") for row in context_rows])
+    required_fields = rubric.get("required_label_fields", []) or _sidecar_visual_label_required_fields(next_batch)
+    status = "pending_visual_label_decision_context" if rows else "no_pending_visual_label_decision_context"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_DECISION_CONTEXT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": next_batch.get("run_id", ""),
+        "lab_run_id": next_batch.get("lab_run_id", ""),
+        "status": status,
+        "batch_id": next_batch.get("batch_id", ""),
+        "batch_focus": next_batch.get("batch_focus", ""),
+        "row_count": len(rows),
+        "candidate_count": next_batch.get("candidate_count", 0),
+        "candidate_ids": next_batch.get("candidate_ids", ""),
+        "required_label_fields": required_fields,
+        "context_kind_counts": _compact_counts(context_kind_counts),
+        "missed_upside_false_warning_probe_count": context_kind_counts.get(
+            "missed_upside_false_warning_probe",
+            0,
+        ),
+        "avoided_downside_warning_probe_count": context_kind_counts.get(
+            "avoided_downside_warning_probe",
+            0,
+        ),
+        "pending_entry_cells": entry_sheet.get("missing_required_cell_count", 0),
+        "entry_reference_gaps": (
+            f"{entry_sheet.get('missing_source_label_file_count', 0)}/"
+            f"{entry_sheet.get('missing_source_label_row_count', 0)}/"
+            f"{entry_sheet.get('missing_image_count', 0)}"
+        ),
+        "pending_source_patch_cells": source_patch_plan.get("pending_source_patch_cell_count", 0),
+        "blocked_source_patch_cells": source_patch_plan.get("blocked_source_patch_cell_count", 0),
+        "completion_status": completion_audit.get("status", ""),
+        "completion_missing_rows": completion_audit.get("missing_required_row_count", 0),
+        "completion_invalid_rows": completion_audit.get("invalid_label_row_count", 0),
+        "bucket_contexts": _visual_label_context_bucket_rows(rows),
+        "rows": context_rows,
+        "next_action": (
+            "complete_required_visual_labels_in_source_rows"
+            if rows
+            else "no_pending_visual_label_batch"
+        ),
+        "guardrail": (
+            "This packet summarizes human visual-label decision context only. It does not write labels, "
+            "validate sidecars, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+
+
+def render_sidecar_visual_label_decision_context(context: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Decision Context",
+        "",
+        f"Generated: {context.get('generated_at')}",
+        f"Run: {context.get('run_id')}",
+        f"Lab run: {context.get('lab_run_id')}",
+        f"Status: {context.get('status')}",
+        f"Batch: {context.get('batch_id') or 'none'}",
+        f"Focus: {context.get('batch_focus') or 'none'}",
+        f"Rows: {context.get('row_count')}",
+        f"Candidates: {context.get('candidate_count')}",
+        f"Candidate ids: {context.get('candidate_ids') or 'none'}",
+        f"Required label fields: {_csv_list(context.get('required_label_fields', []) or []) or 'none'}",
+        f"Context kind counts: {context.get('context_kind_counts') or 'none'}",
+        (
+            "Missed-upside / avoided-downside probes: "
+            f"{context.get('missed_upside_false_warning_probe_count')}/"
+            f"{context.get('avoided_downside_warning_probe_count')}"
+        ),
+        f"Pending entry cells: {context.get('pending_entry_cells')}",
+        f"Entry reference gaps source-file/source-row/image: {context.get('entry_reference_gaps')}",
+        (
+            "Source patch cells pending/blocked: "
+            f"{context.get('pending_source_patch_cells')}/"
+            f"{context.get('blocked_source_patch_cells')}"
+        ),
+        (
+            "Completion status missing/invalid rows: "
+            f"{context.get('completion_status')}/"
+            f"{context.get('completion_missing_rows')}/"
+            f"{context.get('completion_invalid_rows')}"
+        ),
+        f"Next action: {context.get('next_action') or 'none'}",
+        "",
+        "This packet compresses the current visual-label batch into decision context. It is a review aid only.",
+        "",
+        "## Bucket Contexts",
+        "",
+    ]
+    if not context.get("bucket_contexts"):
+        lines.append("- none")
+    for bucket in context.get("bucket_contexts", []) or []:
+        forward = bucket.get("forward_return", {}) or {}
+        drawdown = bucket.get("max_drawdown", {}) or {}
+        mfe = bucket.get("max_favorable_excursion", {}) or {}
+        lines.extend(
+            [
+                f"### {bucket.get('context_kind')} / {bucket.get('review_bucket') or 'none'}",
+                "",
+                f"- Rows: {bucket.get('row_count')} candidates={bucket.get('candidate_count')} symbols={bucket.get('symbol_count')}",
+                f"- Candidate ids: {_csv_list(bucket.get('candidate_ids', []) or []) or 'none'}",
+                f"- Symbols: {_csv_list(bucket.get('symbols', []) or []) or 'none'}",
+                f"- Forward return min/median/max: {forward.get('min')}/{forward.get('median')}/{forward.get('max')}",
+                f"- Max drawdown min/median/max: {drawdown.get('min')}/{drawdown.get('median')}/{drawdown.get('max')}",
+                f"- MFE min/median/max: {mfe.get('min')}/{mfe.get('median')}/{mfe.get('max')}",
+                f"- Decision prompt: {bucket.get('decision_prompt')}",
+                "",
+            ]
+        )
+    lines.extend(["## Rows", ""])
+    if not context.get("rows"):
+        lines.append("- none")
+    for row in context.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Candidate: {row.get('belief_id')} role={row.get('product_role')}",
+                f"- Context: {row.get('context_kind')} bucket={row.get('review_bucket')}",
+                f"- Prompt: {row.get('decision_prompt')}",
+                f"- Forward/MDD/MFE: {row.get('forward_return') or 'n/a'} / {row.get('max_drawdown') or 'n/a'} / {row.get('max_favorable_excursion') or 'n/a'}",
+                f"- Suggested labels: {row.get('suggested_labels') or 'none'}",
+                f"- Missing required labels: {row.get('missing_required_labels') or 'none'}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                f"- Image: {row.get('image_path') or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(context.get("guardrail")),
+            "Product language allowed: False",
+            "Promotion authority: none.",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_ENTRY_SHEET_FIELDS = [
+    "batch_id",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "review_bucket",
+    "row_match",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "event_cluster_id",
+    "family_id",
+    "variant_id",
+    "forward_return",
+    "max_drawdown",
+    "max_favorable_excursion",
+    "suggested_labels",
+    "image_path",
+    "image_exists",
+    "render_status",
+    "source_label_file",
+    "source_label_file_exists",
+    "source_label_row_number",
+    "source_label_row_exists",
+    "source_update_instruction",
+    "required_label_fields",
+    "allowed_visual_readability",
+    "allowed_product_role_match",
+    "allowed_false_positive_shape",
+    "allowed_promotion_blocker",
+    "allowed_human_label",
+    "visual_readability",
+    "product_role_match",
+    "false_positive_shape",
+    "promotion_blocker",
+    "human_label",
+    "missing_required_field_count",
+    "entry_row_status",
+    "worksheet_instruction",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_label_entry_allowed_values(rubric: dict[str, Any], field: str) -> str:
+    return _csv_list(sorted(_rubric_allowed_values_by_field(rubric).get(field, set())))
+
+
+def _sidecar_resolve_artifact_path(source_root: Path, raw_path: Any) -> Path:
+    path = Path(str(raw_path or ""))
+    if path.is_absolute():
+        return path
+    return source_root / path
+
+
+def _sidecar_csv_data_row_exists(path: Path, row_number: Any) -> bool:
+    if not path.exists():
+        return False
+    try:
+        normalized_row_number = int(row_number or 0)
+    except (TypeError, ValueError):
+        return False
+    if normalized_row_number <= 0:
+        return False
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return sum(1 for _ in csv.DictReader(handle)) >= normalized_row_number
+    except OSError:
+        return False
+
+
+def _sidecar_visual_label_entry_row_status(
+    *,
+    source_label_file_exists: bool,
+    source_label_row_exists: bool,
+    image_exists: bool,
+    missing_required_field_count: int,
+) -> str:
+    if not source_label_file_exists or not source_label_row_exists or not image_exists:
+        return "source_or_image_reference_gap"
+    if missing_required_field_count:
+        return "ready_for_label_entry"
+    return "required_labels_present"
+
+
+def build_sidecar_visual_label_entry_sheet(
+    *,
+    next_batch: dict[str, Any],
+    rubric: dict[str, Any],
+    source_root: Path | None = None,
+) -> dict[str, Any]:
+    resolved_source_root = source_root or Path(".")
+    required_fields = [str(field) for field in rubric.get("required_label_fields", []) or [] if str(field)]
+    allowed_visual_readability = _sidecar_visual_label_entry_allowed_values(rubric, "visual_readability")
+    allowed_product_role_match = _sidecar_visual_label_entry_allowed_values(rubric, "product_role_match")
+    allowed_false_positive_shape = _sidecar_visual_label_entry_allowed_values(rubric, "false_positive_shape")
+    allowed_promotion_blocker = _sidecar_visual_label_entry_allowed_values(rubric, "promotion_blocker")
+    allowed_human_label = _sidecar_visual_label_entry_allowed_values(rubric, "human_label")
+    rows: list[dict[str, Any]] = []
+    for batch_row in next_batch.get("rows", []) or []:
+        row_required_fields = [
+            field
+            for field in str(batch_row.get("missing_required_labels", "") or "").split("|")
+            if field
+        ] or required_fields
+        source_label_file = batch_row.get("source_label_file", "")
+        source_label_row_number = batch_row.get("source_label_row_number", "")
+        image_path = batch_row.get("image_path", "")
+        source_path = _sidecar_resolve_artifact_path(resolved_source_root, source_label_file)
+        image_resolved_path = _sidecar_resolve_artifact_path(resolved_source_root, image_path)
+        source_label_file_exists = bool(source_label_file) and source_path.exists()
+        source_label_row_exists = _sidecar_csv_data_row_exists(source_path, source_label_row_number)
+        image_exists = bool(image_path) and image_resolved_path.exists()
+        missing_required_field_count = sum(
+            1 for field in row_required_fields if not str(batch_row.get(field, "")).strip()
+        )
+        source_update = str(batch_row.get("source_update_instruction", "") or "")
+        rows.append(
+            {
+                "batch_id": batch_row.get("batch_id", ""),
+                "batch_row_index": batch_row.get("batch_row_index", ""),
+                "worklist_rank": batch_row.get("worklist_rank", ""),
+                "belief_id": batch_row.get("belief_id", ""),
+                "product_role": batch_row.get("product_role", ""),
+                "review_focus": batch_row.get("review_focus", ""),
+                "review_bucket": batch_row.get("review_bucket", ""),
+                "row_match": batch_row.get("row_match", ""),
+                "symbol": batch_row.get("symbol", ""),
+                "date": batch_row.get("date", ""),
+                "row_timeframe": batch_row.get("row_timeframe", ""),
+                "event_cluster_id": batch_row.get("event_cluster_id", ""),
+                "family_id": batch_row.get("family_id", ""),
+                "variant_id": batch_row.get("variant_id", ""),
+                "forward_return": batch_row.get("forward_return", ""),
+                "max_drawdown": batch_row.get("max_drawdown", ""),
+                "max_favorable_excursion": batch_row.get("max_favorable_excursion", ""),
+                "suggested_labels": batch_row.get("suggested_labels", ""),
+                "image_path": image_path,
+                "image_exists": image_exists,
+                "render_status": batch_row.get("render_status", ""),
+                "source_label_file": source_label_file,
+                "source_label_file_exists": source_label_file_exists,
+                "source_label_row_number": source_label_row_number,
+                "source_label_row_exists": source_label_row_exists,
+                "source_update_instruction": source_update,
+                "required_label_fields": _csv_list(row_required_fields),
+                "allowed_visual_readability": allowed_visual_readability,
+                "allowed_product_role_match": allowed_product_role_match,
+                "allowed_false_positive_shape": allowed_false_positive_shape,
+                "allowed_promotion_blocker": allowed_promotion_blocker,
+                "allowed_human_label": allowed_human_label,
+                "visual_readability": batch_row.get("visual_readability", ""),
+                "product_role_match": batch_row.get("product_role_match", ""),
+                "false_positive_shape": batch_row.get("false_positive_shape", ""),
+                "promotion_blocker": batch_row.get("promotion_blocker", ""),
+                "human_label": batch_row.get("human_label", ""),
+                "missing_required_field_count": missing_required_field_count,
+                "entry_row_status": _sidecar_visual_label_entry_row_status(
+                    source_label_file_exists=source_label_file_exists,
+                    source_label_row_exists=source_label_row_exists,
+                    image_exists=image_exists,
+                    missing_required_field_count=missing_required_field_count,
+                ),
+                "worksheet_instruction": (
+                    f"Populate required fields in authoritative source row via {source_update}."
+                    if source_update
+                    else "Populate required fields in the authoritative source label CSV row."
+                ),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    missing_source_file_count = sum(1 for row in rows if row.get("source_label_file_exists") is not True)
+    missing_source_row_count = sum(1 for row in rows if row.get("source_label_row_exists") is not True)
+    missing_image_count = sum(1 for row in rows if row.get("image_exists") is not True)
+    missing_required_cell_count = sum(int(row.get("missing_required_field_count", 0) or 0) for row in rows)
+    if not rows:
+        status = "no_pending_visual_label_entry_sheet"
+    elif missing_source_file_count or missing_source_row_count or missing_image_count:
+        status = "visual_label_entry_sheet_reference_gaps"
+    elif missing_required_cell_count:
+        status = "ready_for_visual_label_entry"
+    else:
+        status = "visual_label_entry_sheet_complete"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_ENTRY_SHEET_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": next_batch.get("run_id", rubric.get("run_id", "")),
+        "lab_run_id": next_batch.get("lab_run_id", rubric.get("lab_run_id", "")),
+        "status": status,
+        "batch_id": next_batch.get("batch_id", rubric.get("batch_id", "")),
+        "batch_focus": next_batch.get("batch_focus", rubric.get("batch_focus", "")),
+        "row_count": len(rows),
+        "missing_required_cell_count": missing_required_cell_count,
+        "missing_source_label_file_count": missing_source_file_count,
+        "missing_source_label_row_count": missing_source_row_count,
+        "missing_image_count": missing_image_count,
+        "required_label_fields": required_fields,
+        "optional_label_fields": rubric.get("optional_label_fields", []) or [],
+        "source_label_files": next_batch.get("source_label_files", ""),
+        "next_action": (
+            "fill_authoritative_source_label_rows_then_rerun_completion_audit"
+            if rows
+            else "rerun_sidecar_evidence_brief"
+        ),
+        "rows": rows,
+        "guardrail": (
+            "This entry sheet is a derived reviewer worksheet for the current visual-label batch. "
+            "The authoritative labels remain the source_label_file rows named by source_update_instruction. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_entry_sheet(path: Path, sheet: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_ENTRY_SHEET_FIELDS)
+        writer.writeheader()
+        for row in sheet.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_ENTRY_SHEET_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_entry_sheet(sheet: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Entry Sheet",
+        "",
+        f"Generated: {sheet.get('generated_at')}",
+        f"Run: {sheet.get('run_id')}",
+        f"Lab run: {sheet.get('lab_run_id')}",
+        f"Status: {sheet.get('status')}",
+        f"Batch: {sheet.get('batch_id') or 'none'}",
+        f"Focus: {sheet.get('batch_focus') or 'none'}",
+        f"Rows: {sheet.get('row_count')}",
+        f"Missing required label cells: {sheet.get('missing_required_cell_count')}",
+        (
+            "Source/image reference gaps source-file/source-row/image: "
+            f"{sheet.get('missing_source_label_file_count')}/"
+            f"{sheet.get('missing_source_label_row_count')}/"
+            f"{sheet.get('missing_image_count')}"
+        ),
+        f"Required label fields: {_csv_list(sheet.get('required_label_fields', []) or []) or 'none'}",
+        f"Optional label fields: {_csv_list(sheet.get('optional_label_fields', []) or []) or 'none'}",
+        f"Source label files: {sheet.get('source_label_files') or 'none'}",
+        f"Next action: {sheet.get('next_action') or 'none'}",
+        "",
+        "This is a derived worksheet. Write completed labels back to each source_label_file row, then rerun the completion audit.",
+        "",
+        "## Allowed Values",
+        "",
+    ]
+    if sheet.get("rows"):
+        first = sheet["rows"][0]
+        lines.extend(
+            [
+                f"- visual_readability: {first.get('allowed_visual_readability') or 'none'}",
+                f"- product_role_match: {first.get('allowed_product_role_match') or 'none'}",
+                f"- false_positive_shape: {first.get('allowed_false_positive_shape') or 'none'}",
+                f"- promotion_blocker: {first.get('allowed_promotion_blocker') or 'none'}",
+                f"- human_label: {first.get('allowed_human_label') or 'none'}",
+            ]
+        )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Rows", ""])
+    if not sheet.get("rows"):
+        lines.append("- none")
+    for row in sheet.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('belief_id')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Batch row: {row.get('batch_row_index')}",
+                f"- Product role: {row.get('product_role')}",
+                f"- Review bucket/match: {row.get('review_bucket')} / {row.get('row_match')}",
+                f"- Entry row status: {row.get('entry_row_status')}",
+                f"- Required fields: {row.get('required_label_fields') or 'none'}",
+                f"- Missing required field count: {row.get('missing_required_field_count')}",
+                f"- Suggested labels: {row.get('suggested_labels') or 'none'}",
+                f"- Image: {row.get('image_path') or 'none'} exists={row.get('image_exists')}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                (
+                    "- Source refs: "
+                    f"file_exists={row.get('source_label_file_exists')} "
+                    f"row_exists={row.get('source_label_row_exists')}"
+                ),
+                (
+                    "- Current values: "
+                    f"visual_readability={row.get('visual_readability') or 'blank'} "
+                    f"product_role_match={row.get('product_role_match') or 'blank'} "
+                    f"false_positive_shape={row.get('false_positive_shape') or 'blank'} "
+                    f"promotion_blocker={row.get('promotion_blocker') or 'blank'} "
+                    f"human_label={row.get('human_label') or 'blank'}"
+                ),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(sheet.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_FIELDS = [
+    "batch_id",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "review_bucket",
+    "row_match",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "source_label_file",
+    "source_label_row_number",
+    "source_label_file_exists",
+    "source_label_row_exists",
+    "image_path",
+    "image_exists",
+    "required_label_fields",
+    "required_update_fields",
+    "required_update_cell_count",
+    "visual_readability",
+    "product_role_match",
+    "false_positive_shape",
+    "promotion_blocker",
+    "human_label",
+    "allowed_visual_readability",
+    "allowed_product_role_match",
+    "allowed_false_positive_shape",
+    "allowed_promotion_blocker",
+    "allowed_human_label",
+    "source_update_instruction",
+    "source_update_status",
+    "worksheet_instruction",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_required_update_fields(row: dict[str, Any]) -> list[str]:
+    return [
+        field
+        for field in str(row.get("required_label_fields", "") or "").split("|")
+        if field and not str(row.get(field, "") or "").strip()
+    ]
+
+
+def _sidecar_source_update_status(row: dict[str, Any], required_update_fields: list[str]) -> str:
+    if (
+        row.get("source_label_file_exists") is not True
+        or row.get("source_label_row_exists") is not True
+        or row.get("image_exists") is not True
+    ):
+        return "blocked_reference_gap"
+    if required_update_fields:
+        return "pending_human_source_update"
+    return "source_row_labels_complete"
+
+
+def build_sidecar_visual_label_source_update_manifest(entry_sheet: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for entry_row in entry_sheet.get("rows", []) or []:
+        required_update_fields = _sidecar_required_update_fields(entry_row)
+        source_update_status = _sidecar_source_update_status(entry_row, required_update_fields)
+        rows.append(
+            {
+                "batch_id": entry_row.get("batch_id", ""),
+                "batch_row_index": entry_row.get("batch_row_index", ""),
+                "worklist_rank": entry_row.get("worklist_rank", ""),
+                "belief_id": entry_row.get("belief_id", ""),
+                "product_role": entry_row.get("product_role", ""),
+                "review_focus": entry_row.get("review_focus", ""),
+                "review_bucket": entry_row.get("review_bucket", ""),
+                "row_match": entry_row.get("row_match", ""),
+                "symbol": entry_row.get("symbol", ""),
+                "date": entry_row.get("date", ""),
+                "row_timeframe": entry_row.get("row_timeframe", ""),
+                "source_label_file": entry_row.get("source_label_file", ""),
+                "source_label_row_number": entry_row.get("source_label_row_number", ""),
+                "source_label_file_exists": entry_row.get("source_label_file_exists", ""),
+                "source_label_row_exists": entry_row.get("source_label_row_exists", ""),
+                "image_path": entry_row.get("image_path", ""),
+                "image_exists": entry_row.get("image_exists", ""),
+                "required_label_fields": entry_row.get("required_label_fields", ""),
+                "required_update_fields": _csv_list(required_update_fields),
+                "required_update_cell_count": len(required_update_fields),
+                "visual_readability": entry_row.get("visual_readability", ""),
+                "product_role_match": entry_row.get("product_role_match", ""),
+                "false_positive_shape": entry_row.get("false_positive_shape", ""),
+                "promotion_blocker": entry_row.get("promotion_blocker", ""),
+                "human_label": entry_row.get("human_label", ""),
+                "allowed_visual_readability": entry_row.get("allowed_visual_readability", ""),
+                "allowed_product_role_match": entry_row.get("allowed_product_role_match", ""),
+                "allowed_false_positive_shape": entry_row.get("allowed_false_positive_shape", ""),
+                "allowed_promotion_blocker": entry_row.get("allowed_promotion_blocker", ""),
+                "allowed_human_label": entry_row.get("allowed_human_label", ""),
+                "source_update_instruction": entry_row.get("source_update_instruction", ""),
+                "source_update_status": source_update_status,
+                "worksheet_instruction": entry_row.get("worksheet_instruction", ""),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    pending_update_row_count = sum(1 for row in rows if row.get("source_update_status") == "pending_human_source_update")
+    blocked_reference_row_count = sum(1 for row in rows if row.get("source_update_status") == "blocked_reference_gap")
+    complete_row_count = sum(1 for row in rows if row.get("source_update_status") == "source_row_labels_complete")
+    required_update_cell_count = sum(int(row.get("required_update_cell_count", 0) or 0) for row in rows)
+    source_files = sorted({str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")})
+    if not rows:
+        status = "no_pending_visual_label_source_update_manifest"
+    elif blocked_reference_row_count:
+        status = "source_update_manifest_reference_gaps"
+    elif pending_update_row_count:
+        status = "ready_for_human_source_updates"
+    else:
+        status = "source_update_manifest_complete"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": entry_sheet.get("run_id", ""),
+        "lab_run_id": entry_sheet.get("lab_run_id", ""),
+        "status": status,
+        "batch_id": entry_sheet.get("batch_id", ""),
+        "batch_focus": entry_sheet.get("batch_focus", ""),
+        "row_count": len(rows),
+        "pending_update_row_count": pending_update_row_count,
+        "blocked_reference_row_count": blocked_reference_row_count,
+        "complete_row_count": complete_row_count,
+        "required_update_cell_count": required_update_cell_count,
+        "source_label_file_count": len(source_files),
+        "source_label_files": source_files,
+        "missing_source_label_file_count": entry_sheet.get("missing_source_label_file_count", 0),
+        "missing_source_label_row_count": entry_sheet.get("missing_source_label_row_count", 0),
+        "missing_image_count": entry_sheet.get("missing_image_count", 0),
+        "next_action": (
+            "repair_source_or_image_reference_gaps_before_label_entry"
+            if blocked_reference_row_count
+            else (
+                "fill_authoritative_source_label_rows_then_rerun_completion_audit"
+                if pending_update_row_count
+                else "rerun_sidecar_evidence_brief"
+            )
+        ),
+        "rows": rows,
+        "guardrail": (
+            "This manifest is a derived source-update checklist for human visual-label entry. "
+            "It identifies authoritative source rows and allowed values, but it does not write labels, "
+            "validate candidates, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_source_update_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_FIELDS)
+        writer.writeheader()
+        for row in manifest.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_SOURCE_UPDATE_MANIFEST_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_source_update_manifest(manifest: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Source Update Manifest",
+        "",
+        f"Generated: {manifest.get('generated_at')}",
+        f"Run: {manifest.get('run_id')}",
+        f"Lab run: {manifest.get('lab_run_id')}",
+        f"Status: {manifest.get('status')}",
+        f"Batch: {manifest.get('batch_id') or 'none'}",
+        f"Focus: {manifest.get('batch_focus') or 'none'}",
+        f"Rows: {manifest.get('row_count')}",
+        f"Pending update rows: {manifest.get('pending_update_row_count')}",
+        f"Required update cells: {manifest.get('required_update_cell_count')}",
+        f"Blocked reference rows: {manifest.get('blocked_reference_row_count')}",
+        f"Complete rows: {manifest.get('complete_row_count')}",
+        (
+            "Source/image reference gaps source-file/source-row/image: "
+            f"{manifest.get('missing_source_label_file_count')}/"
+            f"{manifest.get('missing_source_label_row_count')}/"
+            f"{manifest.get('missing_image_count')}"
+        ),
+        f"Source label files: {_csv_list(manifest.get('source_label_files', []) or []) or 'none'}",
+        f"Next action: {manifest.get('next_action') or 'none'}",
+        "",
+        "This is a checklist for updating authoritative visual-label source rows. It does not write labels.",
+        "",
+        "## Rows",
+        "",
+    ]
+    if not manifest.get("rows"):
+        lines.append("- none")
+    for row in manifest.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('belief_id')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Status: {row.get('source_update_status')}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                (
+                    "- Source refs: "
+                    f"file_exists={row.get('source_label_file_exists')} "
+                    f"row_exists={row.get('source_label_row_exists')} "
+                    f"image_exists={row.get('image_exists')}"
+                ),
+                f"- Required update fields: {row.get('required_update_fields') or 'none'}",
+                f"- Required update cell count: {row.get('required_update_cell_count')}",
+                f"- Allowed visual_readability: {row.get('allowed_visual_readability') or 'none'}",
+                f"- Allowed product_role_match: {row.get('allowed_product_role_match') or 'none'}",
+                f"- Allowed false_positive_shape: {row.get('allowed_false_positive_shape') or 'none'}",
+                f"- Allowed promotion_blocker: {row.get('allowed_promotion_blocker') or 'none'}",
+                f"- Allowed human_label: {row.get('allowed_human_label') or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(manifest.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_SOURCE_PATCH_PLAN_FIELDS = [
+    "batch_id",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "product_role",
+    "review_focus",
+    "review_bucket",
+    "row_match",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "source_label_file",
+    "source_label_row_number",
+    "source_field",
+    "current_value",
+    "allowed_values",
+    "image_path",
+    "image_exists",
+    "source_label_file_exists",
+    "source_label_row_exists",
+    "source_patch_status",
+    "cell_update_instruction",
+    "after_update_verification_command",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_visual_label_source_patch_allowed_values(row: dict[str, Any], field: str) -> str:
+    return str(row.get(f"allowed_{field}", "") or "")
+
+
+def _sidecar_visual_label_source_patch_status(row: dict[str, Any]) -> str:
+    if row.get("source_update_status") == "blocked_reference_gap":
+        return "blocked_reference_gap"
+    return "pending_human_label_value"
+
+
+def build_sidecar_visual_label_source_patch_plan(manifest: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(manifest.get("run_id", "") or "<run_id>")
+    after_update_verification_command = (
+        f"PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief --run-id {run_id}"
+    )
+    rows: list[dict[str, Any]] = []
+    for manifest_row in manifest.get("rows", []) or []:
+        required_fields = [
+            field
+            for field in str(manifest_row.get("required_update_fields", "") or "").split("|")
+            if field
+        ]
+        for field in required_fields:
+            source_file = str(manifest_row.get("source_label_file", "") or "")
+            source_row = str(manifest_row.get("source_label_row_number", "") or "")
+            rows.append(
+                {
+                    "batch_id": manifest_row.get("batch_id", ""),
+                    "batch_row_index": manifest_row.get("batch_row_index", ""),
+                    "worklist_rank": manifest_row.get("worklist_rank", ""),
+                    "belief_id": manifest_row.get("belief_id", ""),
+                    "product_role": manifest_row.get("product_role", ""),
+                    "review_focus": manifest_row.get("review_focus", ""),
+                    "review_bucket": manifest_row.get("review_bucket", ""),
+                    "row_match": manifest_row.get("row_match", ""),
+                    "symbol": manifest_row.get("symbol", ""),
+                    "date": manifest_row.get("date", ""),
+                    "row_timeframe": manifest_row.get("row_timeframe", ""),
+                    "source_label_file": source_file,
+                    "source_label_row_number": source_row,
+                    "source_field": field,
+                    "current_value": manifest_row.get(field, ""),
+                    "allowed_values": _sidecar_visual_label_source_patch_allowed_values(manifest_row, field),
+                    "image_path": manifest_row.get("image_path", ""),
+                    "image_exists": manifest_row.get("image_exists", ""),
+                    "source_label_file_exists": manifest_row.get("source_label_file_exists", ""),
+                    "source_label_row_exists": manifest_row.get("source_label_row_exists", ""),
+                    "source_patch_status": _sidecar_visual_label_source_patch_status(manifest_row),
+                    "cell_update_instruction": (
+                        f"set_source_cell:{source_file}#{source_row}:{field}=<human_label_value>"
+                    ),
+                    "after_update_verification_command": after_update_verification_command,
+                    "product_language_allowed": False,
+                    "production_effect": "none",
+                }
+            )
+    pending_cell_count = sum(1 for row in rows if row.get("source_patch_status") == "pending_human_label_value")
+    blocked_cell_count = sum(1 for row in rows if row.get("source_patch_status") == "blocked_reference_gap")
+    source_files = sorted({str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")})
+    source_rows = {
+        (
+            str(row.get("source_label_file", "")),
+            str(row.get("source_label_row_number", "")),
+        )
+        for row in rows
+        if row.get("source_label_file") and row.get("source_label_row_number") != ""
+    }
+    if not rows:
+        status = "no_source_patch_cells_required"
+    elif blocked_cell_count:
+        status = "source_patch_plan_reference_gaps"
+    else:
+        status = "source_patch_plan_pending_human_labels"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_SOURCE_PATCH_PLAN_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": manifest.get("run_id", ""),
+        "lab_run_id": manifest.get("lab_run_id", ""),
+        "status": status,
+        "batch_id": manifest.get("batch_id", ""),
+        "batch_focus": manifest.get("batch_focus", ""),
+        "source_file_count": len(source_files),
+        "source_row_count": len(source_rows),
+        "source_patch_cell_count": len(rows),
+        "pending_source_patch_cell_count": pending_cell_count,
+        "blocked_source_patch_cell_count": blocked_cell_count,
+        "source_label_files": source_files,
+        "required_update_fields": manifest.get("rows", [{}])[0].get("required_update_fields", "")
+        if manifest.get("rows")
+        else "",
+        "after_update_verification_command": after_update_verification_command,
+        "next_action": (
+            "repair_source_or_image_reference_gaps_before_label_entry"
+            if blocked_cell_count
+            else (
+                "fill_source_patch_cells_then_rerun_sidecar_evidence_brief"
+                if pending_cell_count
+                else "rerun_sidecar_evidence_brief"
+            )
+        ),
+        "rows": rows,
+        "guardrail": (
+            "This patch plan expands the visual-label source-update manifest into one row per missing "
+            "source-label cell. It is a human label-entry checklist only; it does not infer labels, "
+            "write source CSVs, validate candidates, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_source_patch_plan(path: Path, patch_plan: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_SOURCE_PATCH_PLAN_FIELDS)
+        writer.writeheader()
+        for row in patch_plan.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_SOURCE_PATCH_PLAN_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_source_patch_plan(patch_plan: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Source Patch Plan",
+        "",
+        f"Generated: {patch_plan.get('generated_at')}",
+        f"Run: {patch_plan.get('run_id')}",
+        f"Lab run: {patch_plan.get('lab_run_id')}",
+        f"Status: {patch_plan.get('status')}",
+        f"Batch: {patch_plan.get('batch_id') or 'none'}",
+        f"Focus: {patch_plan.get('batch_focus') or 'none'}",
+        f"Source files: {patch_plan.get('source_file_count')}",
+        f"Source rows: {patch_plan.get('source_row_count')}",
+        f"Source patch cells: {patch_plan.get('source_patch_cell_count')}",
+        f"Pending source patch cells: {patch_plan.get('pending_source_patch_cell_count')}",
+        f"Blocked source patch cells: {patch_plan.get('blocked_source_patch_cell_count')}",
+        f"Required update fields: {patch_plan.get('required_update_fields') or 'none'}",
+        f"Source label files: {_csv_list(patch_plan.get('source_label_files', []) or []) or 'none'}",
+        f"Next action: {patch_plan.get('next_action') or 'none'}",
+        f"After-update verification command: {patch_plan.get('after_update_verification_command') or 'none'}",
+        "",
+        "This is a per-cell checklist for human visual-label entry. It does not write labels.",
+        "",
+        "## Cells",
+        "",
+    ]
+    if not patch_plan.get("rows"):
+        lines.append("- none")
+    for row in patch_plan.get("rows", []) or []:
+        lines.extend(
+            [
+                (
+                    f"### #{row.get('worklist_rank')} {row.get('belief_id')} "
+                    f"{row.get('symbol')} {row.get('date')} {row.get('row_timeframe')} "
+                    f"{row.get('source_field')}"
+                ),
+                "",
+                f"- Status: {row.get('source_patch_status')}",
+                f"- Cell update: {row.get('cell_update_instruction') or 'none'}",
+                f"- Allowed values: {row.get('allowed_values') or 'none'}",
+                f"- Current value: {row.get('current_value') or 'blank'}",
+                (
+                    "- Source refs: "
+                    f"file_exists={row.get('source_label_file_exists')} "
+                    f"row_exists={row.get('source_label_row_exists')} "
+                    f"image_exists={row.get('image_exists')}"
+                ),
+                f"- Image: {row.get('image_path') or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(patch_plan.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_FIELDS = [
+    "batch_id",
+    "batch_row_index",
+    "worklist_rank",
+    "belief_id",
+    "symbol",
+    "date",
+    "row_timeframe",
+    "source_label_file",
+    "source_label_row_number",
+    "required_label_fields",
+    "completed_required_fields",
+    "missing_required_fields",
+    "invalid_label_fields",
+    "optional_invalid_label_fields",
+    "label_completion_status",
+    "source_update_instruction",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _rubric_allowed_values_by_field(rubric: dict[str, Any]) -> dict[str, set[str]]:
+    allowed: dict[str, set[str]] = {}
+    for field in rubric.get("field_contracts", []) or []:
+        field_name = str(field.get("field", "") or "")
+        if not field_name:
+            continue
+        values = {str(value) for value in field.get("preferred_values", []) or [] if str(value)}
+        allowed[field_name] = values
+    return allowed
+
+
+def _sidecar_label_value_tokens(value: Any) -> list[str]:
+    return [token.strip() for token in str(value or "").split("|") if token.strip()]
+
+
+def _sidecar_visual_label_row_completion_status(
+    *,
+    missing_required_fields: list[str],
+    invalid_label_fields: list[str],
+) -> str:
+    if missing_required_fields and invalid_label_fields:
+        return "missing_required_and_invalid_label_values"
+    if missing_required_fields:
+        return "missing_required_label_values"
+    if invalid_label_fields:
+        return "invalid_label_values"
+    return "required_visual_labels_complete"
+
+
+def build_sidecar_visual_label_completion_audit(
+    *,
+    next_batch: dict[str, Any],
+    rubric: dict[str, Any],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    required_fields = [str(field) for field in rubric.get("required_label_fields", []) or [] if str(field)]
+    optional_fields = [str(field) for field in rubric.get("optional_label_fields", []) or [] if str(field)]
+    allowed_by_field = _rubric_allowed_values_by_field(rubric)
+    for batch_row in next_batch.get("rows", []) or []:
+        row_required_fields = [
+            field
+            for field in str(batch_row.get("missing_required_labels", "") or "").split("|")
+            if field
+        ] or required_fields
+        completed_required_fields: list[str] = []
+        missing_required_fields: list[str] = []
+        invalid_label_fields: list[str] = []
+        optional_invalid_label_fields: list[str] = []
+        for field in row_required_fields:
+            tokens = _sidecar_label_value_tokens(batch_row.get(field, ""))
+            if not tokens:
+                missing_required_fields.append(field)
+                continue
+            completed_required_fields.append(field)
+            allowed_values = allowed_by_field.get(field, set())
+            if allowed_values and any(token not in allowed_values for token in tokens):
+                invalid_label_fields.append(field)
+        for field in optional_fields:
+            tokens = _sidecar_label_value_tokens(batch_row.get(field, ""))
+            allowed_values = allowed_by_field.get(field, set())
+            if tokens and allowed_values and any(token not in allowed_values for token in tokens):
+                optional_invalid_label_fields.append(field)
+        rows.append(
+            {
+                "batch_id": batch_row.get("batch_id", ""),
+                "batch_row_index": batch_row.get("batch_row_index", ""),
+                "worklist_rank": batch_row.get("worklist_rank", ""),
+                "belief_id": batch_row.get("belief_id", ""),
+                "symbol": batch_row.get("symbol", ""),
+                "date": batch_row.get("date", ""),
+                "row_timeframe": batch_row.get("row_timeframe", ""),
+                "source_label_file": batch_row.get("source_label_file", ""),
+                "source_label_row_number": batch_row.get("source_label_row_number", ""),
+                "required_label_fields": _csv_list(row_required_fields),
+                "completed_required_fields": _csv_list(completed_required_fields),
+                "missing_required_fields": _csv_list(missing_required_fields),
+                "invalid_label_fields": _csv_list(invalid_label_fields),
+                "optional_invalid_label_fields": _csv_list(optional_invalid_label_fields),
+                "label_completion_status": _sidecar_visual_label_row_completion_status(
+                    missing_required_fields=missing_required_fields,
+                    invalid_label_fields=invalid_label_fields,
+                ),
+                "source_update_instruction": batch_row.get("source_update_instruction", ""),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    missing_rows = [
+        row for row in rows if row.get("missing_required_fields")
+    ]
+    invalid_rows = [
+        row for row in rows if row.get("invalid_label_fields") or row.get("optional_invalid_label_fields")
+    ]
+    completed_rows = [
+        row
+        for row in rows
+        if row.get("label_completion_status") == "required_visual_labels_complete"
+        and not row.get("optional_invalid_label_fields")
+    ]
+    if not rows:
+        status = "no_pending_visual_label_completion_audit"
+        next_action = str(next_batch.get("next_action", "")) or "rerun_sidecar_evidence_brief"
+    elif missing_rows:
+        status = "pending_required_visual_labels"
+        next_action = "complete_required_visual_labels_in_source_rows"
+    elif invalid_rows:
+        status = "invalid_visual_label_values"
+        next_action = "repair_visual_label_values_to_match_rubric"
+    else:
+        status = "visual_label_batch_complete"
+        next_action = "rerun_sidecar_evidence_brief_and_quality_audit"
+    return {
+        "model": CEO_SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": next_batch.get("run_id", rubric.get("run_id", "")),
+        "lab_run_id": next_batch.get("lab_run_id", rubric.get("lab_run_id", "")),
+        "status": status,
+        "batch_id": next_batch.get("batch_id", rubric.get("batch_id", "")),
+        "batch_focus": next_batch.get("batch_focus", rubric.get("batch_focus", "")),
+        "row_count": len(rows),
+        "completed_row_count": len(completed_rows),
+        "missing_required_row_count": len(missing_rows),
+        "invalid_label_row_count": len(invalid_rows),
+        "required_label_fields": required_fields,
+        "optional_label_fields": optional_fields,
+        "next_action": next_action,
+        "rows": rows,
+        "guardrail": (
+            "This audit checks whether the current human visual-label batch has required "
+            "fields populated with rubric-compatible values. It is review-quality evidence "
+            "only; it does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_visual_label_completion_audit(path: Path, audit: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_FIELDS)
+        writer.writeheader()
+        for row in audit.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VISUAL_LABEL_COMPLETION_AUDIT_FIELDS
+                }
+            )
+
+
+def render_sidecar_visual_label_completion_audit(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Visual Label Completion Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Run: {audit.get('run_id')}",
+        f"Lab run: {audit.get('lab_run_id')}",
+        f"Status: {audit.get('status')}",
+        f"Batch: {audit.get('batch_id') or 'none'}",
+        f"Focus: {audit.get('batch_focus') or 'none'}",
+        f"Rows: {audit.get('row_count')}",
+        f"Completed rows: {audit.get('completed_row_count')}",
+        f"Missing-required rows: {audit.get('missing_required_row_count')}",
+        f"Invalid-label rows: {audit.get('invalid_label_row_count')}",
+        f"Required label fields: {_csv_list(audit.get('required_label_fields', []) or []) or 'none'}",
+        f"Optional label fields: {_csv_list(audit.get('optional_label_fields', []) or []) or 'none'}",
+        f"Next action: {audit.get('next_action') or 'none'}",
+        "",
+        "This audit checks review-label completion only. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Rows",
+        "",
+    ]
+    if not audit.get("rows"):
+        lines.append("- none")
+    for row in audit.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### #{row.get('worklist_rank')} {row.get('belief_id')} {row.get('symbol')} {row.get('date')} {row.get('row_timeframe')}",
+                "",
+                f"- Status: {row.get('label_completion_status')}",
+                f"- Required fields: {row.get('required_label_fields') or 'none'}",
+                f"- Completed required fields: {row.get('completed_required_fields') or 'none'}",
+                f"- Missing required fields: {row.get('missing_required_fields') or 'none'}",
+                f"- Invalid label fields: {row.get('invalid_label_fields') or 'none'}",
+                f"- Optional invalid label fields: {row.get('optional_invalid_label_fields') or 'none'}",
+                f"- Source update: {row.get('source_update_instruction') or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(audit.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_CHAMPION_CHALLENGER_EVIDENCE_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "comparison_status",
+    "comparison_decision",
+    "best_variant_id",
+    "best_family_id",
+    "timeframe",
+    "direction",
+    "classification",
+    "median_forward_relative_return",
+    "champion_baseline_median_forward_relative_return",
+    "role_delta_vs_champion_baseline",
+    "hit_rate",
+    "champion_baseline_hit_rate",
+    "median_max_drawdown",
+    "median_max_favorable_excursion",
+    "mfe_mae_ratio",
+    "sample_size",
+    "unique_symbols",
+    "event_diversity",
+    "missed_upside_cost",
+    "avoided_downside_benefit",
+    "directional_edge_vs_unconditional",
+    "directional_edge_vs_cluster",
+    "matched_null_directional_edge",
+    "matched_null_p_value",
+    "passes_both_baselines",
+    "strict_survivors",
+    "strict_survivor",
+    "same_sample_promotion_blockers",
+    "champion_baseline_method",
+    "source_notes",
+    "review_only_frozen_spec_status",
+    "validation_route",
+    "validation_result",
+    "evidence_status",
+    "operator_evidence_decision",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sidecar_operator_evidence_decision(candidate: dict[str, Any]) -> str:
+    metric = candidate.get("metric_summary", {}) or {}
+    classification = str(metric.get("classification", ""))
+    role_delta = _to_float_or_none(metric.get("role_delta_vs_champion_baseline"))
+    event_diversity = _to_float_or_none(metric.get("event_diversity"))
+    blockers = list(metric.get("same_sample_promotion_blockers", []) or [])
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    if classification == "fragile" or (role_delta is not None and role_delta < 0):
+        return "failure_mode_review_only"
+    if "cluster_concentration" in {str(blocker) for blocker in blockers}:
+        return "cluster_concentrated_review_only"
+    if event_diversity is not None and event_diversity < 5:
+        return "cluster_concentrated_review_only"
+    if blockers or frozen_spec.get("status") == "spec_only_not_validated":
+        return "same_sample_useful_needs_visual_and_fresh_validation"
+    if candidate.get("evidence_status") == "shadow_review_ready_fresh_data_blocked":
+        return "fresh_data_blocked_shadow_candidate"
+    return "shadow_candidate_needs_governed_validation"
+
+
+def _sidecar_champion_challenger_evidence_csv_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    metric = candidate.get("metric_summary", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    validation = candidate.get("validation", {}) or {}
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "comparison_status": candidate.get("comparison_status", ""),
+        "comparison_decision": candidate.get("comparison_decision", ""),
+        "best_variant_id": metric.get("best_variant_id", ""),
+        "best_family_id": metric.get("best_family_id", ""),
+        "timeframe": metric.get("timeframe", ""),
+        "direction": metric.get("direction", ""),
+        "classification": metric.get("classification", ""),
+        "median_forward_relative_return": metric.get("median_forward_relative_return"),
+        "champion_baseline_median_forward_relative_return": metric.get(
+            "champion_baseline_median_forward_relative_return"
+        ),
+        "role_delta_vs_champion_baseline": metric.get("role_delta_vs_champion_baseline"),
+        "hit_rate": metric.get("hit_rate"),
+        "champion_baseline_hit_rate": metric.get("champion_baseline_hit_rate"),
+        "median_max_drawdown": metric.get("median_max_drawdown"),
+        "median_max_favorable_excursion": metric.get("median_max_favorable_excursion"),
+        "mfe_mae_ratio": metric.get("mfe_mae_ratio"),
+        "sample_size": metric.get("sample_size"),
+        "unique_symbols": metric.get("unique_symbols"),
+        "event_diversity": metric.get("event_diversity"),
+        "missed_upside_cost": metric.get("missed_upside_cost"),
+        "avoided_downside_benefit": metric.get("avoided_downside_benefit"),
+        "directional_edge_vs_unconditional": metric.get("directional_edge_vs_unconditional"),
+        "directional_edge_vs_cluster": metric.get("directional_edge_vs_cluster"),
+        "matched_null_directional_edge": metric.get("matched_null_directional_edge"),
+        "matched_null_p_value": metric.get("matched_null_p_value"),
+        "passes_both_baselines": metric.get("passes_both_baselines"),
+        "strict_survivors": metric.get("strict_survivors"),
+        "strict_survivor": metric.get("strict_survivor"),
+        "same_sample_promotion_blockers": _csv_list(metric.get("same_sample_promotion_blockers", []) or []),
+        "champion_baseline_method": metric.get("champion_baseline_method", ""),
+        "source_notes": metric.get("source_notes", ""),
+        "review_only_frozen_spec_status": frozen_spec.get("status", ""),
+        "validation_route": validation.get("route", ""),
+        "validation_result": validation.get("validation_result", ""),
+        "evidence_status": candidate.get("evidence_status", ""),
+        "operator_evidence_decision": _sidecar_operator_evidence_decision(candidate),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def write_sidecar_champion_challenger_evidence(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = sorted(candidates, key=_sidecar_visual_priority, reverse=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_CHAMPION_CHALLENGER_EVIDENCE_FIELDS)
+        writer.writeheader()
+        for candidate in sorted_candidates:
+            row = _sidecar_champion_challenger_evidence_csv_row(candidate)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_CHAMPION_CHALLENGER_EVIDENCE_FIELDS
+                }
+            )
+
+
+SIDECAR_EVIDENCE_GAP_MATRIX_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "evidence_dimension",
+    "required_by",
+    "same_sample_status",
+    "same_sample_value",
+    "fresh_validation_status",
+    "visual_review_status",
+    "frozen_spec_status",
+    "blocking_gates",
+    "operator_evidence_decision",
+    "next_required_action",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _evidence_value_present(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _sidecar_fresh_validation_status(candidate: dict[str, Any]) -> str:
+    validation = candidate.get("validation", {}) or {}
+    validation_result = str(validation.get("validation_result", "") or "not_run")
+    if validation.get("validation_completed") is True:
+        return validation_result
+    if candidate.get("evidence_status") == "shadow_review_ready_fresh_data_blocked":
+        return "blocked_by_manual_data_gate"
+    return validation_result
+
+
+def _sidecar_candidate_blocking_gates(candidate: dict[str, Any]) -> list[str]:
+    gates: list[str] = []
+    validation = candidate.get("validation", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    if candidate.get("evidence_status") == "shadow_review_ready_fresh_data_blocked":
+        gates.append("manual_data_gate")
+    if validation.get("validation_completed") is not True:
+        gates.append("fresh_or_control_validation_not_run")
+    if frozen_spec.get("status") == "spec_only_not_validated":
+        gates.append("review_only_frozen_spec_not_validated")
+    if candidate.get("product_language_allowed") is not False:
+        gates.append("product_language_allowed")
+    if str(candidate.get("production_effect", "")) != "none":
+        gates.append("production_effect_not_none")
+    return gates
+
+
+def _sidecar_candidate_required_next_action(candidate: dict[str, Any]) -> str:
+    validation = candidate.get("validation", {}) or {}
+    operator_decision = _sidecar_operator_evidence_decision(candidate)
+    if operator_decision == "failure_mode_review_only":
+        return "preserve as failure-mode evidence; do not promote without new governed validation"
+    if operator_decision == "cluster_concentrated_review_only":
+        return "complete visual review and require broader fresh/control evidence before promotion consideration"
+    if candidate.get("evidence_status") == "shadow_review_ready_fresh_data_blocked":
+        return "import or curate fresh OHLCV data, then rerun fresh-data preflight"
+    return validation.get("route") or "governed validation required"
+
+
+def _gap_matrix_status_for_values(*values: Any) -> str:
+    if all(_evidence_value_present(value) for value in values):
+        return "same_sample_present"
+    if any(_evidence_value_present(value) for value in values):
+        return "same_sample_partial_gap"
+    return "same_sample_missing"
+
+
+def _sidecar_gap_matrix_row(
+    *,
+    candidate: dict[str, Any],
+    dimension: str,
+    required_by: str,
+    same_sample_status: str,
+    same_sample_value: str,
+) -> dict[str, Any]:
+    visual = candidate.get("visual_review", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "evidence_dimension": dimension,
+        "required_by": required_by,
+        "same_sample_status": same_sample_status,
+        "same_sample_value": same_sample_value,
+        "fresh_validation_status": _sidecar_fresh_validation_status(candidate),
+        "visual_review_status": visual.get("status", ""),
+        "frozen_spec_status": frozen_spec.get("status", ""),
+        "blocking_gates": _csv_list(_sidecar_candidate_blocking_gates(candidate)),
+        "operator_evidence_decision": _sidecar_operator_evidence_decision(candidate),
+        "next_required_action": _sidecar_candidate_required_next_action(candidate),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def _sidecar_evidence_gap_matrix_rows(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+    metric = candidate.get("metric_summary", {}) or {}
+    visual = candidate.get("visual_review", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    blockers = {str(blocker) for blocker in metric.get("same_sample_promotion_blockers", []) or []}
+    event_diversity = _to_float_or_none(metric.get("event_diversity"))
+    event_diversity_status = _gap_matrix_status_for_values(
+        metric.get("sample_size"),
+        metric.get("unique_symbols"),
+        metric.get("event_diversity"),
+    )
+    if "cluster_concentration" in blockers or (event_diversity is not None and event_diversity < 5):
+        event_diversity_status = "same_sample_blocker_cluster_concentrated"
+    production_guardrail_status = "pass_shadow_only"
+    if candidate.get("promotion_ceiling") != "shadow_candidate":
+        production_guardrail_status = "fail_promotion_ceiling"
+    elif candidate.get("product_language_allowed") is not False:
+        production_guardrail_status = "fail_product_language_allowed"
+    elif str(candidate.get("production_effect", "")) != "none":
+        production_guardrail_status = "fail_production_effect"
+
+    dimensions = [
+        (
+            "forward_relative_return_vs_basket",
+            "champion_challenger_rule",
+            _gap_matrix_status_for_values(
+                metric.get("median_forward_relative_return"),
+                metric.get("champion_baseline_median_forward_relative_return"),
+                metric.get("role_delta_vs_champion_baseline"),
+            ),
+            (
+                f"median={metric.get('median_forward_relative_return')}"
+                f"|champion={metric.get('champion_baseline_median_forward_relative_return')}"
+                f"|delta={metric.get('role_delta_vs_champion_baseline')}"
+            ),
+        ),
+        (
+            "hit_rate",
+            "champion_challenger_rule",
+            _gap_matrix_status_for_values(metric.get("hit_rate"), metric.get("champion_baseline_hit_rate")),
+            f"hit_rate={metric.get('hit_rate')}|champion={metric.get('champion_baseline_hit_rate')}",
+        ),
+        (
+            "mfe_mae_drawdown",
+            "champion_challenger_rule",
+            _gap_matrix_status_for_values(
+                metric.get("median_max_drawdown"),
+                metric.get("median_max_favorable_excursion"),
+                metric.get("mfe_mae_ratio"),
+            ),
+            (
+                f"drawdown={metric.get('median_max_drawdown')}"
+                f"|mfe={metric.get('median_max_favorable_excursion')}"
+                f"|mfe_mae={metric.get('mfe_mae_ratio')}"
+            ),
+        ),
+        (
+            "missed_upside_and_avoided_downside",
+            "champion_challenger_rule",
+            _gap_matrix_status_for_values(metric.get("missed_upside_cost"), metric.get("avoided_downside_benefit")),
+            (
+                f"missed_upside={metric.get('missed_upside_cost')}"
+                f"|avoided_downside={metric.get('avoided_downside_benefit')}"
+            ),
+        ),
+        (
+            "event_diversity",
+            "champion_challenger_rule",
+            event_diversity_status,
+            (
+                f"sample={metric.get('sample_size')}"
+                f"|symbols={metric.get('unique_symbols')}"
+                f"|clusters={metric.get('event_diversity')}"
+            ),
+        ),
+        (
+            "lag_sensitivity",
+            "champion_challenger_rule",
+            "same_sample_blocker_lag_sensitive" if "lag_sensitive" in blockers else "not_flagged_same_sample",
+            f"blockers={_csv_list(metric.get('same_sample_promotion_blockers', []) or []) or 'none'}",
+        ),
+        (
+            "cooldown_sensitivity",
+            "champion_challenger_rule",
+            "same_sample_blocker_cooldown_sensitive" if "cooldown_sensitive" in blockers else "not_flagged_same_sample",
+            f"blockers={_csv_list(metric.get('same_sample_promotion_blockers', []) or []) or 'none'}",
+        ),
+        (
+            "visual_review",
+            "chart_review_gate",
+            str(visual.get("status", "missing") or "missing"),
+            (
+                f"focus={visual.get('focus') or 'none'}"
+                f"|gallery={visual.get('gallery') or 'none'}"
+                f"|labels={visual.get('labels_with_images') or 'none'}"
+            ),
+        ),
+        (
+            "frozen_candidate_spec",
+            "validation_governance",
+            str(frozen_spec.get("status", "missing_review_only_frozen_spec") or "missing_review_only_frozen_spec"),
+            (
+                f"entry_lag={frozen_spec.get('entry_lag_bars')}"
+                f"|cooldown={frozen_spec.get('cooldown_bars')}"
+                f"|outcome={frozen_spec.get('terminal_outcome_column') or 'none'}"
+            ),
+        ),
+        (
+            "fresh_control_validation",
+            "promotion_gate",
+            _sidecar_fresh_validation_status(candidate),
+            (
+                f"route={(candidate.get('validation', {}) or {}).get('route') or 'none'}"
+                f"|result={(candidate.get('validation', {}) or {}).get('validation_result') or 'not_run'}"
+            ),
+        ),
+        (
+            "production_guardrail",
+            "shadow_only_policy",
+            production_guardrail_status,
+            (
+                f"promotion_ceiling={candidate.get('promotion_ceiling')}"
+                f"|product_language_allowed={candidate.get('product_language_allowed')}"
+                f"|production_effect={candidate.get('production_effect')}"
+            ),
+        ),
+    ]
+    return [
+        _sidecar_gap_matrix_row(
+            candidate=candidate,
+            dimension=dimension,
+            required_by=required_by,
+            same_sample_status=same_sample_status,
+            same_sample_value=same_sample_value,
+        )
+        for dimension, required_by, same_sample_status, same_sample_value in dimensions
+    ]
+
+
+def write_sidecar_evidence_gap_matrix(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = sorted(candidates, key=_sidecar_visual_priority, reverse=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_EVIDENCE_GAP_MATRIX_FIELDS)
+        writer.writeheader()
+        for candidate in sorted_candidates:
+            for row in _sidecar_evidence_gap_matrix_rows(candidate):
+                writer.writerow(
+                    {
+                        field: "" if row.get(field) is None else row.get(field, "")
+                        for field in SIDECAR_EVIDENCE_GAP_MATRIX_FIELDS
+                    }
+                )
+
+
+SIDECAR_CANDIDATE_READINESS_SUMMARY_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "readiness_tier",
+    "operator_evidence_decision",
+    "primary_blocker",
+    "ready_dimension_count",
+    "blocker_dimension_count",
+    "missing_dimension_count",
+    "advisory_dimension_count",
+    "ready_dimensions",
+    "blocker_dimensions",
+    "missing_dimensions",
+    "advisory_dimensions",
+    "fresh_validation_status",
+    "visual_review_status",
+    "frozen_spec_status",
+    "blocking_gates",
+    "strongest_same_sample_signal",
+    "next_required_action",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_gap_status_bucket(status: str) -> str:
+    if status in {
+        "same_sample_present",
+        "not_flagged_same_sample",
+        "ready_for_visual_review",
+        "pass_shadow_only",
+    }:
+        return "ready"
+    if status in {"same_sample_missing", "missing"} or status.startswith("missing_"):
+        return "missing"
+    if (
+        status.startswith("same_sample_blocker")
+        or status.startswith("fail_")
+        or status
+        in {
+            "blocked_by_manual_data_gate",
+            "spec_only_not_validated",
+            "not_run",
+            "fresh_or_control_validation_not_run",
+        }
+    ):
+        return "blocker"
+    return "advisory"
+
+
+def _sidecar_candidate_readiness_tier(candidate: dict[str, Any], gap_rows: list[dict[str, Any]]) -> str:
+    operator_decision = _sidecar_operator_evidence_decision(candidate)
+    statuses = {str(row.get("same_sample_status", "")) for row in gap_rows}
+    if any(status.startswith("fail_") for status in statuses):
+        return "shadow_guardrail_failed"
+    if operator_decision == "failure_mode_review_only":
+        return "failure_mode_review_only"
+    if operator_decision == "cluster_concentrated_review_only":
+        return "review_only_cluster_concentrated"
+    if "blocked_by_manual_data_gate" in statuses:
+        return "fresh_data_blocked_shadow_candidate"
+    if any(_sidecar_gap_status_bucket(status) == "blocker" for status in statuses):
+        return "shadow_candidate_has_evidence_blockers"
+    return "shadow_candidate_ready_for_governed_validation"
+
+
+def _sidecar_candidate_primary_blocker(candidate: dict[str, Any], gap_rows: list[dict[str, Any]]) -> str:
+    statuses = {str(row.get("same_sample_status", "")) for row in gap_rows}
+    operator_decision = _sidecar_operator_evidence_decision(candidate)
+    if any(status.startswith("fail_") for status in statuses):
+        return "shadow_guardrail_failed"
+    if operator_decision == "failure_mode_review_only":
+        return "failure_mode_review_only"
+    if operator_decision == "cluster_concentrated_review_only" or "same_sample_blocker_cluster_concentrated" in statuses:
+        return "cluster_concentration"
+    if "blocked_by_manual_data_gate" in statuses:
+        return "manual_data_gate"
+    if "same_sample_blocker_lag_sensitive" in statuses or "same_sample_blocker_cooldown_sensitive" in statuses:
+        return "lag_or_cooldown_sensitivity"
+    if "spec_only_not_validated" in statuses:
+        return "frozen_spec_not_validated"
+    if any(_sidecar_gap_status_bucket(status) == "missing" for status in statuses):
+        return "missing_required_metric"
+    return "none"
+
+
+def _sidecar_candidate_readiness_summary_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    metric = candidate.get("metric_summary", {}) or {}
+    gap_rows = _sidecar_evidence_gap_matrix_rows(candidate)
+    dimensions_by_bucket: dict[str, list[str]] = {"ready": [], "blocker": [], "missing": [], "advisory": []}
+    for row in gap_rows:
+        bucket = _sidecar_gap_status_bucket(str(row.get("same_sample_status", "")))
+        dimensions_by_bucket.setdefault(bucket, []).append(str(row.get("evidence_dimension", "")))
+    first_gap_row = gap_rows[0] if gap_rows else {}
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "readiness_tier": _sidecar_candidate_readiness_tier(candidate, gap_rows),
+        "operator_evidence_decision": _sidecar_operator_evidence_decision(candidate),
+        "primary_blocker": _sidecar_candidate_primary_blocker(candidate, gap_rows),
+        "ready_dimension_count": len(dimensions_by_bucket.get("ready", [])),
+        "blocker_dimension_count": len(dimensions_by_bucket.get("blocker", [])),
+        "missing_dimension_count": len(dimensions_by_bucket.get("missing", [])),
+        "advisory_dimension_count": len(dimensions_by_bucket.get("advisory", [])),
+        "ready_dimensions": _csv_list(dimensions_by_bucket.get("ready", [])),
+        "blocker_dimensions": _csv_list(dimensions_by_bucket.get("blocker", [])),
+        "missing_dimensions": _csv_list(dimensions_by_bucket.get("missing", [])),
+        "advisory_dimensions": _csv_list(dimensions_by_bucket.get("advisory", [])),
+        "fresh_validation_status": first_gap_row.get("fresh_validation_status", ""),
+        "visual_review_status": first_gap_row.get("visual_review_status", ""),
+        "frozen_spec_status": first_gap_row.get("frozen_spec_status", ""),
+        "blocking_gates": _csv_list(_sidecar_candidate_blocking_gates(candidate)),
+        "strongest_same_sample_signal": (
+            f"role_delta={metric.get('role_delta_vs_champion_baseline')}"
+            f"|matched_null_p={metric.get('matched_null_p_value')}"
+            f"|strict_survivor={metric.get('strict_survivor')}"
+            f"|event_diversity={metric.get('event_diversity')}"
+        ),
+        "next_required_action": _sidecar_candidate_required_next_action(candidate),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def write_sidecar_candidate_readiness_summary(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = sorted(candidates, key=_sidecar_visual_priority, reverse=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_CANDIDATE_READINESS_SUMMARY_FIELDS)
+        writer.writeheader()
+        for candidate in sorted_candidates:
+            row = _sidecar_candidate_readiness_summary_row(candidate)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_CANDIDATE_READINESS_SUMMARY_FIELDS
+                }
+            )
+
+
+def render_sidecar_candidate_readiness_summary(brief: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Candidate Readiness Summary",
+        "",
+        f"Generated: {brief.get('generated_at')}",
+        f"Run: {brief.get('run_id')}",
+        f"Lab run: {brief.get('lab_run_id')}",
+        f"Status: {brief.get('status')}",
+        f"Manual data gate active: {brief.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}",
+        f"Next action: {brief.get('next_action')}",
+        "",
+        "This report is a triage view over shadow-only sidecar evidence. It does not validate, promote, or alter production behavior.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    if not candidates:
+        lines.append("- No sidecar candidates.")
+    for candidate in candidates:
+        row = _sidecar_candidate_readiness_summary_row(candidate)
+        lines.extend(
+            [
+                f"### {row.get('belief_id')}",
+                "",
+                f"- Readiness tier: {row.get('readiness_tier')}",
+                f"- Primary blocker: {row.get('primary_blocker')}",
+                f"- Operator evidence decision: {row.get('operator_evidence_decision')}",
+                f"- Product role: {row.get('product_role')}",
+                f"- Champion/challenger: {row.get('champion')} -> {row.get('challenger')}",
+                (
+                    "- Dimension counts: "
+                    f"ready={row.get('ready_dimension_count')} "
+                    f"blocker={row.get('blocker_dimension_count')} "
+                    f"missing={row.get('missing_dimension_count')} "
+                    f"advisory={row.get('advisory_dimension_count')}"
+                ),
+                f"- Ready dimensions: {row.get('ready_dimensions') or 'none'}",
+                f"- Blocker dimensions: {row.get('blocker_dimensions') or 'none'}",
+                f"- Missing dimensions: {row.get('missing_dimensions') or 'none'}",
+                f"- Advisory dimensions: {row.get('advisory_dimensions') or 'none'}",
+                f"- Fresh validation status: {row.get('fresh_validation_status')}",
+                f"- Visual review status: {row.get('visual_review_status')}",
+                f"- Frozen spec status: {row.get('frozen_spec_status')}",
+                f"- Blocking gates: {row.get('blocking_gates') or 'none'}",
+                f"- Strongest same-sample signal: {row.get('strongest_same_sample_signal')}",
+                f"- Next required action: {row.get('next_required_action')}",
+                f"- Product language allowed: {row.get('product_language_allowed')}",
+                f"- Production effect: {row.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            "This summary is derived from same-sample, visual-review, frozen-spec, and data-gate evidence refs only.",
+            "It is not a promotion proposal and does not authorize product language or production behavior.",
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VALIDATION_QUEUE_FIELDS = [
+    "queue_rank",
+    "belief_id",
+    "product_role",
+    "readiness_tier",
+    "validation_queue_status",
+    "validation_priority",
+    "primary_blocker",
+    "validation_route",
+    "required_tests",
+    "required_controls",
+    "required_preflight_command",
+    "post_data_validation_command",
+    "fresh_validation_status",
+    "visual_review_status",
+    "frozen_spec_status",
+    "promotion_ceiling",
+    "operator_evidence_decision",
+    "next_required_action",
+    "stop_condition",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_validation_queue_status(candidate: dict[str, Any]) -> str:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "shadow_guardrail_failed":
+        return "blocked_shadow_guardrail_failed"
+    if tier == "failure_mode_review_only":
+        return "archive_failure_mode_do_not_validate_for_promotion"
+    if tier == "review_only_cluster_concentrated":
+        return "review_only_requires_diversity_and_fresh_control"
+    if tier == "fresh_data_blocked_shadow_candidate":
+        return "queued_after_manual_data_import"
+    return "queued_for_governed_review"
+
+
+def _sidecar_validation_priority(candidate: dict[str, Any]) -> str:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "fresh_data_blocked_shadow_candidate":
+        return "1"
+    if tier == "review_only_cluster_concentrated":
+        return "2"
+    if tier == "failure_mode_review_only":
+        return "9"
+    return "5"
+
+
+def _sidecar_post_data_validation_command(candidate: dict[str, Any]) -> str:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "failure_mode_review_only":
+        return "none; preserve as failure-mode evidence"
+    if tier == "review_only_cluster_concentrated":
+        return "rerun fresh/control validation only as a diversity check; do not promote on cluster-concentrated evidence"
+    return "rerun fresh-data preflight, then run governed fresh/control validation with the frozen candidate shape"
+
+
+def _sidecar_validation_stop_condition(candidate: dict[str, Any]) -> str:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "failure_mode_review_only":
+        return "stop if new evidence still shows negative reset-quality outcome"
+    if tier == "review_only_cluster_concentrated":
+        return "stop promotion review if fresh/control evidence remains cluster-concentrated or lag-sensitive"
+    return "stop promotion review if fresh/control evidence fails role delta, lag/cooldown, event diversity, or shadow guardrails"
+
+
+def _sidecar_validation_queue_row(candidate: dict[str, Any], queue_rank: int) -> dict[str, Any]:
+    validation = candidate.get("validation", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    return {
+        "queue_rank": queue_rank,
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "readiness_tier": readiness.get("readiness_tier", ""),
+        "validation_queue_status": _sidecar_validation_queue_status(candidate),
+        "validation_priority": _sidecar_validation_priority(candidate),
+        "primary_blocker": readiness.get("primary_blocker", ""),
+        "validation_route": validation.get("route", ""),
+        "required_tests": _csv_list(validation.get("required_tests", []) or []),
+        "required_controls": _csv_list(frozen_spec.get("required_controls", []) or []),
+        "required_preflight_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id <run_id>",
+        "post_data_validation_command": _sidecar_post_data_validation_command(candidate),
+        "fresh_validation_status": readiness.get("fresh_validation_status", ""),
+        "visual_review_status": readiness.get("visual_review_status", ""),
+        "frozen_spec_status": readiness.get("frozen_spec_status", ""),
+        "promotion_ceiling": candidate.get("promotion_ceiling", ""),
+        "operator_evidence_decision": readiness.get("operator_evidence_decision", ""),
+        "next_required_action": readiness.get("next_required_action", ""),
+        "stop_condition": _sidecar_validation_stop_condition(candidate),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def _sorted_sidecar_validation_queue_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            int(_sidecar_validation_priority(candidate)),
+            -_sidecar_visual_priority(candidate),
+            str(candidate.get("belief_id", "")),
+        ),
+    )
+
+
+def write_sidecar_validation_queue(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = _sorted_sidecar_validation_queue_candidates(candidates)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_VALIDATION_QUEUE_FIELDS)
+        writer.writeheader()
+        for rank, candidate in enumerate(sorted_candidates, start=1):
+            row = _sidecar_validation_queue_row(candidate, rank)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_VALIDATION_QUEUE_FIELDS
+                }
+            )
+
+
+def render_sidecar_validation_queue(brief: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Validation Queue",
+        "",
+        f"Generated: {brief.get('generated_at')}",
+        f"Run: {brief.get('run_id')}",
+        f"Lab run: {brief.get('lab_run_id')}",
+        f"Status: {brief.get('status')}",
+        f"Manual data gate active: {brief.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}",
+        f"Next action: {brief.get('next_action')}",
+        "",
+        "This queue is a post-data validation handoff. It does not run validation, promote sidecars, or alter production behavior.",
+        "",
+        "## Queue",
+        "",
+    ]
+    candidates = _sorted_sidecar_validation_queue_candidates(brief.get("candidates", []) or [])
+    if not candidates:
+        lines.append("- No sidecar candidates.")
+    for rank, candidate in enumerate(candidates, start=1):
+        row = _sidecar_validation_queue_row(candidate, rank)
+        lines.extend(
+            [
+                f"### {rank}. {row.get('belief_id')}",
+                "",
+                f"- Queue status: {row.get('validation_queue_status')}",
+                f"- Validation priority: {row.get('validation_priority')}",
+                f"- Readiness tier: {row.get('readiness_tier')}",
+                f"- Primary blocker: {row.get('primary_blocker')}",
+                f"- Product role: {row.get('product_role')}",
+                f"- Validation route: {row.get('validation_route') or 'none'}",
+                f"- Required tests: {row.get('required_tests') or 'none'}",
+                f"- Required controls: {row.get('required_controls') or 'none'}",
+                f"- Required preflight command: {row.get('required_preflight_command')}",
+                f"- Post-data validation command: {row.get('post_data_validation_command')}",
+                f"- Fresh validation status: {row.get('fresh_validation_status')}",
+                f"- Visual review status: {row.get('visual_review_status')}",
+                f"- Frozen spec status: {row.get('frozen_spec_status')}",
+                f"- Operator evidence decision: {row.get('operator_evidence_decision')}",
+                f"- Next required action: {row.get('next_required_action')}",
+                f"- Stop condition: {row.get('stop_condition')}",
+                f"- Promotion ceiling: {row.get('promotion_ceiling')}",
+                f"- Product language allowed: {row.get('product_language_allowed')}",
+                f"- Production effect: {row.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            "This queue is inactive while the manual data gate is active.",
+            "It is a validation-order handoff only, not approval to validate or promote.",
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_VALIDATION_DESIGN_REQUIRED_METRICS = [
+    "forward_relative_return_vs_basket",
+    "hit_rate",
+    "mfe_mae_drawdown",
+    "missed_upside_and_avoided_downside",
+    "event_diversity",
+    "lag_sensitivity",
+    "cooldown_sensitivity",
+    "matched_null_control",
+    "shadow_guardrail",
+]
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _sidecar_validation_design_status(candidate: dict[str, Any]) -> str:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "failure_mode_review_only":
+        return "archive_failure_mode_not_promotion_candidate"
+    if tier == "review_only_cluster_concentrated":
+        return "review_only_diversity_control_design"
+    if tier == "fresh_data_blocked_shadow_candidate":
+        return "blocked_until_manual_data_import"
+    if tier == "shadow_guardrail_failed":
+        return "blocked_shadow_guardrail_failed"
+    return "governed_validation_design_ready"
+
+
+def _sidecar_validation_design_acceptance_criteria(candidate: dict[str, Any]) -> list[str]:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    tier = str(readiness.get("readiness_tier", ""))
+    if tier == "failure_mode_review_only":
+        return [
+            "preserve as failure-mode evidence for do-not-repeat learning",
+            "do not promote unless a new frozen shape reverses the failure on fresh/control evidence",
+        ]
+    if tier == "review_only_cluster_concentrated":
+        return [
+            "fresh/control evidence must no longer be cluster-concentrated",
+            "lag and cooldown sensitivity must not explain the useful warning effect",
+            "visual review must confirm the warning is legible before downside rather than only after the move",
+            "shadow guardrails must continue to block product language and production behavior",
+        ]
+    return [
+        "fresh/control role delta must improve the named product role versus core_signal_v0",
+        "hit rate, forward relative return, MFE/MAE, and avoided-downside evidence must agree with the product role",
+        "event diversity must cover more than a narrow cluster and not depend on one symbol family",
+        "lag and cooldown sensitivity must remain acceptable without threshold tuning",
+        "visual review must confirm the warning/reset behavior is chart-legible",
+        "shadow guardrails must continue to block product language and production behavior",
+    ]
+
+
+def _sidecar_validation_design_controls(candidate: dict[str, Any]) -> list[str]:
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    controls = [
+        str(control)
+        for control in frozen_spec.get("required_controls", []) or []
+        if str(control)
+    ]
+    controls.extend(
+        [
+            "compare champion core_signal_v0 against the named challenger only",
+            "use the same frozen candidate shape across fresh/control runs",
+            "do not tune thresholds, lag, cooldown, or outcome columns after seeing fresh/control results",
+            "rerun fresh-data preflight before any validation executor",
+            "keep product_language_allowed false and production_effect none",
+        ]
+    )
+    return _dedupe_preserve_order(controls)
+
+
+def build_sidecar_champion_challenger_validation_design(brief: dict[str, Any]) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    sorted_candidates = _sorted_sidecar_validation_queue_candidates(brief.get("candidates", []) or [])
+    for candidate in sorted_candidates:
+        readiness = _sidecar_candidate_readiness_summary_row(candidate)
+        validation = candidate.get("validation", {}) or {}
+        frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+        visual = candidate.get("visual_review", {}) or {}
+        source_refs = candidate.get("source_refs", {}) or {}
+        debts = candidate.get("evidence_debts", []) or []
+        candidates.append(
+            {
+                "belief_id": candidate.get("belief_id", ""),
+                "product_role": candidate.get("product_role", ""),
+                "champion": candidate.get("champion", ""),
+                "challenger": candidate.get("challenger", ""),
+                "design_status": _sidecar_validation_design_status(candidate),
+                "readiness_tier": readiness.get("readiness_tier", ""),
+                "primary_blocker": readiness.get("primary_blocker", ""),
+                "operator_evidence_decision": readiness.get("operator_evidence_decision", ""),
+                "validation_route": validation.get("route", ""),
+                "required_tests": validation.get("required_tests", []) or [],
+                "required_metrics": SIDECAR_VALIDATION_DESIGN_REQUIRED_METRICS,
+                "required_controls": _sidecar_validation_design_controls(candidate),
+                "acceptance_criteria": _sidecar_validation_design_acceptance_criteria(candidate),
+                "stop_condition": _sidecar_validation_stop_condition(candidate),
+                "required_preflight_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id <run_id>",
+                "post_data_validation_command": _sidecar_post_data_validation_command(candidate),
+                "fresh_validation_status": readiness.get("fresh_validation_status", ""),
+                "visual_review_status": readiness.get("visual_review_status", ""),
+                "visual_review_gallery": visual.get("gallery", ""),
+                "visual_review_labels_with_images": visual.get("labels_with_images", ""),
+                "frozen_spec_status": readiness.get("frozen_spec_status", ""),
+                "review_only_entry_lag_bars": frozen_spec.get("entry_lag_bars", ""),
+                "review_only_cooldown_bars": frozen_spec.get("cooldown_bars", ""),
+                "review_only_outcome_column": frozen_spec.get("terminal_outcome_column", ""),
+                "evidence_source_dirs": _source_ref_list(source_refs.get("metric_sources", []) or [], "loop_dir"),
+                "visual_evidence_source_dirs": _source_ref_list(
+                    source_refs.get("visual_evidence_sources", []) or [],
+                    "loop_dir",
+                ),
+                "evidence_debt_ids": [debt.get("debt_id", "") for debt in debts if debt.get("debt_id")],
+                "evidence_debt_kinds": [debt.get("debt_kind", "") for debt in debts if debt.get("debt_kind")],
+                "blocking_gates": _sidecar_candidate_blocking_gates(candidate),
+                "authority_scope": "pre_registered_shadow_validation_design_only",
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    return {
+        "model": "riskflow_ceo_sidecar_champion_challenger_validation_design_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": (
+            "manual_data_gate_blocks_execution"
+            if brief.get("manual_data_gate_active") is True
+            else "design_ready_for_governed_validation"
+        ),
+        "candidate_count": len(candidates),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "required_metrics": SIDECAR_VALIDATION_DESIGN_REQUIRED_METRICS,
+        "candidates": candidates,
+        "guardrail": (
+            "This design pre-registers champion/challenger validation requirements only. "
+            "It does not execute validation, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_champion_challenger_validation_design(design: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Champion/Challenger Validation Design",
+        "",
+        f"Generated: {design.get('generated_at')}",
+        f"Run: {design.get('run_id')}",
+        f"Lab run: {design.get('lab_run_id')}",
+        f"Status: {design.get('status')}",
+        f"Candidates: {design.get('candidate_count')}",
+        f"Manual data gate active: {design.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {design.get('safe_to_run_fresh_validation')}",
+        "",
+        "This is a pre-registered shadow validation design. It does not run validation, promote candidates, or alter production behavior.",
+        "",
+        "## Required Metrics",
+        "",
+    ]
+    for metric in design.get("required_metrics", []) or []:
+        lines.append(f"- {metric}")
+    lines.extend(["", "## Candidates", ""])
+    if not design.get("candidates"):
+        lines.append("- No sidecar candidates.")
+    for candidate in design.get("candidates", []) or []:
+        lines.extend(
+            [
+                f"### {candidate.get('belief_id')}",
+                "",
+                f"- Product role: {candidate.get('product_role')}",
+                f"- Champion/challenger: {candidate.get('champion')} -> {candidate.get('challenger')}",
+                f"- Design status: {candidate.get('design_status')}",
+                f"- Readiness tier: {candidate.get('readiness_tier')}",
+                f"- Primary blocker: {candidate.get('primary_blocker')}",
+                f"- Operator evidence decision: {candidate.get('operator_evidence_decision')}",
+                f"- Validation route: {candidate.get('validation_route') or 'none'}",
+                f"- Required tests: {_csv_list(candidate.get('required_tests', []) or []) or 'none'}",
+                f"- Required controls: {_csv_list(candidate.get('required_controls', []) or []) or 'none'}",
+                f"- Required preflight command: {candidate.get('required_preflight_command')}",
+                f"- Post-data validation command: {candidate.get('post_data_validation_command')}",
+                f"- Fresh validation status: {candidate.get('fresh_validation_status')}",
+                f"- Visual review status: {candidate.get('visual_review_status')}",
+                f"- Visual gallery: {candidate.get('visual_review_gallery') or 'none'}",
+                f"- Visual labels: {candidate.get('visual_review_labels_with_images') or 'none'}",
+                f"- Frozen spec status: {candidate.get('frozen_spec_status')}",
+                (
+                    "- Review-only frozen shape: "
+                    f"entry_lag={candidate.get('review_only_entry_lag_bars')} "
+                    f"cooldown={candidate.get('review_only_cooldown_bars')} "
+                    f"outcome={candidate.get('review_only_outcome_column') or 'none'}"
+                ),
+                f"- Evidence debts: {_csv_list(candidate.get('evidence_debt_kinds', []) or []) or 'none'}",
+                f"- Blocking gates: {_csv_list(candidate.get('blocking_gates', []) or []) or 'none'}",
+                f"- Stop condition: {candidate.get('stop_condition')}",
+                f"- Authority scope: {candidate.get('authority_scope')}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+                "Acceptance criteria:",
+            ]
+        )
+        for criterion in candidate.get("acceptance_criteria", []) or []:
+            lines.append(f"- {criterion}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(design.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_DATA_GATE_UNLOCK_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "unlock_status",
+    "design_status",
+    "readiness_tier",
+    "primary_blocker",
+    "operator_evidence_decision",
+    "data_gate_preflight_status",
+    "safe_to_run_fresh_validation",
+    "required_timeframes",
+    "blocked_timeframes",
+    "csv_requirement_count",
+    "csv_requirement_actions",
+    "validation_route",
+    "required_preflight_command",
+    "post_data_validation_command",
+    "unlock_criteria",
+    "next_allowed_action_after_unlock",
+    "stop_condition",
+    "validation_authority",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _fresh_data_csv_requirements(fresh_data_preflight: dict[str, Any]) -> list[dict[str, Any]]:
+    data_dir = str(fresh_data_preflight.get("data_dir", ""))
+    requirements: list[dict[str, Any]] = []
+    for timeframe in fresh_data_preflight.get("timeframes", []) or []:
+        requirements.extend(_csv_requirements_for_timeframe(timeframe, data_dir=data_dir))
+    return requirements
+
+
+def _fresh_data_required_timeframes(fresh_data_preflight: dict[str, Any]) -> list[str]:
+    return [
+        str(timeframe.get("timeframe", ""))
+        for timeframe in fresh_data_preflight.get("timeframes", []) or []
+        if timeframe.get("timeframe")
+    ]
+
+
+def _fresh_data_blocked_timeframes(fresh_data_preflight: dict[str, Any]) -> list[str]:
+    blocked: list[str] = []
+    for timeframe in fresh_data_preflight.get("timeframes", []) or []:
+        status = str(timeframe.get("status", ""))
+        if status not in {"ready", "partial_ready"} or not timeframe.get("meets_min_active_members", False):
+            timeframe_id = str(timeframe.get("timeframe", ""))
+            if timeframe_id:
+                blocked.append(timeframe_id)
+    return blocked
+
+
+def _csv_requirement_action_counts(requirements: list[dict[str, Any]]) -> str:
+    counts: dict[str, int] = {}
+    for requirement in requirements:
+        action = str(requirement.get("required_action", ""))
+        if not action:
+            continue
+        counts[action] = counts.get(action, 0) + 1
+    return _csv_list([f"{action}:{counts[action]}" for action in sorted(counts)])
+
+
+def _sidecar_data_gate_unlock_status(candidate: dict[str, Any], fresh_data_preflight: dict[str, Any]) -> str:
+    design_status = _sidecar_validation_design_status(candidate)
+    safe_to_run = fresh_data_preflight.get("safe_to_run_fresh_validation") is True
+    if design_status == "archive_failure_mode_not_promotion_candidate":
+        return "archive_failure_mode_no_validation_unlock"
+    if not safe_to_run:
+        if design_status == "review_only_diversity_control_design":
+            return "blocked_by_manual_data_gate_for_diversity_check"
+        return "blocked_by_manual_data_gate"
+    if design_status == "review_only_diversity_control_design":
+        return "unlocked_for_diversity_control_only"
+    if design_status == "blocked_shadow_guardrail_failed":
+        return "blocked_shadow_guardrail_failed"
+    return "unlocked_for_governed_shadow_validation"
+
+
+def _sidecar_data_gate_unlock_criteria(candidate: dict[str, Any], fresh_data_preflight: dict[str, Any]) -> list[str]:
+    design_status = _sidecar_validation_design_status(candidate)
+    required_timeframes = _fresh_data_required_timeframes(fresh_data_preflight)
+    timeframe_text = ", ".join(required_timeframes) if required_timeframes else "all required timeframes"
+    if design_status == "archive_failure_mode_not_promotion_candidate":
+        return [
+            "no data-gate unlock for promotion; preserve as failure-mode evidence",
+            "only reconsider if a new approved hypothesis creates a different frozen shape",
+        ]
+    criteria = [
+        f"fresh-data preflight must be safe across {timeframe_text}",
+        "data_gate_csv_requirements must be empty or limited to non-blocking advisory coverage",
+        "candidate frozen shape must remain unchanged before fresh/control validation",
+        "validation design controls must remain in force",
+        "shadow guardrails must keep product_language_allowed false and production_effect none",
+    ]
+    if design_status == "review_only_diversity_control_design":
+        criteria.append("fresh/control rerun may only test event diversity and lag/cooldown fragility")
+    return criteria
+
+
+def _sidecar_next_action_after_unlock(candidate: dict[str, Any]) -> str:
+    design_status = _sidecar_validation_design_status(candidate)
+    if design_status == "archive_failure_mode_not_promotion_candidate":
+        return "none; keep archived as failure-mode evidence"
+    if design_status == "review_only_diversity_control_design":
+        return "run governed fresh/control diversity check only"
+    return "run governed fresh/control validation with frozen sidecar shape"
+
+
+def _sidecar_validation_authority(candidate: dict[str, Any], fresh_data_preflight: dict[str, Any]) -> str:
+    unlock_status = _sidecar_data_gate_unlock_status(candidate, fresh_data_preflight)
+    if unlock_status.startswith("unlocked"):
+        return "shadow_validation_only_after_governed_preflight"
+    if unlock_status.startswith("archive"):
+        return "archive_only_no_validation_authority"
+    return "blocked_by_manual_data_gate"
+
+
+def _sidecar_data_gate_unlock_row(
+    *,
+    candidate: dict[str, Any],
+    fresh_data_preflight: dict[str, Any],
+    csv_requirements: list[dict[str, Any]],
+) -> dict[str, Any]:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    validation = candidate.get("validation", {}) or {}
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "unlock_status": _sidecar_data_gate_unlock_status(candidate, fresh_data_preflight),
+        "design_status": _sidecar_validation_design_status(candidate),
+        "readiness_tier": readiness.get("readiness_tier", ""),
+        "primary_blocker": readiness.get("primary_blocker", ""),
+        "operator_evidence_decision": readiness.get("operator_evidence_decision", ""),
+        "data_gate_preflight_status": fresh_data_preflight.get("overall_status", "missing"),
+        "safe_to_run_fresh_validation": fresh_data_preflight.get("safe_to_run_fresh_validation") is True,
+        "required_timeframes": _csv_list(_fresh_data_required_timeframes(fresh_data_preflight)),
+        "blocked_timeframes": _csv_list(_fresh_data_blocked_timeframes(fresh_data_preflight)),
+        "csv_requirement_count": len(csv_requirements),
+        "csv_requirement_actions": _csv_requirement_action_counts(csv_requirements),
+        "validation_route": validation.get("route", ""),
+        "required_preflight_command": "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id <run_id>",
+        "post_data_validation_command": _sidecar_post_data_validation_command(candidate),
+        "unlock_criteria": _csv_list(_sidecar_data_gate_unlock_criteria(candidate, fresh_data_preflight)),
+        "next_allowed_action_after_unlock": _sidecar_next_action_after_unlock(candidate),
+        "stop_condition": _sidecar_validation_stop_condition(candidate),
+        "validation_authority": _sidecar_validation_authority(candidate, fresh_data_preflight),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_data_gate_unlock_matrix(
+    *,
+    brief: dict[str, Any],
+    fresh_data_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    csv_requirements = _fresh_data_csv_requirements(fresh_data_preflight)
+    rows = [
+        _sidecar_data_gate_unlock_row(
+            candidate=candidate,
+            fresh_data_preflight=fresh_data_preflight,
+            csv_requirements=csv_requirements,
+        )
+        for candidate in _sorted_sidecar_validation_queue_candidates(brief.get("candidates", []) or [])
+    ]
+    return {
+        "model": "riskflow_ceo_sidecar_data_gate_unlock_matrix_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": (
+            "manual_data_gate_blocks_unlock"
+            if fresh_data_preflight.get("safe_to_run_fresh_validation") is not True
+            else "data_gate_clear_for_shadow_unlock_review"
+        ),
+        "preflight_status": fresh_data_preflight.get("overall_status", "missing"),
+        "safe_to_run_fresh_validation": fresh_data_preflight.get("safe_to_run_fresh_validation") is True,
+        "required_timeframes": _fresh_data_required_timeframes(fresh_data_preflight),
+        "blocked_timeframes": _fresh_data_blocked_timeframes(fresh_data_preflight),
+        "csv_requirement_count": len(csv_requirements),
+        "csv_requirement_actions": _csv_requirement_action_counts(csv_requirements),
+        "candidate_count": len(rows),
+        "rows": rows,
+        "guardrail": (
+            "This matrix explains candidate-level data-gate unlock conditions only. "
+            "It does not import data, run validation, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_data_gate_unlock_matrix(path: Path, matrix: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_DATA_GATE_UNLOCK_FIELDS)
+        writer.writeheader()
+        for row in matrix.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_DATA_GATE_UNLOCK_FIELDS
+                }
+            )
+
+
+def render_sidecar_data_gate_unlock_matrix(matrix: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Data-Gate Unlock Matrix",
+        "",
+        f"Generated: {matrix.get('generated_at')}",
+        f"Run: {matrix.get('run_id')}",
+        f"Lab run: {matrix.get('lab_run_id')}",
+        f"Status: {matrix.get('status')}",
+        f"Preflight status: {matrix.get('preflight_status')}",
+        f"Safe to run fresh validation: {matrix.get('safe_to_run_fresh_validation')}",
+        f"Required timeframes: {_csv_list(matrix.get('required_timeframes', []) or []) or 'none'}",
+        f"Blocked timeframes: {_csv_list(matrix.get('blocked_timeframes', []) or []) or 'none'}",
+        f"CSV requirements: {matrix.get('csv_requirement_count')}",
+        f"CSV requirement actions: {matrix.get('csv_requirement_actions') or 'none'}",
+        f"Candidates: {matrix.get('candidate_count')}",
+        "",
+        "This is a candidate-level unlock handoff. It does not import data, run validation, promote candidates, or alter production behavior.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not matrix.get("rows"):
+        lines.append("- No sidecar candidates.")
+    for row in matrix.get("rows", []) or []:
+        lines.extend(
+            [
+                f"### {row.get('belief_id')}",
+                "",
+                f"- Product role: {row.get('product_role')}",
+                f"- Champion/challenger: {row.get('champion')} -> {row.get('challenger')}",
+                f"- Unlock status: {row.get('unlock_status')}",
+                f"- Design status: {row.get('design_status')}",
+                f"- Readiness tier: {row.get('readiness_tier')}",
+                f"- Primary blocker: {row.get('primary_blocker')}",
+                f"- Operator evidence decision: {row.get('operator_evidence_decision')}",
+                f"- Required timeframes: {row.get('required_timeframes') or 'none'}",
+                f"- Blocked timeframes: {row.get('blocked_timeframes') or 'none'}",
+                f"- CSV requirements: {row.get('csv_requirement_count')} ({row.get('csv_requirement_actions') or 'none'})",
+                f"- Validation route: {row.get('validation_route') or 'none'}",
+                f"- Required preflight command: {row.get('required_preflight_command')}",
+                f"- Post-data validation command: {row.get('post_data_validation_command')}",
+                f"- Unlock criteria: {row.get('unlock_criteria') or 'none'}",
+                f"- Next allowed action after unlock: {row.get('next_allowed_action_after_unlock')}",
+                f"- Stop condition: {row.get('stop_condition')}",
+                f"- Validation authority: {row.get('validation_authority')}",
+                f"- Product language allowed: {row.get('product_language_allowed')}",
+                f"- Production effect: {row.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(matrix.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sidecar_ids(items: list[dict[str, Any]], *, key: str = "belief_id") -> list[str]:
+    return sorted(str(item.get(key, "")) for item in items if item.get(key))
+
+
+def _sidecar_visual_label_row_keys(items: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        "|".join(
+            [
+                str(item.get("worklist_rank", "")),
+                str(item.get("belief_id", "")),
+                str(item.get("symbol", "")),
+                str(item.get("date", "")),
+                str(item.get("row_timeframe", "")),
+            ]
+        )
+        for item in items
+        if item.get("worklist_rank") or item.get("belief_id")
+    )
+
+
+def _sidecar_completion_missing_required_cell_count(audit: dict[str, Any]) -> int:
+    return sum(
+        len([field for field in str(row.get("missing_required_fields", "")).split("|") if field])
+        for row in audit.get("rows", []) or []
+    )
+
+
+def _sidecar_handling_classification_map(items: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(item.get("belief_id", "")): str(item.get("handling_classification", ""))
+        for item in items
+        if item.get("belief_id")
+    }
+
+
+def _sidecar_manual_gate_debt_candidate_ids(items: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        str(item.get("belief_id", ""))
+        for item in items
+        if item.get("belief_id") and str(item.get("validation_authority", "")) == "blocked_by_manual_data_gate"
+    )
+
+
+def _sidecar_archive_failure_candidate_ids(items: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        str(item.get("belief_id", ""))
+        for item in items
+        if item.get("belief_id") and str(item.get("handling_classification", "")) == "archive_failure_mode"
+    )
+
+
+def _sidecar_consistency_add_check(
+    *,
+    checks: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+    check_id: str,
+    passed: bool,
+    expected: Any,
+    actual: Any,
+    issue: str,
+) -> None:
+    checks.append(
+        {
+            "check_id": check_id,
+            "status": "pass" if passed else "fail",
+            "expected": expected,
+            "actual": actual,
+            "issue": "" if passed else issue,
+        }
+    )
+    if not passed:
+        issues.append(
+            {
+                "check_id": check_id,
+                "severity": "hard",
+                "issue": issue,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def build_sidecar_evidence_consistency_audit(
+    *,
+    brief: dict[str, Any],
+    guardrail_audit: dict[str, Any],
+    visual_review_coverage: dict[str, Any],
+    champion_challenger_quality: dict[str, Any],
+    validation_design: dict[str, Any],
+    data_gate_unlock_matrix: dict[str, Any],
+    quality_remediation_plan: dict[str, Any],
+    visual_label_entry_sheet: dict[str, Any],
+    visual_label_source_update_manifest: dict[str, Any],
+    visual_label_source_patch_plan: dict[str, Any],
+    visual_label_completion_audit: dict[str, Any],
+    candidate_learning_ledger: dict[str, Any],
+    post_data_playbook: dict[str, Any],
+    current_handoff: dict[str, Any],
+    candidate_decision_matrix_rows: list[dict[str, Any]],
+    evidence_debt_register: dict[str, Any],
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    brief_candidates = brief.get("candidates", []) or []
+    brief_ids = _sidecar_ids(brief_candidates)
+    visual_coverage_ids = _sidecar_ids(visual_review_coverage.get("rows", []) or [])
+    quality_ids = _sidecar_ids(champion_challenger_quality.get("checks", []) or [])
+    design_ids = _sidecar_ids(validation_design.get("candidates", []) or [])
+    unlock_ids = _sidecar_ids(data_gate_unlock_matrix.get("rows", []) or [])
+    guardrail_ids = _sidecar_ids(guardrail_audit.get("checks", []) or [])
+    learning_rows = candidate_learning_ledger.get("candidates", []) or candidate_learning_ledger.get("rows", []) or []
+    learning_ids = _sidecar_ids(learning_rows)
+    playbook_ids = _sidecar_ids(post_data_playbook.get("candidates", []) or [])
+    remediation_candidates = quality_remediation_plan.get("candidates", []) or []
+    remediation_ids = _sidecar_ids(remediation_candidates)
+    handoff_role_ids = _sidecar_ids(current_handoff.get("candidate_roles", []) or [])
+    decision_matrix_ids = _sidecar_ids(candidate_decision_matrix_rows)
+    evidence_debt_rows = evidence_debt_register.get("debts", []) or []
+    evidence_debt_candidate_ids = sorted(
+        {str(debt.get("candidate_id", "")) for debt in evidence_debt_rows if debt.get("candidate_id")}
+    )
+    evidence_debt_archive_ids = _sidecar_ids(evidence_debt_register.get("archived_candidates", []) or [], key="candidate_id")
+    entry_rows = visual_label_entry_sheet.get("rows", []) or []
+    source_update_rows = visual_label_source_update_manifest.get("rows", []) or []
+    source_patch_rows = visual_label_source_patch_plan.get("rows", []) or []
+    completion_rows = visual_label_completion_audit.get("rows", []) or []
+    entry_row_keys = _sidecar_visual_label_row_keys(entry_rows)
+    source_update_row_keys = _sidecar_visual_label_row_keys(source_update_rows)
+    source_patch_row_keys = _sidecar_visual_label_row_keys(source_patch_rows)
+    completion_row_keys = _sidecar_visual_label_row_keys(completion_rows)
+
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="brief_candidate_count",
+        passed=int(brief.get("candidate_count", 0) or 0) == len(brief_ids),
+        expected=len(brief_ids),
+        actual=brief.get("candidate_count", 0),
+        issue="brief candidate_count does not match candidate IDs",
+    )
+    for check_id, ids in [
+        ("visual_review_coverage_candidate_ids", visual_coverage_ids),
+        ("champion_challenger_quality_candidate_ids", quality_ids),
+        ("validation_design_candidate_ids", design_ids),
+        ("data_gate_unlock_candidate_ids", unlock_ids),
+        ("shadow_guardrail_candidate_ids", guardrail_ids),
+        ("candidate_learning_ledger_candidate_ids", learning_ids),
+        ("post_data_playbook_candidate_ids", playbook_ids),
+        ("quality_remediation_plan_candidate_ids", remediation_ids),
+        ("current_handoff_candidate_role_ids", handoff_role_ids),
+        ("candidate_decision_matrix_candidate_ids", decision_matrix_ids),
+    ]:
+        _sidecar_consistency_add_check(
+            checks=checks,
+            issues=issues,
+            check_id=check_id,
+            passed=ids == brief_ids,
+            expected=brief_ids,
+            actual=ids,
+            issue=f"{check_id} does not match sidecar evidence brief IDs",
+        )
+
+    learning_classifications = _sidecar_handling_classification_map(learning_rows)
+    manual_gate_debt_candidate_ids = _sidecar_manual_gate_debt_candidate_ids(learning_rows)
+    archive_failure_candidate_ids = _sidecar_archive_failure_candidate_ids(learning_rows)
+    for check_id, classifications in [
+        (
+            "post_data_playbook_handling_classifications",
+            _sidecar_handling_classification_map(post_data_playbook.get("candidates", []) or []),
+        ),
+        (
+            "quality_remediation_plan_handling_classifications",
+            _sidecar_handling_classification_map(remediation_candidates),
+        ),
+        (
+            "current_handoff_handling_classifications",
+            _sidecar_handling_classification_map(current_handoff.get("candidate_roles", []) or []),
+        ),
+        (
+            "candidate_decision_matrix_handling_classifications",
+            _sidecar_handling_classification_map(candidate_decision_matrix_rows),
+        ),
+    ]:
+        _sidecar_consistency_add_check(
+            checks=checks,
+            issues=issues,
+            check_id=check_id,
+            passed=classifications == learning_classifications,
+            expected=learning_classifications,
+            actual=classifications,
+            issue=f"{check_id} does not match candidate learning ledger classifications",
+        )
+
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="evidence_debt_candidate_ids",
+        passed=evidence_debt_candidate_ids == manual_gate_debt_candidate_ids,
+        expected=manual_gate_debt_candidate_ids,
+        actual=evidence_debt_candidate_ids,
+        issue="evidence-debt register candidate debts do not match manual-gate-blocked sidecars",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="evidence_debt_archive_candidate_ids",
+        passed=evidence_debt_archive_ids == archive_failure_candidate_ids,
+        expected=archive_failure_candidate_ids,
+        actual=evidence_debt_archive_ids,
+        issue="evidence-debt register archived candidates do not match archive failure-mode sidecars",
+    )
+    archive_debt_leaks = sorted(
+        str(debt.get("candidate_id", ""))
+        for debt in evidence_debt_rows
+        if debt.get("candidate_id") and str(debt.get("candidate_id", "")) in set(archive_failure_candidate_ids)
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="evidence_debt_no_archive_validation_debt",
+        passed=not archive_debt_leaks,
+        expected=[],
+        actual=archive_debt_leaks,
+        issue="archive failure-mode candidates still have open validation evidence debt",
+    )
+
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="quality_remediation_issue_count",
+        passed=int(quality_remediation_plan.get("quality_issue_count", 0) or 0)
+        == int(champion_challenger_quality.get("issue_count", 0) or 0),
+        expected=int(champion_challenger_quality.get("issue_count", 0) or 0),
+        actual=int(quality_remediation_plan.get("quality_issue_count", 0) or 0),
+        issue="quality-remediation plan issue count does not match champion/challenger quality audit",
+    )
+    expected_remediation_status = (
+        "manual_gate_quality_remediation_plan"
+        if brief.get("manual_data_gate_active") is True
+        else (
+            "quality_remediation_hard_blocked"
+            if int(champion_challenger_quality.get("hard_issue_count", 0) or 0) > 0
+            else (
+                "quality_remediation_open"
+                if int(champion_challenger_quality.get("advisory_issue_count", 0) or 0) > 0
+                else "quality_remediation_clear"
+            )
+        )
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="quality_remediation_status",
+        passed=str(quality_remediation_plan.get("status", "")) == expected_remediation_status,
+        expected=expected_remediation_status,
+        actual=quality_remediation_plan.get("status", ""),
+        issue="quality-remediation plan status does not match manual-gate and quality-audit state",
+    )
+    remediation_archive_ids = _sidecar_archive_failure_candidate_ids(remediation_candidates)
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="quality_remediation_archive_candidate_ids",
+        passed=remediation_archive_ids == archive_failure_candidate_ids,
+        expected=archive_failure_candidate_ids,
+        actual=remediation_archive_ids,
+        issue="quality-remediation archive-only candidates do not match candidate learning ledger",
+    )
+
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_source_update_manifest_row_keys",
+        passed=source_update_row_keys == entry_row_keys,
+        expected=entry_row_keys,
+        actual=source_update_row_keys,
+        issue="visual-label source update manifest rows do not match entry sheet rows",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_completion_audit_row_keys",
+        passed=completion_row_keys == entry_row_keys,
+        expected=entry_row_keys,
+        actual=completion_row_keys,
+        issue="visual-label completion audit rows do not match entry sheet rows",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_required_update_cells",
+        passed=(
+            int(visual_label_source_update_manifest.get("required_update_cell_count", 0) or 0)
+            == int(visual_label_source_patch_plan.get("source_patch_cell_count", 0) or 0)
+            == int(visual_label_entry_sheet.get("missing_required_cell_count", 0) or 0)
+            == _sidecar_completion_missing_required_cell_count(visual_label_completion_audit)
+        ),
+        expected=int(visual_label_entry_sheet.get("missing_required_cell_count", 0) or 0),
+        actual={
+            "source_update_manifest": int(
+                visual_label_source_update_manifest.get("required_update_cell_count", 0) or 0
+            ),
+            "source_patch_plan": int(visual_label_source_patch_plan.get("source_patch_cell_count", 0) or 0),
+            "completion_audit": _sidecar_completion_missing_required_cell_count(visual_label_completion_audit),
+        },
+        issue="visual-label required update cell counts disagree across entry, source-update, patch-plan, and completion artifacts",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_source_patch_plan_row_keys",
+        passed=(
+            (
+                int(visual_label_source_patch_plan.get("source_patch_cell_count", 0) or 0) == 0
+                and int(visual_label_entry_sheet.get("missing_required_cell_count", 0) or 0) == 0
+            )
+            or sorted(set(source_patch_row_keys)) == entry_row_keys
+        ),
+        expected=entry_row_keys,
+        actual=sorted(set(source_patch_row_keys)),
+        issue="visual-label source patch plan rows do not cover the entry sheet row keys",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_pending_update_rows",
+        passed=(
+            int(visual_label_source_update_manifest.get("pending_update_row_count", 0) or 0)
+            == int(visual_label_completion_audit.get("missing_required_row_count", 0) or 0)
+        ),
+        expected=int(visual_label_completion_audit.get("missing_required_row_count", 0) or 0),
+        actual=int(visual_label_source_update_manifest.get("pending_update_row_count", 0) or 0),
+        issue="visual-label pending source-update rows do not match completion-audit missing rows",
+    )
+    entry_reference_gaps = (
+        int(visual_label_entry_sheet.get("missing_source_label_file_count", 0) or 0),
+        int(visual_label_entry_sheet.get("missing_source_label_row_count", 0) or 0),
+        int(visual_label_entry_sheet.get("missing_image_count", 0) or 0),
+    )
+    manifest_reference_gaps = (
+        int(visual_label_source_update_manifest.get("missing_source_label_file_count", 0) or 0),
+        int(visual_label_source_update_manifest.get("missing_source_label_row_count", 0) or 0),
+        int(visual_label_source_update_manifest.get("missing_image_count", 0) or 0),
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="visual_label_reference_gaps",
+        passed=manifest_reference_gaps == entry_reference_gaps,
+        expected=entry_reference_gaps,
+        actual=manifest_reference_gaps,
+        issue="visual-label source update manifest reference gaps do not match entry sheet",
+    )
+
+    manual_gate_active = brief.get("manual_data_gate_active") is True
+    expected_debt_runtime_handoff = {
+        "current_runtime_handoff_action": str(brief.get("next_action") or "import_or_curate_fresh_ohlcv_data"),
+        "current_runtime_handoff_status": "manual_data_gate_required",
+        "strategic_next_action_blocked_by_current_handoff": True,
+    }
+    actual_debt_runtime_handoff = {
+        "current_runtime_handoff_action": str(evidence_debt_register.get("current_runtime_handoff_action", "")),
+        "current_runtime_handoff_status": str(evidence_debt_register.get("current_runtime_handoff_status", "")),
+        "strategic_next_action_blocked_by_current_handoff": evidence_debt_register.get(
+            "strategic_next_action_blocked_by_current_handoff"
+        )
+        is True,
+    }
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="evidence_debt_manual_gate_runtime_handoff",
+        passed=(not manual_gate_active) or actual_debt_runtime_handoff == expected_debt_runtime_handoff,
+        expected=expected_debt_runtime_handoff if manual_gate_active else "not_applicable_without_manual_gate",
+        actual=actual_debt_runtime_handoff if manual_gate_active else "not_applicable_without_manual_gate",
+        issue="evidence-debt register runtime handoff does not enforce the active manual data gate",
+    )
+    unsafe_unlock_rows = [
+        row.get("belief_id", "")
+        for row in data_gate_unlock_matrix.get("rows", []) or []
+        if manual_gate_active and row.get("validation_authority") == "shadow_validation_only_after_governed_preflight"
+    ]
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="manual_gate_blocks_validation_authority",
+        passed=not unsafe_unlock_rows,
+        expected=[],
+        actual=unsafe_unlock_rows,
+        issue="manual data gate is active but one or more rows allow validation authority",
+    )
+    autonomous_clearable_count = int(quality_remediation_plan.get("autonomous_clearable_now_count", 0) or 0)
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="manual_gate_blocks_quality_remediation_autoclear",
+        passed=(not manual_gate_active) or autonomous_clearable_count == 0,
+        expected=0 if manual_gate_active else "not_applicable_without_manual_gate",
+        actual=autonomous_clearable_count if manual_gate_active else "not_applicable_without_manual_gate",
+        issue="manual data gate is active but quality-remediation plan exposes autonomous clearing",
+    )
+
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="shadow_guardrail_passes",
+        passed=guardrail_audit.get("status") == "pass_shadow_only_guardrails"
+        and int(guardrail_audit.get("violation_count", 0) or 0) == 0,
+        expected="pass_shadow_only_guardrails violations=0",
+        actual=f"{guardrail_audit.get('status')} violations={guardrail_audit.get('violation_count')}",
+        issue="shadow guardrail audit is not passing",
+    )
+
+    production_effect_leaks: list[str] = []
+    product_language_leaks: list[str] = []
+    for artifact_id, items in [
+        ("brief_candidates", brief_candidates),
+        ("visual_review_coverage_rows", visual_review_coverage.get("rows", []) or []),
+        ("champion_challenger_quality_checks", champion_challenger_quality.get("checks", []) or []),
+        ("validation_design_candidates", validation_design.get("candidates", []) or []),
+        ("data_gate_unlock_rows", data_gate_unlock_matrix.get("rows", []) or []),
+        ("guardrail_checks", guardrail_audit.get("checks", []) or []),
+        ("candidate_learning_ledger_rows", learning_rows),
+        ("post_data_playbook_candidates", post_data_playbook.get("candidates", []) or []),
+        ("quality_remediation_plan_candidates", remediation_candidates),
+        ("current_handoff_candidate_roles", current_handoff.get("candidate_roles", []) or []),
+        ("candidate_decision_matrix_rows", candidate_decision_matrix_rows),
+        ("visual_label_entry_sheet_rows", entry_rows),
+        ("visual_label_source_update_manifest_rows", source_update_rows),
+        ("visual_label_completion_audit_rows", completion_rows),
+    ]:
+        for item in items:
+            belief_id = str(item.get("belief_id", ""))
+            if item.get("production_effect") != "none":
+                production_effect_leaks.append(f"{artifact_id}:{belief_id}")
+            if item.get("product_language_allowed") is not False:
+                product_language_leaks.append(f"{artifact_id}:{belief_id}")
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="production_effect_guardrail",
+        passed=not production_effect_leaks,
+        expected=[],
+        actual=production_effect_leaks,
+        issue="one or more sidecar artifacts claim production effect",
+    )
+    _sidecar_consistency_add_check(
+        checks=checks,
+        issues=issues,
+        check_id="product_language_guardrail",
+        passed=not product_language_leaks,
+        expected=[],
+        actual=product_language_leaks,
+        issue="one or more sidecar artifacts allow product language",
+    )
+
+    return {
+        "model": "riskflow_ceo_sidecar_evidence_consistency_audit_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "pass_sidecar_consistency" if not issues else "fail_sidecar_consistency",
+        "candidate_count": len(brief_ids),
+        "manual_data_gate_active": manual_gate_active,
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "check_count": len(checks),
+        "issue_count": len(issues),
+        "candidate_ids": brief_ids,
+        "checks": checks,
+        "issues": issues,
+        "guardrail": (
+            "This audit checks internal sidecar packet consistency only. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_evidence_consistency_audit(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Evidence Consistency Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Run: {audit.get('run_id')}",
+        f"Lab run: {audit.get('lab_run_id')}",
+        f"Status: {audit.get('status')}",
+        f"Candidates: {audit.get('candidate_count')}",
+        f"Manual data gate active: {audit.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {audit.get('safe_to_run_fresh_validation')}",
+        f"Checks: {audit.get('check_count')}",
+        f"Issues: {audit.get('issue_count')}",
+        f"Candidate IDs: {_csv_list(audit.get('candidate_ids', []) or []) or 'none'}",
+        "",
+        "## Checks",
+        "",
+    ]
+    if not audit.get("checks"):
+        lines.append("- none")
+    for check in audit.get("checks", []) or []:
+        lines.extend(
+            [
+                f"### {check.get('check_id')}",
+                "",
+                f"- Status: {check.get('status')}",
+                f"- Expected: {check.get('expected')}",
+                f"- Actual: {check.get('actual')}",
+                f"- Issue: {check.get('issue') or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(["## Issues", ""])
+    if not audit.get("issues"):
+        lines.append("- none")
+    for issue in audit.get("issues", []) or []:
+        lines.append(f"- {issue.get('severity')} {issue.get('check_id')}: {issue.get('issue')}")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(audit.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_PACKET_ARTIFACT_SPECS = [
+    (
+        "sidecar_evidence_brief",
+        "Sidecar evidence brief YAML",
+        "machine-readable sidecar evidence summary",
+        "shadow evidence summary only",
+    ),
+    (
+        "sidecar_evidence_brief_report",
+        "Sidecar evidence brief report",
+        "human-readable sidecar evidence summary",
+        "shadow evidence summary only",
+    ),
+    (
+        "sidecar_evidence_candidates",
+        "Sidecar evidence candidates",
+        "sortable candidate table with metric, visual, validation, and debt fields",
+        "shadow candidate table only",
+    ),
+    (
+        "sidecar_visual_review_handoff",
+        "Sidecar visual-review handoff",
+        "chart-review questions, labels, gallery refs, and blocker context",
+        "visual-review handoff only",
+    ),
+    (
+        "sidecar_visual_review_coverage",
+        "Sidecar visual-review coverage",
+        "candidate visual-review asset and label coverage",
+        "visual-review coverage audit only",
+    ),
+    (
+        "sidecar_visual_review_coverage_report",
+        "Sidecar visual-review coverage report",
+        "human-readable visual-review asset and label coverage",
+        "visual-review coverage audit only",
+    ),
+    (
+        "sidecar_visual_label_worklist",
+        "Sidecar visual-label worklist",
+        "candidate-matched rows still missing required human visual labels",
+        "human visual-label worklist only",
+    ),
+    (
+        "sidecar_visual_label_worklist_report",
+        "Sidecar visual-label worklist report",
+        "human-readable candidate-matched visual-label worklist",
+        "human visual-label worklist only",
+    ),
+    (
+        "sidecar_visual_label_review_batches",
+        "Sidecar visual-label review batches",
+        "batch-partitioned pending visual-label rows",
+        "human visual-label batching only",
+    ),
+    (
+        "sidecar_visual_label_review_batches_report",
+        "Sidecar visual-label review batches report",
+        "human-readable visual-label review batches",
+        "human visual-label batching only",
+    ),
+    (
+        "sidecar_visual_label_progress",
+        "Sidecar visual-label progress",
+        "candidate-level visual-label completion progress and next batch",
+        "human visual-label progress only",
+    ),
+    (
+        "sidecar_visual_label_progress_report",
+        "Sidecar visual-label progress report",
+        "human-readable candidate visual-label progress",
+        "human visual-label progress only",
+    ),
+    (
+        "sidecar_visual_label_next_batch",
+        "Sidecar visual-label next batch",
+        "focused worksheet for the next pending visual-label batch",
+        "human visual-label next-batch worksheet only",
+    ),
+    (
+        "sidecar_visual_label_next_batch_report",
+        "Sidecar visual-label next batch report",
+        "human-readable focused next visual-label batch worksheet",
+        "human visual-label next-batch worksheet only",
+    ),
+    (
+        "sidecar_visual_label_next_batch_gallery",
+        "Sidecar visual-label next batch gallery",
+        "embedded-image gallery for the next pending visual-label batch",
+        "human visual-label gallery only",
+    ),
+    (
+        "sidecar_visual_label_decision_context",
+        "Sidecar visual-label decision context YAML",
+        "machine-readable compact context for the next visual-label batch",
+        "human visual-label decision context only",
+    ),
+    (
+        "sidecar_visual_label_decision_context_report",
+        "Sidecar visual-label decision context report",
+        "human-readable compact context for the next visual-label batch",
+        "human visual-label decision context only",
+    ),
+    (
+        "sidecar_visual_label_rubric",
+        "Sidecar visual-label rubric YAML",
+        "machine-readable visual-label field vocabulary and completion contract",
+        "human visual-label rubric only",
+    ),
+    (
+        "sidecar_visual_label_rubric_report",
+        "Sidecar visual-label rubric report",
+        "human-readable visual-label field vocabulary and completion contract",
+        "human visual-label rubric only",
+    ),
+    (
+        "sidecar_visual_label_entry_sheet",
+        "Sidecar visual-label entry sheet",
+        "fillable derived worksheet with required fields, allowed values, and source update refs",
+        "human visual-label entry worksheet only",
+    ),
+    (
+        "sidecar_visual_label_entry_sheet_report",
+        "Sidecar visual-label entry sheet report",
+        "human-readable label entry worksheet and source-update handoff",
+        "human visual-label entry worksheet only",
+    ),
+    (
+        "sidecar_visual_label_source_update_manifest",
+        "Sidecar visual-label source update manifest",
+        "authoritative source-row update checklist for the current visual-label batch",
+        "human source-update checklist only",
+    ),
+    (
+        "sidecar_visual_label_source_update_manifest_report",
+        "Sidecar visual-label source update manifest report",
+        "human-readable authoritative source-row update checklist",
+        "human source-update checklist only",
+    ),
+    (
+        "sidecar_visual_label_source_patch_plan",
+        "Sidecar visual-label source patch plan",
+        "one row per missing authoritative source-label cell for human entry",
+        "human source-cell patch checklist only",
+    ),
+    (
+        "sidecar_visual_label_source_patch_plan_yaml",
+        "Sidecar visual-label source patch plan YAML",
+        "machine-readable source-cell patch summary and checklist",
+        "human source-cell patch checklist only",
+    ),
+    (
+        "sidecar_visual_label_source_patch_plan_report",
+        "Sidecar visual-label source patch plan report",
+        "human-readable source-cell patch checklist",
+        "human source-cell patch checklist only",
+    ),
+    (
+        "sidecar_visual_label_completion_audit",
+        "Sidecar visual-label completion audit",
+        "row-level required-label completion and rubric-value audit",
+        "human visual-label completion audit only",
+    ),
+    (
+        "sidecar_visual_label_completion_audit_yaml",
+        "Sidecar visual-label completion audit YAML",
+        "machine-readable visual-label completion summary and row audit",
+        "human visual-label completion audit only",
+    ),
+    (
+        "sidecar_visual_label_completion_audit_report",
+        "Sidecar visual-label completion audit report",
+        "human-readable visual-label completion summary and row audit",
+        "human visual-label completion audit only",
+    ),
+    (
+        "sidecar_champion_challenger_evidence",
+        "Sidecar champion/challenger evidence",
+        "base-vs-challenger metric comparison fields",
+        "same-sample comparison evidence only",
+    ),
+    (
+        "sidecar_champion_challenger_quality_audit",
+        "Sidecar champion/challenger quality audit YAML",
+        "machine-readable champion/challenger metric coverage and role-alignment checks",
+        "quality audit only",
+    ),
+    (
+        "sidecar_champion_challenger_quality_audit_report",
+        "Sidecar champion/challenger quality audit report",
+        "human-readable champion/challenger metric coverage and role-alignment checks",
+        "quality audit only",
+    ),
+    (
+        "sidecar_quality_remediation_plan",
+        "Sidecar quality remediation plan YAML",
+        "machine-readable remediation routing for quality audit findings",
+        "quality remediation handoff only",
+    ),
+    (
+        "sidecar_quality_remediation_plan_report",
+        "Sidecar quality remediation plan report",
+        "human-readable remediation routing for quality audit findings",
+        "quality remediation handoff only",
+    ),
+    (
+        "sidecar_evidence_gap_matrix",
+        "Sidecar evidence gap matrix",
+        "candidate-by-evidence-dimension readiness checklist",
+        "readiness checklist only",
+    ),
+    (
+        "sidecar_candidate_readiness_summary",
+        "Sidecar candidate readiness summary",
+        "compact candidate readiness tiers and blockers",
+        "triage summary only",
+    ),
+    (
+        "sidecar_candidate_readiness_summary_report",
+        "Sidecar candidate readiness report",
+        "human-readable readiness triage summary",
+        "triage report only",
+    ),
+    (
+        "sidecar_validation_queue",
+        "Sidecar validation queue",
+        "post-data validation order, required tests, and stop conditions",
+        "inactive while manual data gate is active",
+    ),
+    (
+        "sidecar_validation_queue_report",
+        "Sidecar validation queue report",
+        "human-readable post-data validation handoff",
+        "inactive while manual data gate is active",
+    ),
+    (
+        "sidecar_champion_challenger_validation_design",
+        "Sidecar champion/challenger validation design YAML",
+        "pre-registered post-data champion/challenger validation requirements",
+        "shadow validation design only",
+    ),
+    (
+        "sidecar_champion_challenger_validation_design_report",
+        "Sidecar champion/challenger validation design report",
+        "human-readable post-data champion/challenger validation design",
+        "shadow validation design only",
+    ),
+    (
+        "sidecar_data_gate_unlock_matrix",
+        "Sidecar data-gate unlock matrix",
+        "candidate-level data-gate unlock criteria and authority",
+        "data-gate handoff only",
+    ),
+    (
+        "sidecar_data_gate_unlock_matrix_yaml",
+        "Sidecar data-gate unlock matrix YAML",
+        "machine-readable candidate-level data-gate unlock criteria",
+        "data-gate handoff only",
+    ),
+    (
+        "sidecar_data_gate_unlock_matrix_report",
+        "Sidecar data-gate unlock matrix report",
+        "human-readable candidate-level data-gate unlock handoff",
+        "data-gate handoff only",
+    ),
+    (
+        "sidecar_evidence_consistency_audit",
+        "Sidecar evidence consistency audit YAML",
+        "machine-readable cross-artifact sidecar packet consistency checks",
+        "consistency audit only",
+    ),
+    (
+        "sidecar_evidence_consistency_audit_report",
+        "Sidecar evidence consistency audit report",
+        "human-readable cross-artifact sidecar packet consistency checks",
+        "consistency audit only",
+    ),
+    (
+        "sidecar_candidate_decision_cards",
+        "Sidecar candidate decision cards",
+        "candidate-by-candidate product-role and next-action cards",
+        "shadow-only decision handoff",
+    ),
+    (
+        "sidecar_current_decision_packet",
+        "Sidecar current decision packet YAML",
+        "machine-readable current executive decision over sidecar candidates",
+        "current sidecar decision packet only",
+    ),
+    (
+        "sidecar_current_decision_packet_report",
+        "Sidecar current decision packet report",
+        "human-readable current executive decision over sidecar candidates",
+        "current sidecar decision packet only",
+    ),
+    (
+        "promotion_candidates",
+        "Promotion candidates shadow handoff",
+        "current shadow sidecar candidates with blocker and promotion-eligibility context",
+        "promotion handoff only; no approval or execution authority",
+    ),
+    (
+        "sidecar_shadow_guardrail_audit",
+        "Sidecar shadow guardrail audit YAML",
+        "machine-readable shadow-only guardrail checks",
+        "guardrail audit only",
+    ),
+    (
+        "sidecar_shadow_guardrail_audit_report",
+        "Sidecar shadow guardrail audit report",
+        "human-readable shadow-only guardrail checks",
+        "guardrail audit only",
+    ),
+    (
+        "sidecar_evidence_source_manifest",
+        "Sidecar evidence source manifest",
+        "source refs for metrics, visuals, frozen specs, validation routes, and debts",
+        "source map only",
+    ),
+    (
+        "sidecar_evidence_source_health",
+        "Sidecar evidence source health",
+        "one row per source ref with existence and expected-type checks",
+        "source-ref health audit only",
+    ),
+    (
+        "sidecar_evidence_source_health_yaml",
+        "Sidecar evidence source health YAML",
+        "machine-readable source-ref health summary",
+        "source-ref health audit only",
+    ),
+    (
+        "sidecar_evidence_source_health_report",
+        "Sidecar evidence source health report",
+        "human-readable source-ref health audit",
+        "source-ref health audit only",
+    ),
+    (
+        "sidecar_evidence_source_fingerprints",
+        "Sidecar evidence source fingerprints",
+        "one row per source ref with file hashes, sizes, CSV row counts, and directory profiles",
+        "source fingerprint audit only",
+    ),
+    (
+        "sidecar_evidence_source_fingerprints_yaml",
+        "Sidecar evidence source fingerprints YAML",
+        "machine-readable source fingerprint summary",
+        "source fingerprint audit only",
+    ),
+    (
+        "sidecar_evidence_source_fingerprints_report",
+        "Sidecar evidence source fingerprints report",
+        "human-readable source fingerprint audit",
+        "source fingerprint audit only",
+    ),
+    (
+        "sidecar_candidate_learning_ledger",
+        "Sidecar candidate learning ledger",
+        "one row per candidate with lead/control/archive handling and supporting evidence",
+        "candidate learning handoff only",
+    ),
+    (
+        "sidecar_candidate_learning_ledger_yaml",
+        "Sidecar candidate learning ledger YAML",
+        "machine-readable lead/control/archive handling and supporting evidence",
+        "candidate learning handoff only",
+    ),
+    (
+        "sidecar_candidate_learning_ledger_report",
+        "Sidecar candidate learning ledger report",
+        "human-readable lead/control/archive handling and supporting evidence",
+        "candidate learning handoff only",
+    ),
+    (
+        "sidecar_post_data_validation_playbook",
+        "Sidecar post-data validation playbook YAML",
+        "machine-readable post-data command sequence and candidate execution limits",
+        "post-data handoff only",
+    ),
+    (
+        "sidecar_post_data_validation_playbook_report",
+        "Sidecar post-data validation playbook report",
+        "human-readable post-data command sequence and candidate execution limits",
+        "post-data handoff only",
+    ),
+    (
+        "sidecar_current_handoff",
+        "Sidecar current handoff YAML",
+        "machine-readable current sidecar state and historical packet boundary",
+        "current sidecar handoff only",
+    ),
+    (
+        "sidecar_current_handoff_report",
+        "Sidecar current handoff report",
+        "human-readable current sidecar state and historical packet boundary",
+        "current sidecar handoff only",
+    ),
+    (
+        "sidecar_candidate_decision_matrix",
+        "Sidecar candidate decision matrix",
+        "sortable lead/control/archive decision evidence fields",
+        "shadow decision matrix only",
+    ),
+    (
+        "sidecar_candidate_decision_matrix_report",
+        "Sidecar candidate decision matrix report",
+        "human-readable lead/control/archive decision evidence fields",
+        "shadow decision matrix only",
+    ),
+    (
+        "sidecar_frozen_spec_review",
+        "Sidecar frozen-spec review",
+        "review-only frozen candidate shapes from specialist results",
+        "review-only spec table",
+    ),
+]
+
+
+def _csv_data_row_count(path: Path) -> int | str:
+    if path.suffix.lower() != ".csv" or not path.exists():
+        return ""
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return sum(1 for _ in csv.DictReader(handle))
+    except OSError:
+        return ""
+
+
+def _sidecar_visual_review_coverage_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    ready_count = sum(1 for row in rows if row.get("review_completion_status") == "review_assets_ready")
+    missing_count = sum(
+        1
+        for row in rows
+        if str(row.get("review_completion_status", "")).startswith("missing_")
+        or row.get("review_completion_status") == "labels_unreadable"
+    )
+    empty_label_count = sum(1 for row in rows if row.get("review_completion_status") == "empty_labels")
+    human_review_started_count = sum(
+        1
+        for row in rows
+        if row.get("human_label_completion_status")
+        not in {"human_review_not_started", "no_label_rows", "missing_labels", "labels_unreadable", ""}
+    )
+    human_review_pending_count = sum(
+        1
+        for row in rows
+        if row.get("human_label_completion_status") in {"human_review_not_started", "no_label_rows"}
+    )
+    return {
+        "row_count": len(rows),
+        "ready_count": ready_count,
+        "missing_count": missing_count,
+        "empty_label_count": empty_label_count,
+        "human_review_started_count": human_review_started_count,
+        "human_review_pending_count": human_review_pending_count,
+    }
+
+
+def _sidecar_visual_label_worklist_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    exact_count = sum(1 for row in rows if row.get("row_match") == "exact_variant")
+    timeframe_count = sum(1 for row in rows if row.get("row_match") == "family_timeframe")
+    context_count = sum(1 for row in rows if row.get("row_match") == "family_context")
+    return {
+        "row_count": len(rows),
+        "candidate_count": len(candidate_ids),
+        "exact_variant_count": exact_count,
+        "family_timeframe_count": timeframe_count,
+        "family_context_count": context_count,
+    }
+
+
+def _sidecar_visual_label_batches_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    batch_ids = {str(row.get("batch_id", "")) for row in rows if row.get("batch_id")}
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    exact_count = sum(1 for row in rows if row.get("row_match") == "exact_variant")
+    timeframe_count = sum(1 for row in rows if row.get("row_match") == "family_timeframe")
+    context_count = sum(1 for row in rows if row.get("row_match") == "family_context")
+    return {
+        "row_count": len(rows),
+        "batch_count": len(batch_ids),
+        "candidate_count": len(candidate_ids),
+        "exact_variant_count": exact_count,
+        "family_timeframe_count": timeframe_count,
+        "family_context_count": context_count,
+    }
+
+
+def _sidecar_visual_label_progress_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    statuses = {str(row.get("human_label_progress_status", "")) for row in rows if row.get("human_label_progress_status")}
+    next_batch_ids = [str(row.get("next_batch_id", "")) for row in rows if row.get("next_batch_id")]
+    pending_count = sum(int(row.get("pending_label_rows", 0) or 0) for row in rows)
+    completed_count = sum(int(row.get("completed_label_rows", 0) or 0) for row in rows)
+    matched_count = sum(int(row.get("matched_label_rows", 0) or 0) for row in rows)
+    return {
+        "row_count": len(rows),
+        "candidate_count": len(candidate_ids),
+        "matched_label_row_count": matched_count,
+        "pending_label_row_count": pending_count,
+        "completed_label_row_count": completed_count,
+        "not_started_candidate_count": sum(
+            1 for row in rows if row.get("human_label_progress_status") == "human_visual_review_not_started"
+        ),
+        "incomplete_candidate_count": sum(
+            1 for row in rows if row.get("human_label_progress_status") == "human_visual_review_incomplete"
+        ),
+        "complete_candidate_count": sum(
+            1 for row in rows if row.get("human_label_progress_status") == "human_visual_review_labels_populated"
+        ),
+        "statuses": _csv_list(sorted(statuses)),
+        "next_batch_id": next_batch_ids[0] if next_batch_ids else "",
+    }
+
+
+def _sidecar_visual_label_next_batch_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    batch_ids = [str(row.get("batch_id", "")) for row in rows if row.get("batch_id")]
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    source_files = {str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")}
+    return {
+        "row_count": len(rows),
+        "batch_id": batch_ids[0] if batch_ids else "",
+        "candidate_count": len(candidate_ids),
+        "source_label_file_count": len(source_files),
+        "exact_variant_count": sum(1 for row in rows if row.get("row_match") == "exact_variant"),
+        "family_timeframe_count": sum(1 for row in rows if row.get("row_match") == "family_timeframe"),
+        "family_context_count": sum(1 for row in rows if row.get("row_match") == "family_context"),
+        "missing_required_labels": _csv_list(
+            sorted(
+                {
+                    label
+                    for row in rows
+                    for label in str(row.get("missing_required_labels", "")).split("|")
+                    if label
+                }
+            )
+        ),
+    }
+
+
+def _sidecar_visual_label_entry_sheet_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    batch_ids = [str(row.get("batch_id", "")) for row in rows if row.get("batch_id")]
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    source_files = {str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")}
+    required_fields = sorted(
+        {
+            label
+            for row in rows
+            for label in str(row.get("required_label_fields", "")).split("|")
+            if label
+        }
+    )
+    missing_required_cell_count = sum(int(row.get("missing_required_field_count", 0) or 0) for row in rows)
+    if not missing_required_cell_count:
+        for row in rows:
+            for field in str(row.get("required_label_fields", "")).split("|"):
+                if field and not str(row.get(field, "")).strip():
+                    missing_required_cell_count += 1
+    return {
+        "row_count": len(rows),
+        "batch_id": batch_ids[0] if batch_ids else "",
+        "candidate_count": len(candidate_ids),
+        "source_label_file_count": len(source_files),
+        "required_label_fields": _csv_list(required_fields),
+        "missing_required_cell_count": missing_required_cell_count,
+        "missing_source_label_file_count": sum(
+            1 for row in rows if str(row.get("source_label_file_exists", "")) != "True"
+        ),
+        "missing_source_label_row_count": sum(
+            1 for row in rows if str(row.get("source_label_row_exists", "")) != "True"
+        ),
+        "missing_image_count": sum(1 for row in rows if str(row.get("image_exists", "")) != "True"),
+    }
+
+
+def _sidecar_visual_label_source_update_manifest_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    batch_ids = [str(row.get("batch_id", "")) for row in rows if row.get("batch_id")]
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    source_files = {str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")}
+    pending_update_rows = [
+        row for row in rows if row.get("source_update_status") == "pending_human_source_update"
+    ]
+    return {
+        "row_count": len(rows),
+        "batch_id": batch_ids[0] if batch_ids else "",
+        "candidate_count": len(candidate_ids),
+        "source_label_file_count": len(source_files),
+        "pending_update_row_count": len(pending_update_rows),
+        "required_update_cell_count": sum(
+            int(row.get("required_update_cell_count", 0) or 0) for row in rows
+        ),
+        "blocked_reference_row_count": sum(
+            1 for row in rows if row.get("source_update_status") == "blocked_reference_gap"
+        ),
+        "complete_row_count": sum(
+            1 for row in rows if row.get("source_update_status") == "source_row_labels_complete"
+        ),
+        "missing_source_label_file_count": sum(
+            1 for row in rows if str(row.get("source_label_file_exists", "")) != "True"
+        ),
+        "missing_source_label_row_count": sum(
+            1 for row in rows if str(row.get("source_label_row_exists", "")) != "True"
+        ),
+        "missing_image_count": sum(1 for row in rows if str(row.get("image_exists", "")) != "True"),
+        "required_update_fields": _csv_list(
+            sorted(
+                {
+                    field
+                    for row in rows
+                    for field in str(row.get("required_update_fields", "")).split("|")
+                    if field
+                }
+            )
+        ),
+    }
+
+
+def _sidecar_visual_label_source_patch_plan_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    batch_ids = [str(row.get("batch_id", "")) for row in rows if row.get("batch_id")]
+    candidate_ids = {str(row.get("belief_id", "")) for row in rows if row.get("belief_id")}
+    source_files = {str(row.get("source_label_file", "")) for row in rows if row.get("source_label_file")}
+    source_rows = {
+        (
+            str(row.get("source_label_file", "")),
+            str(row.get("source_label_row_number", "")),
+        )
+        for row in rows
+        if row.get("source_label_file") and row.get("source_label_row_number") != ""
+    }
+    return {
+        "row_count": len(rows),
+        "batch_id": batch_ids[0] if batch_ids else "",
+        "candidate_count": len(candidate_ids),
+        "source_file_count": len(source_files),
+        "source_row_count": len(source_rows),
+        "pending_source_patch_cell_count": sum(
+            1 for row in rows if row.get("source_patch_status") == "pending_human_label_value"
+        ),
+        "blocked_source_patch_cell_count": sum(
+            1 for row in rows if row.get("source_patch_status") == "blocked_reference_gap"
+        ),
+        "required_update_fields": _csv_list(
+            sorted({str(row.get("source_field", "")) for row in rows if row.get("source_field")})
+        ),
+    }
+
+
+def _data_gate_import_checklist_csv_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {}
+    statuses = _count_strings([row.get("current_status", "") for row in rows])
+    actions = _count_strings([row.get("required_action", "") for row in rows])
+    import_statuses = _count_strings([row.get("import_status", "") for row in rows])
+    symbols = {str(row.get("symbol", "")) for row in rows if row.get("symbol")}
+    timeframes = {str(row.get("timeframe", "")) for row in rows if row.get("timeframe")}
+    batches = {str(row.get("batch_id", "")) for row in rows if row.get("batch_id")}
+    return {
+        "row_count": len(rows),
+        "pending_import_count": sum(
+            1 for row in rows if row.get("import_status") == "pending_manual_import"
+        ),
+        "complete_ready_count": sum(1 for row in rows if row.get("import_status") == "complete_ready"),
+        "missing_count": statuses.get("missing", 0),
+        "stale_count": statuses.get("stale", 0),
+        "ready_count": statuses.get("ready", 0),
+        "symbol_count": len(symbols),
+        "timeframe_count": len(timeframes),
+        "batch_count": len(batches),
+        "current_status_counts": _compact_counts(statuses),
+        "required_action_counts": _compact_counts(actions),
+        "import_status_counts": _compact_counts(import_statuses),
+    }
+
+
+def build_sidecar_evidence_packet_index(
+    *,
+    brief: dict[str, Any],
+    guardrail_audit: dict[str, Any],
+    paths: dict[str, Path],
+) -> dict[str, Any]:
+    artifacts: list[dict[str, Any]] = []
+    missing_artifacts: list[str] = []
+    for artifact_id, title, purpose, authority_scope in SIDECAR_PACKET_ARTIFACT_SPECS:
+        path = paths.get(artifact_id)
+        exists = bool(path and path.exists())
+        if not exists:
+            missing_artifacts.append(artifact_id)
+        artifacts.append(
+            {
+                "artifact_id": artifact_id,
+                "title": title,
+                "path": str(path) if path else "",
+                "exists": exists,
+                "format": path.suffix.lstrip(".") if path else "",
+                "row_count": _csv_data_row_count(path) if path else "",
+                "purpose": purpose,
+                "authority_scope": authority_scope,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    return {
+        "model": "riskflow_ceo_sidecar_evidence_packet_index_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "complete" if not missing_artifacts else "missing_artifacts",
+        "sidecar_evidence_status": brief.get("status", ""),
+        "candidate_count": brief.get("candidate_count", 0),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "guardrail_status": guardrail_audit.get("status", ""),
+        "guardrail_violation_count": guardrail_audit.get("violation_count", ""),
+        "artifact_count": len(artifacts),
+        "missing_artifacts": missing_artifacts,
+        "artifacts": artifacts,
+        "guardrail": (
+            "This packet index verifies sidecar artifact presence and row counts only. "
+            "It does not validate, promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_evidence_packet_index(index: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Evidence Packet Index",
+        "",
+        f"Generated: {index.get('generated_at')}",
+        f"Run: {index.get('run_id')}",
+        f"Lab run: {index.get('lab_run_id')}",
+        f"Status: {index.get('status')}",
+        f"Sidecar evidence status: {index.get('sidecar_evidence_status')}",
+        f"Candidates: {index.get('candidate_count')}",
+        f"Manual data gate active: {index.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {index.get('safe_to_run_fresh_validation')}",
+        f"Guardrail status: {index.get('guardrail_status')}",
+        f"Guardrail violations: {index.get('guardrail_violation_count')}",
+        f"Artifacts: {index.get('artifact_count')}",
+        f"Missing artifacts: {_csv_list(index.get('missing_artifacts', []) or []) or 'none'}",
+        "",
+        "## Artifacts",
+        "",
+    ]
+    for artifact in index.get("artifacts", []) or []:
+        row_count = artifact.get("row_count")
+        row_count_text = f" rows={row_count}" if row_count != "" else ""
+        lines.extend(
+            [
+                f"### {artifact.get('artifact_id')}",
+                "",
+                f"- Title: {artifact.get('title')}",
+                f"- Path: {artifact.get('path')}",
+                f"- Exists: {artifact.get('exists')}",
+                f"- Format: {artifact.get('format')}{row_count_text}",
+                f"- Purpose: {artifact.get('purpose')}",
+                f"- Authority scope: {artifact.get('authority_scope')}",
+                f"- Product language allowed: {artifact.get('product_language_allowed')}",
+                f"- Production effect: {artifact.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(index.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_sidecar_candidate_decision_cards(
+    brief: dict[str, Any],
+    *,
+    quality_audit: dict[str, Any] | None = None,
+    data_gate_unlock_matrix: dict[str, Any] | None = None,
+    visual_label_entry_sheet: dict[str, Any] | None = None,
+    visual_label_completion_audit: dict[str, Any] | None = None,
+) -> str:
+    lines = [
+        "# Riskflow Sidecar Candidate Decision Cards",
+        "",
+        f"Generated: {brief.get('generated_at')}",
+        f"Run: {brief.get('run_id')}",
+        f"Lab run: {brief.get('lab_run_id')}",
+        f"Status: {brief.get('status')}",
+        f"Manual data gate active: {brief.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}",
+        f"Next action: {brief.get('next_action')}",
+        "",
+        "These cards summarize shadow-only warning/reset sidecar evidence. They do not validate, promote, or alter production behavior.",
+        "",
+    ]
+    candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    quality_checks = _sidecar_summary_by_belief_id(quality_audit or {}, key="checks")
+    data_gate_rows = _sidecar_summary_by_belief_id(data_gate_unlock_matrix or {}, key="rows")
+    include_visual_label_summary = visual_label_entry_sheet is not None or visual_label_completion_audit is not None
+    if not candidates:
+        lines.append("- No sidecar candidates.")
+    for candidate in candidates:
+        belief_id = str(candidate.get("belief_id", ""))
+        metric = candidate.get("metric_summary", {}) or {}
+        visual = candidate.get("visual_review", {}) or {}
+        frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+        validation = candidate.get("validation", {}) or {}
+        readiness = _sidecar_candidate_readiness_summary_row(candidate)
+        quality_check = quality_checks.get(belief_id) or _sidecar_champion_challenger_quality_candidate(candidate)
+        data_gate_row = data_gate_rows.get(belief_id, {})
+        handling_classification, handling_reason = _sidecar_candidate_learning_classification(
+            candidate=candidate,
+            readiness=readiness,
+            quality_check=quality_check,
+        )
+        next_allowed_action = _sidecar_candidate_learning_next_allowed_action(
+            handling_classification=handling_classification,
+            data_gate_row=data_gate_row,
+            candidate=candidate,
+        )
+        debt_kinds = _csv_list(
+            [
+                debt.get("debt_kind", "")
+                for debt in candidate.get("evidence_debts", []) or []
+                if debt.get("debt_kind")
+            ]
+        )
+        blockers = _csv_list(metric.get("same_sample_promotion_blockers", []) or []) or "none"
+        review_questions = _csv_list(visual.get("review_questions", []) or []) or "none"
+        operator_decision = _sidecar_operator_evidence_decision(candidate)
+        required_next = _sidecar_candidate_required_next_action(candidate)
+        visual_label_summary = _sidecar_candidate_visual_label_decision_summary(
+            belief_id,
+            visual_label_entry_sheet=visual_label_entry_sheet or {},
+            visual_label_completion_audit=visual_label_completion_audit or {},
+        )
+        lines.extend(
+            [
+                f"## {candidate.get('belief_id')}",
+                "",
+                f"- Current handling: shadow-only",
+                f"- Learning classification: {handling_classification}",
+                f"- Learning reason: {handling_reason}",
+                f"- Learning next allowed action: {next_allowed_action}",
+                f"- Validation authority: {data_gate_row.get('validation_authority') or 'none'}",
+                f"- Data-gate unlock status: {data_gate_row.get('unlock_status') or 'none'}",
+                f"- Readiness tier: {readiness.get('readiness_tier')}",
+                f"- Primary blocker: {readiness.get('primary_blocker')}",
+                f"- Validation queue status: {_sidecar_validation_queue_status(candidate)}",
+                f"- Operator evidence decision: {operator_decision}",
+                f"- Product role: {candidate.get('product_role')}",
+                f"- Champion/challenger: {candidate.get('champion')} -> {candidate.get('challenger')}",
+                f"- Comparison decision: {candidate.get('comparison_decision')}",
+                f"- Best family/timeframe: {metric.get('best_family_id') or 'none'} / {metric.get('timeframe') or 'none'}",
+                f"- Direction/classification: {metric.get('direction') or 'none'} / {metric.get('classification') or 'none'}",
+                f"- Role delta vs champion baseline: {metric.get('role_delta_vs_champion_baseline')}",
+                f"- Hit rate vs champion baseline: {metric.get('hit_rate')} / {metric.get('champion_baseline_hit_rate')}",
+                f"- Drawdown/MFE/MFE-MAE: {metric.get('median_max_drawdown')} / {metric.get('median_max_favorable_excursion')} / {metric.get('mfe_mae_ratio')}",
+                f"- Sample breadth: sample={metric.get('sample_size')} symbols={metric.get('unique_symbols')} clusters={metric.get('event_diversity')}",
+                f"- Matched-null p-value: {metric.get('matched_null_p_value')}",
+                f"- Strict survivor: {metric.get('strict_survivor')} count={metric.get('strict_survivors')}",
+                f"- Same-sample blockers: {blockers}",
+                f"- Review-only frozen spec: {frozen_spec.get('status')} entry_lag={frozen_spec.get('entry_lag_bars')} cooldown={frozen_spec.get('cooldown_bars')}",
+                f"- Evidence debts: {debt_kinds or 'none'}",
+                f"- Visual review: {visual.get('status')} focus={visual.get('focus') or 'none'} priority={visual.get('priority')}",
+                f"- Review questions: {review_questions}",
+                f"- Visual gallery: {visual.get('gallery') or 'none'}",
+                f"- Visual labels: {visual.get('labels_with_images') or 'none'}",
+            ]
+        )
+        if include_visual_label_summary:
+            lines.append(
+                "- Visual-label batch: "
+                f"{visual_label_summary.get('entry_status')} "
+                f"batch={visual_label_summary.get('batch_id') or 'none'} "
+                f"rows={visual_label_summary.get('entry_row_count')} "
+                f"missing_cells={visual_label_summary.get('missing_required_cell_count')} "
+                f"refs={visual_label_summary.get('reference_gaps')} "
+                f"completion={visual_label_summary.get('completion_status')} "
+                "completed/missing/invalid="
+                f"{visual_label_summary.get('completed_row_count')}/"
+                f"{visual_label_summary.get('missing_required_row_count')}/"
+                f"{visual_label_summary.get('invalid_label_row_count')}"
+            )
+        lines.extend(
+            [
+                f"- Required next action: {required_next}",
+                f"- Source notes: {metric.get('source_notes') or 'none'}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sidecar_candidate_visual_label_decision_summary(
+    belief_id: str,
+    *,
+    visual_label_entry_sheet: dict[str, Any],
+    visual_label_completion_audit: dict[str, Any],
+) -> dict[str, Any]:
+    entry_rows = [
+        row
+        for row in visual_label_entry_sheet.get("rows", []) or []
+        if str(row.get("belief_id", "")) == belief_id
+    ]
+    completion_rows = [
+        row
+        for row in visual_label_completion_audit.get("rows", []) or []
+        if str(row.get("belief_id", "")) == belief_id
+    ]
+    batch_id = (
+        (entry_rows[0].get("batch_id") if entry_rows else "")
+        or (completion_rows[0].get("batch_id") if completion_rows else "")
+        or visual_label_entry_sheet.get("batch_id", "")
+        or visual_label_completion_audit.get("batch_id", "")
+    )
+    missing_required_cell_count = sum(
+        _safe_int(row.get("missing_required_field_count")) or 0 for row in entry_rows
+    )
+    missing_source_file_count = sum(1 for row in entry_rows if row.get("source_label_file_exists") is not True)
+    missing_source_row_count = sum(1 for row in entry_rows if row.get("source_label_row_exists") is not True)
+    missing_image_count = sum(1 for row in entry_rows if row.get("image_exists") is not True)
+    if not entry_rows:
+        entry_status = "not_in_current_visual_label_batch"
+    elif missing_source_file_count or missing_source_row_count or missing_image_count:
+        entry_status = "visual_label_entry_reference_gaps"
+    elif missing_required_cell_count:
+        entry_status = "ready_for_visual_label_entry"
+    else:
+        entry_status = "visual_label_entry_complete"
+    missing_required_row_count = sum(1 for row in completion_rows if row.get("missing_required_fields"))
+    invalid_label_row_count = sum(
+        1
+        for row in completion_rows
+        if row.get("invalid_label_fields") or row.get("optional_invalid_label_fields")
+    )
+    completed_row_count = sum(
+        1
+        for row in completion_rows
+        if row.get("label_completion_status") == "required_visual_labels_complete"
+        and not row.get("optional_invalid_label_fields")
+    )
+    if not completion_rows:
+        completion_status = "not_in_current_visual_label_batch"
+    elif missing_required_row_count:
+        completion_status = "pending_required_visual_labels"
+    elif invalid_label_row_count:
+        completion_status = "invalid_visual_label_values"
+    else:
+        completion_status = "visual_label_batch_complete"
+    return {
+        "batch_id": batch_id,
+        "entry_status": entry_status,
+        "entry_row_count": len(entry_rows),
+        "missing_required_cell_count": missing_required_cell_count,
+        "missing_source_label_file_count": missing_source_file_count,
+        "missing_source_label_row_count": missing_source_row_count,
+        "missing_image_count": missing_image_count,
+        "reference_gaps": f"{missing_source_file_count}/{missing_source_row_count}/{missing_image_count}",
+        "completion_status": completion_status,
+        "completion_row_count": len(completion_rows),
+        "completed_row_count": completed_row_count,
+        "missing_required_row_count": missing_required_row_count,
+        "invalid_label_row_count": invalid_label_row_count,
+    }
+
+
+def _sidecar_current_candidate_decision_action(row: dict[str, Any]) -> str:
+    classification = str(row.get("handling_classification", ""))
+    if classification == "lead_post_data_candidate":
+        return "lead_after_manual_data_gate"
+    if classification == "diversity_control_only":
+        return "diversity_control_after_manual_data_gate"
+    if classification == "archive_failure_mode":
+        return "archive_failure_mode_no_promotion_validation"
+    if classification == "quality_blocked_review_only":
+        return "repair_quality_before_more_review"
+    return "review_only_no_promotion_authority"
+
+
+def build_sidecar_current_decision_packet(
+    *,
+    brief: dict[str, Any],
+    candidate_learning_ledger: dict[str, Any],
+    current_handoff: dict[str, Any],
+    champion_challenger_quality: dict[str, Any],
+    quality_remediation_plan: dict[str, Any],
+    consistency_audit: dict[str, Any],
+    evidence_debt_register: dict[str, Any],
+) -> dict[str, Any]:
+    manual_gate_active = brief.get("manual_data_gate_active") is True
+    debt_kinds_by_candidate = {
+        str(candidate.get("belief_id", "")): [
+            str(debt.get("debt_kind", ""))
+            for debt in candidate.get("evidence_debts", []) or []
+            if debt.get("debt_kind")
+        ]
+        for candidate in brief.get("candidates", []) or []
+        if candidate.get("belief_id")
+    }
+    quality_by_candidate = {
+        str(row.get("belief_id", "")): row
+        for row in champion_challenger_quality.get("checks", []) or []
+        if row.get("belief_id")
+    }
+    remediation_by_candidate = _sidecar_summary_by_belief_id(
+        quality_remediation_plan,
+        key="candidates",
+    )
+    candidate_decisions: list[dict[str, Any]] = []
+    for row in current_handoff.get("candidate_roles", []) or []:
+        belief_id = str(row.get("belief_id", ""))
+        quality = quality_by_candidate.get(belief_id, {})
+        remediation = remediation_by_candidate.get(belief_id, {})
+        remediation_items = remediation.get("remediation_items", []) or []
+        remediation_findings = [
+            str(item.get("finding", ""))
+            for item in remediation_items
+            if item.get("finding") and item.get("finding") != "none"
+        ]
+        remediation_actions = [
+            str(item.get("required_action", ""))
+            for item in remediation_items
+            if item.get("required_action") and item.get("required_action") != "none"
+        ]
+        remediation_gates = [
+            str(item.get("clearance_gate", ""))
+            for item in remediation_items
+            if item.get("clearance_gate") and item.get("clearance_gate") != "none"
+        ]
+        candidate_decisions.append(
+            {
+                "belief_id": belief_id,
+                "product_role": row.get("product_role", ""),
+                "executive_candidate_decision": _sidecar_current_candidate_decision_action(row),
+                "handling_classification": row.get("handling_classification", ""),
+                "handling_reason": row.get("handling_reason", ""),
+                "operator_evidence_decision": row.get("operator_evidence_decision", ""),
+                "readiness_tier": row.get("readiness_tier", ""),
+                "primary_blocker": row.get("primary_blocker", ""),
+                "validation_authority": row.get("validation_authority", ""),
+                "promotion_authority": "none",
+                "validation_allowed_now": (
+                    not manual_gate_active
+                    and str(row.get("validation_authority", ""))
+                    == "shadow_validation_only_after_governed_preflight"
+                ),
+                "promotion_allowed_now": False,
+                "next_required_action": row.get("next_required_action", ""),
+                "next_allowed_action": row.get("next_allowed_action", ""),
+                "evidence_debt_kinds": debt_kinds_by_candidate.get(belief_id, []),
+                "quality_status": row.get("quality_status", quality.get("status", "")),
+                "quality_hard_findings": row.get("quality_hard_findings", ""),
+                "quality_advisory_findings": row.get("quality_advisory_findings", ""),
+                "quality_remediation_status": remediation.get("remediation_status", ""),
+                "quality_remediation_item_count": remediation.get(
+                    "remediation_item_count",
+                    len(remediation_items),
+                ),
+                "quality_remediation_findings": remediation_findings,
+                "quality_remediation_required_actions": remediation_actions,
+                "quality_remediation_clearance_gates": remediation_gates,
+                "quality_remediation_autonomous_can_clear_now": remediation.get(
+                    "autonomous_can_clear_now",
+                    False,
+                ),
+                "quality_remediation_next_required_action": remediation.get(
+                    "next_required_action",
+                    "",
+                ),
+                "quality_remediation_next_allowed_action": remediation.get(
+                    "next_allowed_action",
+                    "",
+                ),
+                "quality_remediation_visual_label_next_batch": remediation.get(
+                    "visual_label_next_batch_id",
+                    "",
+                ),
+                "visual_label_entry_status": row.get("visual_label_entry_status", ""),
+                "visual_label_completion_status": row.get("visual_label_completion_status", ""),
+                "role_delta_vs_champion_baseline": row.get("role_delta_vs_champion_baseline", ""),
+                "matched_null_p_value": row.get("matched_null_p_value", ""),
+                "strict_survivor": row.get("strict_survivor", ""),
+                "event_diversity": row.get("event_diversity", ""),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    historical_boundary = current_handoff.get("historical_decision_packet_boundary", {}) or {}
+    return {
+        "model": CEO_SIDECAR_CURRENT_DECISION_PACKET_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "manual_gate_current_decision_packet" if manual_gate_active else "current_sidecar_decision_packet",
+        "executive_decision": (
+            "hold_validation_at_manual_data_gate"
+            if manual_gate_active
+            else "follow_governed_post_data_sidecar_playbook"
+        ),
+        "decision_reason": (
+            "Current warning/reset sidecars are shadow-only; fresh/control validation and product language remain blocked "
+            "until the manual OHLCV data gate is resolved."
+        ),
+        "current_required_action": current_handoff.get("current_required_action") or brief.get("next_action", ""),
+        "candidate_count": current_handoff.get("candidate_count", brief.get("candidate_count", 0)),
+        "lead_post_data_candidate_count": candidate_learning_ledger.get("lead_post_data_candidate_count", 0),
+        "diversity_control_only_count": candidate_learning_ledger.get("diversity_control_only_count", 0),
+        "archive_failure_mode_count": candidate_learning_ledger.get("archive_failure_mode_count", 0),
+        "quality_blocked_review_only_count": candidate_learning_ledger.get("quality_blocked_review_only_count", 0),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "sidecar_evidence_status": brief.get("status", ""),
+        "consistency_audit_status": consistency_audit.get("status", ""),
+        "consistency_audit_check_count": consistency_audit.get("check_count", ""),
+        "consistency_audit_issue_count": consistency_audit.get("issue_count", ""),
+        "champion_challenger_quality_status": champion_challenger_quality.get("status", ""),
+        "champion_challenger_quality_issue_count": champion_challenger_quality.get("issue_count", ""),
+        "quality_remediation_status": quality_remediation_plan.get("status", ""),
+        "quality_remediation_current_required_action": quality_remediation_plan.get(
+            "current_required_action",
+            "",
+        ),
+        "quality_remediation_issue_count": quality_remediation_plan.get("quality_issue_count", ""),
+        "quality_remediation_hard_remediation_count": quality_remediation_plan.get(
+            "hard_remediation_count",
+            "",
+        ),
+        "quality_remediation_advisory_remediation_count": quality_remediation_plan.get(
+            "advisory_remediation_count",
+            "",
+        ),
+        "quality_remediation_autonomous_clearable_now_count": quality_remediation_plan.get(
+            "autonomous_clearable_now_count",
+            "",
+        ),
+        "quality_remediation_human_visual_remediation_count": quality_remediation_plan.get(
+            "human_visual_remediation_count",
+            "",
+        ),
+        "quality_remediation_diversity_control_remediation_count": quality_remediation_plan.get(
+            "diversity_control_remediation_count",
+            "",
+        ),
+        "quality_remediation_archive_only_count": quality_remediation_plan.get("archive_only_count", ""),
+        "evidence_debt_status": evidence_debt_register.get("status", ""),
+        "evidence_debt_count": evidence_debt_register.get("debt_count", ""),
+        "evidence_debt_candidate_count": evidence_debt_register.get("candidate_debt_count", ""),
+        "evidence_debt_global_count": evidence_debt_register.get("global_debt_count", ""),
+        "evidence_debt_archived_candidate_count": evidence_debt_register.get("archived_candidate_count", ""),
+        "evidence_debt_current_runtime_handoff_action": evidence_debt_register.get(
+            "current_runtime_handoff_action",
+            "",
+        ),
+        "evidence_debt_current_runtime_handoff_status": evidence_debt_register.get(
+            "current_runtime_handoff_status",
+            "",
+        ),
+        "historical_packet_boundary": {
+            "packet_path": historical_boundary.get("packet_path", ""),
+            "historical_only": historical_boundary.get("historical_only", True),
+            "stale_product_delta_snapshot_detected": historical_boundary.get(
+                "stale_product_delta_snapshot_detected",
+                "",
+            ),
+            "current_state_source": (
+                "sidecar_current_decision_packet plus sidecar_evidence_packet_index "
+                "plus sidecar_candidate_learning_ledger plus sidecar_quality_remediation_plan"
+            ),
+        },
+        "candidate_decisions": candidate_decisions,
+        "guardrail": (
+            "This packet is a current executive sidecar handoff only. It does not validate, promote, "
+            "authorize product language, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "promotion_authority": "none",
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_current_decision_packet(packet: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Current Decision Packet",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Run: {packet.get('run_id')}",
+        f"Lab run: {packet.get('lab_run_id')}",
+        f"Status: {packet.get('status')}",
+        f"Executive decision: {packet.get('executive_decision')}",
+        f"Decision reason: {packet.get('decision_reason')}",
+        f"Current required action: {packet.get('current_required_action') or 'none'}",
+        f"Candidates: {packet.get('candidate_count')}",
+        (
+            "Candidate roles lead/control/archive/blocked: "
+            f"{packet.get('lead_post_data_candidate_count')}/"
+            f"{packet.get('diversity_control_only_count')}/"
+            f"{packet.get('archive_failure_mode_count')}/"
+            f"{packet.get('quality_blocked_review_only_count')}"
+        ),
+        f"Manual data gate active: {packet.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {packet.get('safe_to_run_fresh_validation')}",
+        f"Sidecar evidence status: {packet.get('sidecar_evidence_status')}",
+        (
+            "Consistency audit status/checks/issues: "
+            f"{packet.get('consistency_audit_status')}/"
+            f"{packet.get('consistency_audit_check_count')}/"
+            f"{packet.get('consistency_audit_issue_count')}"
+        ),
+        (
+            "Quality remediation status/issues hard/advisory: "
+            f"{packet.get('quality_remediation_status') or 'none'}/"
+            f"{packet.get('quality_remediation_issue_count')}/"
+            f"{packet.get('quality_remediation_hard_remediation_count')}/"
+            f"{packet.get('quality_remediation_advisory_remediation_count')}"
+        ),
+        (
+            "Quality remediation autonomous/human/diversity/archive: "
+            f"{packet.get('quality_remediation_autonomous_clearable_now_count')}/"
+            f"{packet.get('quality_remediation_human_visual_remediation_count')}/"
+            f"{packet.get('quality_remediation_diversity_control_remediation_count')}/"
+            f"{packet.get('quality_remediation_archive_only_count')}"
+        ),
+        (
+            "Quality remediation required action: "
+            f"{packet.get('quality_remediation_current_required_action') or 'none'}"
+        ),
+        (
+            "Evidence debt status/count candidate/global/archive: "
+            f"{packet.get('evidence_debt_status')}/"
+            f"{packet.get('evidence_debt_count')}/"
+            f"{packet.get('evidence_debt_candidate_count')}/"
+            f"{packet.get('evidence_debt_global_count')}/"
+            f"{packet.get('evidence_debt_archived_candidate_count')}"
+        ),
+        (
+            "Evidence debt runtime handoff: "
+            f"{packet.get('evidence_debt_current_runtime_handoff_action') or 'none'} "
+            f"status={packet.get('evidence_debt_current_runtime_handoff_status') or 'none'}"
+        ),
+        "",
+        "## Candidate Decisions",
+        "",
+    ]
+    if not packet.get("candidate_decisions"):
+        lines.append("- none")
+    for candidate in packet.get("candidate_decisions", []) or []:
+        lines.extend(
+            [
+                f"### {candidate.get('belief_id')}",
+                "",
+                f"- Product role: {candidate.get('product_role') or 'none'}",
+                f"- Executive candidate decision: {candidate.get('executive_candidate_decision')}",
+                f"- Handling classification: {candidate.get('handling_classification') or 'none'}",
+                f"- Handling reason: {candidate.get('handling_reason') or 'none'}",
+                f"- Operator evidence decision: {candidate.get('operator_evidence_decision') or 'none'}",
+                f"- Readiness/blocker: {candidate.get('readiness_tier') or 'none'} / {candidate.get('primary_blocker') or 'none'}",
+                f"- Validation authority: {candidate.get('validation_authority') or 'none'}",
+                f"- Promotion authority: {candidate.get('promotion_authority') or 'none'}",
+                f"- Validation allowed now: {candidate.get('validation_allowed_now')}",
+                f"- Promotion allowed now: {candidate.get('promotion_allowed_now')}",
+                f"- Evidence debts: {_csv_list(candidate.get('evidence_debt_kinds', []) or []) or 'none'}",
+                f"- Quality findings: hard={candidate.get('quality_hard_findings') or 'none'} advisory={candidate.get('quality_advisory_findings') or 'none'}",
+                (
+                    "- Quality remediation: "
+                    f"{candidate.get('quality_remediation_status') or 'none'} "
+                    f"items={candidate.get('quality_remediation_item_count')} "
+                    f"clear_now={candidate.get('quality_remediation_autonomous_can_clear_now')} "
+                    f"batch={candidate.get('quality_remediation_visual_label_next_batch') or 'none'}"
+                ),
+                (
+                    "- Quality remediation findings/actions/gates: "
+                    f"{_csv_list(candidate.get('quality_remediation_findings', []) or []) or 'none'} / "
+                    f"{_csv_list(candidate.get('quality_remediation_required_actions', []) or []) or 'none'} / "
+                    f"{_csv_list(candidate.get('quality_remediation_clearance_gates', []) or []) or 'none'}"
+                ),
+                (
+                    "- Role delta / p / strict / diversity: "
+                    f"{candidate.get('role_delta_vs_champion_baseline') if candidate.get('role_delta_vs_champion_baseline') != '' else 'n/a'} / "
+                    f"{candidate.get('matched_null_p_value') if candidate.get('matched_null_p_value') != '' else 'n/a'} / "
+                    f"{candidate.get('strict_survivor') if candidate.get('strict_survivor') != '' else 'n/a'} / "
+                    f"{candidate.get('event_diversity') if candidate.get('event_diversity') != '' else 'n/a'}"
+                ),
+                f"- Visual-label status: {candidate.get('visual_label_entry_status') or 'none'} / {candidate.get('visual_label_completion_status') or 'none'}",
+                f"- Next required action: {candidate.get('next_required_action') or 'none'}",
+                f"- Next allowed action: {candidate.get('next_allowed_action') or 'none'}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+            ]
+        )
+    historical = packet.get("historical_packet_boundary", {}) or {}
+    lines.extend(
+        [
+            "## Historical Packet Boundary",
+            "",
+            f"- Packet path: {historical.get('packet_path') or 'missing'}",
+            f"- Historical only: {historical.get('historical_only')}",
+            f"- Stale product-delta snapshot detected: {historical.get('stale_product_delta_snapshot_detected')}",
+            f"- Current state source: {historical.get('current_state_source') or 'none'}",
+            "",
+            "## Guardrail",
+            "",
+            str(packet.get("guardrail")),
+            "Product language allowed: False",
+            "Promotion authority: none.",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_CORE_CHAMPION_CHALLENGER_METRIC_FIELDS = [
+    "median_forward_relative_return",
+    "champion_baseline_median_forward_relative_return",
+    "role_delta_vs_champion_baseline",
+    "hit_rate",
+    "champion_baseline_hit_rate",
+    "median_max_drawdown",
+    "median_max_favorable_excursion",
+    "mfe_mae_ratio",
+    "event_diversity",
+    "matched_null_p_value",
+    "strict_survivor",
+    "sample_size",
+    "unique_symbols",
+]
+
+SIDECAR_ADVISORY_CHAMPION_CHALLENGER_METRIC_FIELDS = [
+    "missed_upside_cost",
+    "avoided_downside_benefit",
+]
+
+
+def _metric_field_missing(metric: dict[str, Any], field: str) -> bool:
+    return metric.get(field) in {"", None}
+
+
+def _sidecar_champion_challenger_quality_candidate(
+    candidate: dict[str, Any],
+    *,
+    visual_coverage: dict[str, Any] | None = None,
+    visual_label_progress: dict[str, Any] | None = None,
+    visual_label_completion: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    belief_id = str(candidate.get("belief_id", ""))
+    metric = candidate.get("metric_summary", {}) or {}
+    validation = candidate.get("validation", {}) or {}
+    visual_coverage = visual_coverage or {}
+    visual_label_progress = visual_label_progress or {}
+    visual_label_completion = visual_label_completion or {}
+    hard_findings: list[str] = []
+    advisory_findings: list[str] = []
+    missing_core_fields = [
+        field for field in SIDECAR_CORE_CHAMPION_CHALLENGER_METRIC_FIELDS if _metric_field_missing(metric, field)
+    ]
+    missing_advisory_fields = [
+        field for field in SIDECAR_ADVISORY_CHAMPION_CHALLENGER_METRIC_FIELDS if _metric_field_missing(metric, field)
+    ]
+    if candidate.get("champion") != "core_signal_v0":
+        hard_findings.append("champion_not_core_signal_v0")
+    if not str(candidate.get("challenger", "")).startswith("core_signal_v0_plus_"):
+        hard_findings.append("challenger_not_core_signal_v0_plus_sidecar")
+    if not str(candidate.get("product_role", "")):
+        hard_findings.append("missing_product_role")
+    if not str(candidate.get("comparison_decision", "")):
+        hard_findings.append("missing_comparison_decision")
+    if missing_core_fields:
+        hard_findings.append("missing_core_metric_fields")
+    if candidate.get("product_language_allowed") is not False:
+        hard_findings.append("product_language_allowed")
+    if candidate.get("production_effect") != "none":
+        hard_findings.append("production_effect_not_none")
+    if validation.get("validation_completed") is True:
+        hard_findings.append("validation_completed_in_sidecar_quality_audit")
+    if missing_advisory_fields:
+        advisory_findings.append("missing_role_benefit_fields")
+    try:
+        event_diversity = float(metric.get("event_diversity", 0) or 0)
+    except (TypeError, ValueError):
+        event_diversity = 0.0
+    if event_diversity and event_diversity < 5:
+        advisory_findings.append("event_diversity_below_review_threshold")
+    if metric.get("strict_survivor") is False:
+        advisory_findings.append("strict_survivor_false")
+    progress_status = str(visual_label_progress.get("human_label_progress_status", ""))
+    if progress_status in {
+        "human_visual_review_not_started",
+        "human_visual_review_incomplete",
+        "no_visual_label_source_rows",
+        "no_candidate_matched_label_rows",
+    }:
+        advisory_findings.append("human_visual_review_not_started")
+    elif visual_coverage.get("human_label_completion_status") in {"human_review_not_started", "no_label_rows"}:
+        advisory_findings.append("human_visual_review_not_started")
+    if _safe_int(visual_label_completion.get("missing_required_row_count", 0)) > 0:
+        advisory_findings.append("visual_label_batch_missing_required_labels")
+    if _safe_int(visual_label_completion.get("invalid_label_row_count", 0)) > 0:
+        advisory_findings.append("visual_label_batch_invalid_values")
+    if hard_findings:
+        status = "fail_champion_challenger_quality"
+    elif advisory_findings:
+        status = "pass_with_advisory_quality_findings"
+    else:
+        status = "pass_champion_challenger_quality"
+    return {
+        "belief_id": belief_id,
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "comparison_decision": candidate.get("comparison_decision", ""),
+        "operator_evidence_decision": _sidecar_operator_evidence_decision(candidate),
+        "status": status,
+        "hard_findings": hard_findings,
+        "advisory_findings": advisory_findings,
+        "missing_core_metric_fields": missing_core_fields,
+        "missing_advisory_metric_fields": missing_advisory_fields,
+        "role_delta_vs_champion_baseline": metric.get("role_delta_vs_champion_baseline"),
+        "matched_null_p_value": metric.get("matched_null_p_value"),
+        "strict_survivor": metric.get("strict_survivor"),
+        "event_diversity": metric.get("event_diversity"),
+        "sample_size": metric.get("sample_size"),
+        "unique_symbols": metric.get("unique_symbols"),
+        "visual_review_asset_status": visual_coverage.get("review_completion_status", ""),
+        "human_label_completion_status": visual_coverage.get("human_label_completion_status", ""),
+        "human_review_completed_rows": visual_coverage.get("human_review_completed_rows", ""),
+        "visual_label_progress_status": visual_label_progress.get("human_label_progress_status", ""),
+        "visual_label_matched_rows": visual_label_progress.get("matched_label_rows", ""),
+        "visual_label_pending_rows": visual_label_progress.get("pending_label_rows", ""),
+        "visual_label_completed_rows": visual_label_progress.get("completed_label_rows", ""),
+        "visual_label_next_batch_id": visual_label_progress.get("next_batch_id", ""),
+        "visual_label_next_action": visual_label_progress.get("next_action", ""),
+        "visual_label_completion_audit_status": visual_label_completion.get("status", ""),
+        "visual_label_completion_audit_batch_id": visual_label_completion.get("batch_id", ""),
+        "visual_label_completion_audit_rows": visual_label_completion.get("row_count", ""),
+        "visual_label_completion_audit_completed_rows": visual_label_completion.get("completed_row_count", ""),
+        "visual_label_completion_audit_missing_rows": visual_label_completion.get("missing_required_row_count", ""),
+        "visual_label_completion_audit_invalid_rows": visual_label_completion.get("invalid_label_row_count", ""),
+        "visual_label_completion_audit_next_action": visual_label_completion.get("next_action", ""),
+        "validation_route": validation.get("route", ""),
+        "validation_result": validation.get("validation_result", ""),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def _sidecar_visual_label_completion_by_belief_id(audit: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    audit = audit or {}
+    by_belief: dict[str, dict[str, Any]] = {}
+    for row in audit.get("rows", []) or []:
+        belief_id = str(row.get("belief_id", ""))
+        if not belief_id:
+            continue
+        summary = by_belief.setdefault(
+            belief_id,
+            {
+                "status": audit.get("status", ""),
+                "batch_id": audit.get("batch_id", ""),
+                "row_count": 0,
+                "completed_row_count": 0,
+                "missing_required_row_count": 0,
+                "invalid_label_row_count": 0,
+                "next_action": audit.get("next_action", ""),
+            },
+        )
+        summary["row_count"] += 1
+        if row.get("label_completion_status") == "required_visual_labels_complete" and not row.get(
+            "optional_invalid_label_fields"
+        ):
+            summary["completed_row_count"] += 1
+        if row.get("missing_required_fields"):
+            summary["missing_required_row_count"] += 1
+        if row.get("invalid_label_fields") or row.get("optional_invalid_label_fields"):
+            summary["invalid_label_row_count"] += 1
+    return by_belief
+
+
+def build_sidecar_champion_challenger_quality_audit(
+    brief: dict[str, Any],
+    *,
+    visual_review_coverage: dict[str, Any] | None = None,
+    visual_label_progress: dict[str, Any] | None = None,
+    visual_label_completion_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    coverage_by_belief_id = {
+        str(row.get("belief_id", "")): row
+        for row in (visual_review_coverage or {}).get("rows", []) or []
+        if row.get("belief_id")
+    }
+    progress_by_belief_id = {
+        str(row.get("belief_id", "")): row
+        for row in (visual_label_progress or {}).get("rows", []) or []
+        if row.get("belief_id")
+    }
+    completion_by_belief_id = _sidecar_visual_label_completion_by_belief_id(visual_label_completion_audit)
+    checks = [
+        _sidecar_champion_challenger_quality_candidate(
+            candidate,
+            visual_coverage=coverage_by_belief_id.get(str(candidate.get("belief_id", "")), {}),
+            visual_label_progress=progress_by_belief_id.get(str(candidate.get("belief_id", "")), {}),
+            visual_label_completion=completion_by_belief_id.get(str(candidate.get("belief_id", "")), {}),
+        )
+        for candidate in candidates
+    ]
+    hard_issues = [
+        {
+            "belief_id": check.get("belief_id", ""),
+            "findings": check.get("hard_findings", []),
+            "missing_core_metric_fields": check.get("missing_core_metric_fields", []),
+        }
+        for check in checks
+        if check.get("hard_findings")
+    ]
+    advisory_issues = [
+        {
+            "belief_id": check.get("belief_id", ""),
+            "findings": check.get("advisory_findings", []),
+            "missing_advisory_metric_fields": check.get("missing_advisory_metric_fields", []),
+        }
+        for check in checks
+        if check.get("advisory_findings")
+    ]
+    if hard_issues:
+        status = "fail_champion_challenger_quality"
+    elif advisory_issues:
+        status = "pass_with_advisory_quality_findings"
+    else:
+        status = "pass_champion_challenger_quality"
+    return {
+        "model": "riskflow_ceo_sidecar_champion_challenger_quality_audit_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": status,
+        "candidate_count": len(checks),
+        "check_count": len(checks),
+        "hard_issue_count": len(hard_issues),
+        "advisory_issue_count": len(advisory_issues),
+        "issue_count": len(hard_issues) + len(advisory_issues),
+        "required_core_metric_fields": SIDECAR_CORE_CHAMPION_CHALLENGER_METRIC_FIELDS,
+        "advisory_metric_fields": SIDECAR_ADVISORY_CHAMPION_CHALLENGER_METRIC_FIELDS,
+        "checks": checks,
+        "hard_issues": hard_issues,
+        "advisory_issues": advisory_issues,
+        "guardrail": (
+            "This audit checks champion/challenger metric coverage, role alignment, and "
+            "shadow production guardrails. Passing it does not validate, promote, or alter "
+            "production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_champion_challenger_quality_audit(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Champion/Challenger Quality Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Run: {audit.get('run_id')}",
+        f"Lab run: {audit.get('lab_run_id')}",
+        f"Status: {audit.get('status')}",
+        f"Candidates: {audit.get('candidate_count')}",
+        f"Checks: {audit.get('check_count')}",
+        f"Hard issues: {audit.get('hard_issue_count')}",
+        f"Advisory issues: {audit.get('advisory_issue_count')}",
+        f"Issues: {audit.get('issue_count')}",
+        "",
+        "## Candidate Checks",
+        "",
+    ]
+    checks = audit.get("checks", []) or []
+    if not checks:
+        lines.append("- none")
+    for check in checks:
+        lines.extend(
+            [
+                f"### {check.get('belief_id')}",
+                "",
+                f"- Status: {check.get('status')}",
+                f"- Product role: {check.get('product_role')}",
+                f"- Champion/challenger: {check.get('champion')} -> {check.get('challenger')}",
+                f"- Comparison decision: {check.get('comparison_decision')}",
+                f"- Operator evidence decision: {check.get('operator_evidence_decision')}",
+                f"- Missing core metric fields: {_csv_list(check.get('missing_core_metric_fields', []) or []) or 'none'}",
+                (
+                    "- Missing advisory metric fields: "
+                    f"{_csv_list(check.get('missing_advisory_metric_fields', []) or []) or 'none'}"
+                ),
+                f"- Hard findings: {_csv_list(check.get('hard_findings', []) or []) or 'none'}",
+                f"- Advisory findings: {_csv_list(check.get('advisory_findings', []) or []) or 'none'}",
+                f"- Role delta / matched-null p: {check.get('role_delta_vs_champion_baseline')} / {check.get('matched_null_p_value')}",
+                f"- Strict survivor / event diversity: {check.get('strict_survivor')} / {check.get('event_diversity')}",
+                f"- Sample breadth: sample={check.get('sample_size')} symbols={check.get('unique_symbols')}",
+                f"- Visual review asset status: {check.get('visual_review_asset_status') or 'unknown'}",
+                f"- Human label completion status: {check.get('human_label_completion_status') or 'unknown'}",
+                (
+                    "- Human review completed rows: "
+                    f"{check.get('human_review_completed_rows') if check.get('human_review_completed_rows') != '' else 'n/a'}"
+                ),
+                f"- Visual-label progress status: {check.get('visual_label_progress_status') or 'unknown'}",
+                (
+                    "- Visual-label matched/pending/completed rows: "
+                    f"{check.get('visual_label_matched_rows') if check.get('visual_label_matched_rows') != '' else 'n/a'}/"
+                    f"{check.get('visual_label_pending_rows') if check.get('visual_label_pending_rows') != '' else 'n/a'}/"
+                    f"{check.get('visual_label_completed_rows') if check.get('visual_label_completed_rows') != '' else 'n/a'}"
+                ),
+                f"- Visual-label next batch: {check.get('visual_label_next_batch_id') or 'none'}",
+                f"- Visual-label next action: {check.get('visual_label_next_action') or 'none'}",
+                (
+                    "- Visual-label completion audit: "
+                    f"{check.get('visual_label_completion_audit_status') or 'unknown'} "
+                    f"batch={check.get('visual_label_completion_audit_batch_id') or 'none'}"
+                ),
+                (
+                    "- Visual-label completion rows/completed/missing/invalid: "
+                    f"{check.get('visual_label_completion_audit_rows') if check.get('visual_label_completion_audit_rows') != '' else 'n/a'}/"
+                    f"{check.get('visual_label_completion_audit_completed_rows') if check.get('visual_label_completion_audit_completed_rows') != '' else 'n/a'}/"
+                    f"{check.get('visual_label_completion_audit_missing_rows') if check.get('visual_label_completion_audit_missing_rows') != '' else 'n/a'}/"
+                    f"{check.get('visual_label_completion_audit_invalid_rows') if check.get('visual_label_completion_audit_invalid_rows') != '' else 'n/a'}"
+                ),
+                (
+                    "- Visual-label completion next action: "
+                    f"{check.get('visual_label_completion_audit_next_action') or 'none'}"
+                ),
+                f"- Validation route/result: {check.get('validation_route')} / {check.get('validation_result')}",
+                f"- Product language allowed: {check.get('product_language_allowed')}",
+                f"- Production effect: {check.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(["## Issues", ""])
+    if not audit.get("hard_issues") and not audit.get("advisory_issues"):
+        lines.append("- none")
+    for issue in audit.get("hard_issues", []) or []:
+        lines.append(f"- hard {issue.get('belief_id')}: {_csv_list(issue.get('findings', []) or [])}")
+    for issue in audit.get("advisory_issues", []) or []:
+        lines.append(f"- advisory {issue.get('belief_id')}: {_csv_list(issue.get('findings', []) or [])}")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(audit.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sidecar_quality_remediation_action(finding: str, check: dict[str, Any], ledger_row: dict[str, Any]) -> dict[str, Any]:
+    belief_id = str(check.get("belief_id", ""))
+    next_batch = str(check.get("visual_label_next_batch_id") or "")
+    classification = str(ledger_row.get("handling_classification", ""))
+    if finding == "human_visual_review_not_started":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "human_visual_review",
+            "owner": "human_visual_reviewer",
+            "required_action": (
+                f"complete_{next_batch}"
+                if next_batch
+                else "complete_champion_challenger_visual_review_labels"
+            ),
+            "clearance_gate": "required_human_visual_labels",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "visual legibility evidence only; not validation proof",
+            "invalid_actions": [
+                "do_not_mark_visual_review_complete_without_source_labels",
+                "do_not_promote_from_visual_review_only",
+            ],
+        }
+    if finding == "visual_label_batch_missing_required_labels":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "visual_label_entry",
+            "owner": "human_visual_reviewer",
+            "required_action": "complete_required_visual_labels_in_source_rows",
+            "clearance_gate": "visual_label_completion_audit_passes",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "refresh sidecar evidence brief and quality audit after labels are entered",
+            "invalid_actions": [
+                "do_not_fill_label_values_synthetically",
+                "do_not_treat_empty_required_cells_as_completed_review",
+            ],
+        }
+    if finding == "visual_label_batch_invalid_values":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "visual_label_entry",
+            "owner": "human_visual_reviewer",
+            "required_action": "correct_visual_label_values_to_rubric",
+            "clearance_gate": "visual_label_completion_audit_has_zero_invalid_rows",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "refresh sidecar evidence brief and quality audit after label correction",
+            "invalid_actions": [
+                "do_not_ignore_invalid_label_values",
+                "do_not_promote_from_invalid_visual_labels",
+            ],
+        }
+    if finding == "event_diversity_below_review_threshold":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "fresh_control_diversity_check",
+            "owner": "data_steward_then_validation_referee",
+            "required_action": "run_diversity_fragility_control_only_after_fresh_data_gate",
+            "clearance_gate": "fresh_control_evidence_broadens_event_diversity",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "control evidence only; do not promote from cluster-concentrated same-sample evidence",
+            "invalid_actions": [
+                "do_not_promote_cluster_concentrated_warning",
+                "do_not_tune_thresholds_to_increase_event_count",
+            ],
+        }
+    if finding == "strict_survivor_false":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "archive_only",
+            "owner": "research_memory",
+            "required_action": "preserve_failure_mode_do_not_validate_for_promotion",
+            "clearance_gate": "new_governed_hypothesis_required_before_revisit",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "do-not-repeat learning",
+            "invalid_actions": [
+                "do_not_run_promotion_validation_for_archived_shape",
+                "do_not_relabel_failure_mode_as_candidate",
+            ],
+        }
+    if finding == "missing_role_benefit_fields":
+        return {
+            "belief_id": belief_id,
+            "finding": finding,
+            "remediation_type": "role_benefit_metric_gap",
+            "owner": "validation_referee",
+            "required_action": (
+                "preserve_archive_or_reframe_reset_quality_hypothesis_with_role_benefit_metrics"
+                if classification == "archive_failure_mode"
+                else "add_missed_upside_and_avoided_downside_fields_before_promotion_review"
+            ),
+            "clearance_gate": "role_benefit_metrics_present_for_any_new_promotion_candidate",
+            "autonomous_can_clear_now": False,
+            "post_gate_use": "reset-quality promotion screen only after new governed hypothesis evidence",
+            "invalid_actions": [
+                "do_not_promote_reset_quality_without_role_benefit_metrics",
+                "do_not_repair_archive_by_filling_fields_after_the_fact",
+            ],
+        }
+    return {
+        "belief_id": belief_id,
+        "finding": finding,
+        "remediation_type": "quality_finding_review",
+        "owner": "research_operator",
+        "required_action": "review_quality_finding_before_any_validation",
+        "clearance_gate": "quality_finding_resolved",
+        "autonomous_can_clear_now": False,
+        "post_gate_use": "operator review only",
+        "invalid_actions": ["do_not_ignore_quality_finding"],
+    }
+
+
+def build_sidecar_quality_remediation_plan(
+    *,
+    brief: dict[str, Any],
+    quality_audit: dict[str, Any],
+    candidate_learning_ledger: dict[str, Any],
+) -> dict[str, Any]:
+    manual_gate_active = brief.get("manual_data_gate_active") is True
+    ledger_by_belief_id = _sidecar_summary_by_belief_id(candidate_learning_ledger, key="candidates")
+    candidates: list[dict[str, Any]] = []
+    remediation_items: list[dict[str, Any]] = []
+    for check in quality_audit.get("checks", []) or []:
+        belief_id = str(check.get("belief_id", ""))
+        ledger_row = ledger_by_belief_id.get(belief_id, {})
+        hard_findings = [str(item) for item in check.get("hard_findings", []) or [] if str(item)]
+        advisory_findings = [str(item) for item in check.get("advisory_findings", []) or [] if str(item)]
+        findings = hard_findings + advisory_findings
+        candidate_items = [
+            _sidecar_quality_remediation_action(finding, check, ledger_row)
+            for finding in findings
+        ]
+        if not candidate_items:
+            candidate_items = [
+                {
+                    "belief_id": belief_id,
+                    "finding": "none",
+                    "remediation_type": "no_quality_remediation_required",
+                    "owner": "none",
+                    "required_action": "none",
+                    "clearance_gate": "quality_audit_clear",
+                    "autonomous_can_clear_now": False,
+                    "post_gate_use": "candidate may still require fresh/control validation",
+                    "invalid_actions": ["do_not_promote_without_fresh_control_validation"],
+                }
+            ]
+        remediation_items.extend(candidate_items)
+        classification = str(ledger_row.get("handling_classification", ""))
+        if hard_findings:
+            remediation_status = "hard_quality_findings_block_validation"
+        elif classification == "archive_failure_mode":
+            remediation_status = "archive_only_no_promotion_remediation"
+        elif any(item.get("remediation_type") == "fresh_control_diversity_check" for item in candidate_items):
+            remediation_status = "diversity_control_waiting_on_fresh_data"
+        elif any(str(item.get("remediation_type", "")).startswith("visual_label") for item in candidate_items):
+            remediation_status = "human_visual_label_remediation_required"
+        elif any(item.get("remediation_type") == "human_visual_review" for item in candidate_items):
+            remediation_status = "human_visual_review_required"
+        else:
+            remediation_status = "quality_remediation_clear"
+        candidates.append(
+            {
+                "belief_id": belief_id,
+                "product_role": check.get("product_role", ""),
+                "handling_classification": classification,
+                "quality_status": check.get("status", ""),
+                "hard_findings": hard_findings,
+                "advisory_findings": advisory_findings,
+                "remediation_status": remediation_status,
+                "remediation_item_count": len(candidate_items),
+                "autonomous_can_clear_now": any(item.get("autonomous_can_clear_now") is True for item in candidate_items),
+                "manual_data_gate_active": manual_gate_active,
+                "validation_authority": ledger_row.get("validation_authority", ""),
+                "next_required_action": ledger_row.get("next_required_action", ""),
+                "next_allowed_action": ledger_row.get("next_allowed_action", ""),
+                "visual_label_next_batch_id": check.get("visual_label_next_batch_id", ""),
+                "visual_label_completion_audit_status": check.get("visual_label_completion_audit_status", ""),
+                "visual_label_completion_missing_rows": check.get("visual_label_completion_audit_missing_rows", ""),
+                "event_diversity": check.get("event_diversity", ""),
+                "strict_survivor": check.get("strict_survivor", ""),
+                "remediation_items": candidate_items,
+                "product_language_allowed": False,
+                "production_effect": "none",
+                "promotion_authority": "none",
+            }
+        )
+    hard_remediation_count = sum(1 for item in remediation_items if item.get("finding") in {
+        finding
+        for issue in quality_audit.get("hard_issues", []) or []
+        for finding in issue.get("findings", []) or []
+    })
+    advisory_remediation_count = len([item for item in remediation_items if item.get("finding") not in {"none"}]) - hard_remediation_count
+    human_visual_count = sum(
+        1
+        for item in remediation_items
+        if item.get("remediation_type") in {"human_visual_review", "visual_label_entry"}
+    )
+    diversity_count = sum(
+        1 for item in remediation_items if item.get("remediation_type") == "fresh_control_diversity_check"
+    )
+    archive_count = sum(1 for candidate in candidates if candidate.get("handling_classification") == "archive_failure_mode")
+    autonomous_clearable_count = sum(1 for item in remediation_items if item.get("autonomous_can_clear_now") is True)
+    if quality_audit.get("hard_issue_count"):
+        status = "quality_remediation_hard_blocked"
+    elif manual_gate_active:
+        status = "manual_gate_quality_remediation_plan"
+    elif quality_audit.get("advisory_issue_count"):
+        status = "quality_remediation_open"
+    else:
+        status = "quality_remediation_clear"
+    return {
+        "model": CEO_SIDECAR_QUALITY_REMEDIATION_PLAN_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": status,
+        "candidate_count": len(candidates),
+        "quality_audit_status": quality_audit.get("status", ""),
+        "quality_issue_count": quality_audit.get("issue_count", 0),
+        "hard_remediation_count": hard_remediation_count,
+        "advisory_remediation_count": max(0, advisory_remediation_count),
+        "human_visual_remediation_count": human_visual_count,
+        "diversity_control_remediation_count": diversity_count,
+        "archive_only_count": archive_count,
+        "autonomous_clearable_now_count": autonomous_clearable_count,
+        "manual_data_gate_active": manual_gate_active,
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation") is True,
+        "current_required_action": (
+            "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+            if manual_gate_active
+            else "clear_quality_remediation_before_any_promotion_review"
+        ),
+        "candidates": candidates,
+        "guardrail": (
+            "This remediation plan routes quality-audit findings only. It does not validate, promote, "
+            "authorize product language, fabricate visual labels, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+
+
+def render_sidecar_quality_remediation_plan(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Quality Remediation Plan",
+        "",
+        f"Generated: {plan.get('generated_at')}",
+        f"Run: {plan.get('run_id')}",
+        f"Lab run: {plan.get('lab_run_id')}",
+        f"Status: {plan.get('status')}",
+        f"Quality audit status: {plan.get('quality_audit_status')}",
+        f"Quality issues: {plan.get('quality_issue_count')}",
+        f"Candidates: {plan.get('candidate_count')}",
+        f"Hard/advisory remediations: {plan.get('hard_remediation_count')}/{plan.get('advisory_remediation_count')}",
+        f"Human visual remediations: {plan.get('human_visual_remediation_count')}",
+        f"Diversity-control remediations: {plan.get('diversity_control_remediation_count')}",
+        f"Archive-only candidates: {plan.get('archive_only_count')}",
+        f"Autonomous clearable now: {plan.get('autonomous_clearable_now_count')}",
+        f"Manual data gate active: {plan.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {plan.get('safe_to_run_fresh_validation')}",
+        f"Current required action: {plan.get('current_required_action')}",
+        "",
+        "This is a quality-remediation handoff over shadow-only sidecar evidence. It does not run validation or promote candidates.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not plan.get("candidates"):
+        lines.append("- none")
+    for candidate in plan.get("candidates", []) or []:
+        lines.extend(
+            [
+                f"### {candidate.get('belief_id')}",
+                "",
+                f"- Product role: {candidate.get('product_role')}",
+                f"- Handling classification: {candidate.get('handling_classification')}",
+                f"- Quality status: {candidate.get('quality_status')}",
+                f"- Remediation status: {candidate.get('remediation_status')}",
+                f"- Hard findings: {_csv_list(candidate.get('hard_findings', []) or []) or 'none'}",
+                f"- Advisory findings: {_csv_list(candidate.get('advisory_findings', []) or []) or 'none'}",
+                f"- Validation authority: {candidate.get('validation_authority') or 'none'}",
+                f"- Visual-label next batch: {candidate.get('visual_label_next_batch_id') or 'none'}",
+                (
+                    "- Visual-label completion: "
+                    f"{candidate.get('visual_label_completion_audit_status') or 'unknown'} "
+                    f"missing_rows={candidate.get('visual_label_completion_missing_rows') if candidate.get('visual_label_completion_missing_rows') != '' else 'n/a'}"
+                ),
+                (
+                    "- Strict/diversity: "
+                    f"{candidate.get('strict_survivor') if candidate.get('strict_survivor') != '' else 'n/a'} / "
+                    f"{candidate.get('event_diversity') if candidate.get('event_diversity') != '' else 'n/a'}"
+                ),
+                f"- Next required action: {candidate.get('next_required_action') or 'none'}",
+                f"- Next allowed action: {candidate.get('next_allowed_action') or 'none'}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+                "Remediation items:",
+            ]
+        )
+        for item in candidate.get("remediation_items", []) or []:
+            invalid_actions = _csv_list(item.get("invalid_actions", []) or []) or "none"
+            lines.extend(
+                [
+                    f"- {item.get('finding')}: action={item.get('required_action')} "
+                    f"owner={item.get('owner')} gate={item.get('clearance_gate')} "
+                    f"autonomous_clear_now={item.get('autonomous_can_clear_now')}",
+                    f"  - Type: {item.get('remediation_type')}",
+                    f"  - Post-gate use: {item.get('post_gate_use')}",
+                    f"  - Invalid actions: {invalid_actions}",
+                ]
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(plan.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "Promotion authority: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_sidecar_shadow_guardrail_audit(brief: dict[str, Any]) -> dict[str, Any]:
+    violations: list[dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
+    manual_gate_active = brief.get("manual_data_gate_active") is True
+    official_frozen_plan_exists = brief.get("official_frozen_candidate_validation_plan_exists") is True
+    for candidate in brief.get("candidates", []) or []:
+        belief_id = str(candidate.get("belief_id", ""))
+        validation = candidate.get("validation", {}) or {}
+        frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+        candidate_violations: list[str] = []
+        blocking_gates: list[str] = []
+        if candidate.get("promotion_ceiling") != "shadow_candidate":
+            candidate_violations.append("promotion_ceiling_not_shadow_candidate")
+        if candidate.get("product_language_allowed") is not False:
+            candidate_violations.append("product_language_allowed")
+        if str(candidate.get("production_effect", "")) != "none":
+            candidate_violations.append("production_effect_not_none")
+        if manual_gate_active and validation.get("validation_completed") is True:
+            candidate_violations.append("validation_completed_while_manual_data_gate_active")
+        if manual_gate_active:
+            blocking_gates.append("manual_data_gate")
+        if not official_frozen_plan_exists:
+            blocking_gates.append("missing_official_frozen_candidate_validation_plan")
+        if frozen_spec.get("status") == "spec_only_not_validated":
+            blocking_gates.append("review_only_frozen_spec_not_validated")
+        operator_decision = _sidecar_operator_evidence_decision(candidate)
+        if validation.get("validation_completed") is not True:
+            blocking_gates.append("fresh_or_control_validation_not_run")
+        for violation in candidate_violations:
+            violations.append(
+                {
+                    "belief_id": belief_id,
+                    "violation": violation,
+                    "production_effect": candidate.get("production_effect"),
+                    "product_language_allowed": candidate.get("product_language_allowed"),
+                }
+            )
+        checks.append(
+            {
+                "belief_id": belief_id,
+                "product_role": candidate.get("product_role", ""),
+                "operator_evidence_decision": operator_decision,
+                "promotion_ceiling": candidate.get("promotion_ceiling", ""),
+                "product_language_allowed": candidate.get("product_language_allowed", ""),
+                "production_effect": candidate.get("production_effect", ""),
+                "validation_completed": validation.get("validation_completed", ""),
+                "validation_result": validation.get("validation_result", ""),
+                "blocking_gates": blocking_gates,
+                "violations": candidate_violations,
+                "guardrail_status": "fail" if candidate_violations else "pass_shadow_only",
+            }
+        )
+    return {
+        "model": "riskflow_ceo_sidecar_shadow_guardrail_audit_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "fail_shadow_guardrails" if violations else "pass_shadow_only_guardrails",
+        "candidate_count": len(brief.get("candidates", []) or []),
+        "violation_count": len(violations),
+        "manual_data_gate_active": manual_gate_active,
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "official_frozen_candidate_validation_plan_exists": official_frozen_plan_exists,
+        "checks": checks,
+        "violations": violations,
+        "guardrail": (
+            "This audit only verifies shadow-sidecar guardrails. Passing it does not validate, "
+            "promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_shadow_guardrail_audit(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Shadow Guardrail Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Run: {audit.get('run_id')}",
+        f"Lab run: {audit.get('lab_run_id')}",
+        f"Status: {audit.get('status')}",
+        f"Candidates: {audit.get('candidate_count')}",
+        f"Violations: {audit.get('violation_count')}",
+        f"Manual data gate active: {audit.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {audit.get('safe_to_run_fresh_validation')}",
+        f"Official frozen plan exists: {audit.get('official_frozen_candidate_validation_plan_exists')}",
+        "",
+        "## Candidate Checks",
+        "",
+    ]
+    if not audit.get("checks"):
+        lines.append("- none")
+    for check in audit.get("checks", []) or []:
+        lines.extend(
+            [
+                f"### {check.get('belief_id')}",
+                "",
+                f"- Guardrail status: {check.get('guardrail_status')}",
+                f"- Product role: {check.get('product_role')}",
+                f"- Operator evidence decision: {check.get('operator_evidence_decision')}",
+                f"- Promotion ceiling: {check.get('promotion_ceiling')}",
+                f"- Product language allowed: {check.get('product_language_allowed')}",
+                f"- Production effect: {check.get('production_effect')}",
+                f"- Validation completed/result: {check.get('validation_completed')} / {check.get('validation_result')}",
+                f"- Blocking gates: {_csv_list(check.get('blocking_gates', []) or []) or 'none'}",
+                f"- Violations: {_csv_list(check.get('violations', []) or []) or 'none'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(audit.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_EVIDENCE_SOURCE_MANIFEST_FIELDS = [
+    "belief_id",
+    "product_role",
+    "champion",
+    "challenger",
+    "evidence_status",
+    "metric_source_count",
+    "metric_source_dirs",
+    "ranked_csvs",
+    "variant_record_csvs",
+    "strict_referee_csvs",
+    "visual_review_gallery",
+    "visual_review_labels_with_images",
+    "visual_evidence_source_dirs",
+    "visual_ranked_csvs",
+    "visual_variant_record_csvs",
+    "visual_strict_referee_csvs",
+    "frozen_spec_source_result_path",
+    "validation_route",
+    "validation_result",
+    "evidence_debt_ids",
+    "evidence_debt_kinds",
+    "evidence_debt_owner_commands",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _source_ref_list(source_refs: list[dict[str, Any]], key: str) -> str:
+    return _csv_list([source.get(key, "") for source in source_refs if isinstance(source, dict)])
+
+
+def _sidecar_evidence_source_manifest_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    visual = candidate.get("visual_review", {}) or {}
+    validation = candidate.get("validation", {}) or {}
+    frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+    source_refs = candidate.get("source_refs", {}) or {}
+    metric_sources = list(source_refs.get("metric_sources", []) or [])
+    visual_sources = list(source_refs.get("visual_evidence_sources", []) or [])
+    debts = list(candidate.get("evidence_debts", []) or [])
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "evidence_status": candidate.get("evidence_status", ""),
+        "metric_source_count": candidate.get("metric_source_count", ""),
+        "metric_source_dirs": _source_ref_list(metric_sources, "loop_dir"),
+        "ranked_csvs": _source_ref_list(metric_sources, "ranked"),
+        "variant_record_csvs": _source_ref_list(metric_sources, "variant_records"),
+        "strict_referee_csvs": _source_ref_list(metric_sources, "strict_referee"),
+        "visual_review_gallery": visual.get("gallery", ""),
+        "visual_review_labels_with_images": visual.get("labels_with_images", ""),
+        "visual_evidence_source_dirs": _source_ref_list(visual_sources, "loop_dir"),
+        "visual_ranked_csvs": _source_ref_list(visual_sources, "ranked"),
+        "visual_variant_record_csvs": _source_ref_list(visual_sources, "variant_records"),
+        "visual_strict_referee_csvs": _source_ref_list(visual_sources, "strict_referee"),
+        "frozen_spec_source_result_path": frozen_spec.get("source_result_path", ""),
+        "validation_route": validation.get("route", ""),
+        "validation_result": validation.get("validation_result", ""),
+        "evidence_debt_ids": _csv_list([debt.get("debt_id", "") for debt in debts]),
+        "evidence_debt_kinds": _csv_list([debt.get("debt_kind", "") for debt in debts]),
+        "evidence_debt_owner_commands": _csv_list([debt.get("owner_command", "") for debt in debts]),
+        "product_language_allowed": candidate.get("product_language_allowed", ""),
+        "production_effect": candidate.get("production_effect", ""),
+    }
+
+
+def write_sidecar_evidence_source_manifest(path: Path, candidates: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_candidates = sorted(candidates, key=_sidecar_visual_priority, reverse=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_EVIDENCE_SOURCE_MANIFEST_FIELDS)
+        writer.writeheader()
+        for candidate in sorted_candidates:
+            row = _sidecar_evidence_source_manifest_row(candidate)
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_EVIDENCE_SOURCE_MANIFEST_FIELDS
+                }
+            )
+
+
+SIDECAR_EVIDENCE_SOURCE_HEALTH_FIELDS = [
+    "belief_id",
+    "source_group",
+    "source_kind",
+    "source_ref",
+    "resolved_path",
+    "expected_type",
+    "required",
+    "exists",
+    "type_matches",
+    "status",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _resolve_sidecar_source_ref(
+    source_ref: Any,
+    *,
+    source_root: Path,
+    run_root: Path,
+) -> Path:
+    ref_text = str(source_ref or "").strip()
+    raw_path = Path(ref_text)
+    if not ref_text or raw_path.is_absolute():
+        return raw_path
+    candidates = [source_root / raw_path, run_root / raw_path, raw_path]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return source_root / raw_path
+
+
+def _sidecar_source_expected_type_matches(path: Path, expected_type: str) -> bool:
+    if not path.exists():
+        return False
+    if expected_type == "directory":
+        return path.is_dir()
+    if expected_type == "file":
+        return path.is_file()
+    return True
+
+
+def _sidecar_source_health_status(
+    *,
+    source_ref: Any,
+    required: bool,
+    exists: bool,
+    type_matches: bool,
+) -> str:
+    if not str(source_ref or "").strip():
+        return "missing_required_ref" if required else "missing_optional_ref"
+    if not exists:
+        return "missing_required_path" if required else "missing_optional_path"
+    if not type_matches:
+        return "wrong_type_required_path" if required else "wrong_type_optional_path"
+    return "present"
+
+
+def _add_sidecar_source_health_row(
+    rows: list[dict[str, Any]],
+    *,
+    candidate: dict[str, Any],
+    source_group: str,
+    source_kind: str,
+    source_ref: Any,
+    expected_type: str,
+    required: bool,
+    source_root: Path,
+    run_root: Path,
+) -> None:
+    resolved_path = _resolve_sidecar_source_ref(source_ref, source_root=source_root, run_root=run_root)
+    exists = bool(str(source_ref or "").strip()) and resolved_path.exists()
+    type_matches = _sidecar_source_expected_type_matches(resolved_path, expected_type)
+    rows.append(
+        {
+            "belief_id": candidate.get("belief_id", ""),
+            "source_group": source_group,
+            "source_kind": source_kind,
+            "source_ref": str(source_ref or ""),
+            "resolved_path": str(resolved_path) if str(source_ref or "").strip() else "",
+            "expected_type": expected_type,
+            "required": required,
+            "exists": exists,
+            "type_matches": type_matches,
+            "status": _sidecar_source_health_status(
+                source_ref=source_ref,
+                required=required,
+                exists=exists,
+                type_matches=type_matches,
+            ),
+            "product_language_allowed": False,
+            "production_effect": "none",
+        }
+    )
+
+
+def _add_sidecar_metric_source_health_rows(
+    rows: list[dict[str, Any]],
+    *,
+    candidate: dict[str, Any],
+    source_group: str,
+    source_refs: list[dict[str, Any]],
+    source_root: Path,
+    run_root: Path,
+) -> None:
+    sources = source_refs or [{}]
+    for source in sources:
+        source = source if isinstance(source, dict) else {}
+        for key, source_kind, expected_type in [
+            ("loop_dir", f"{source_group}_dir", "directory"),
+            ("ranked", f"{source_group}_ranked_csv", "file"),
+            ("variant_records", f"{source_group}_variant_records_csv", "file"),
+            ("strict_referee", f"{source_group}_strict_referee_csv", "file"),
+        ]:
+            _add_sidecar_source_health_row(
+                rows,
+                candidate=candidate,
+                source_group=source_group,
+                source_kind=source_kind,
+                source_ref=source.get(key, ""),
+                expected_type=expected_type,
+                required=True,
+                source_root=source_root,
+                run_root=run_root,
+            )
+
+
+def _sidecar_source_health_candidate_summary(
+    *,
+    candidate: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    belief_id = str(candidate.get("belief_id", ""))
+    candidate_rows = [row for row in rows if str(row.get("belief_id", "")) == belief_id]
+    required_rows = [row for row in candidate_rows if row.get("required") is True]
+    missing_required_rows = [
+        row for row in required_rows if str(row.get("status", "")).startswith("missing_required")
+    ]
+    wrong_type_required_rows = [
+        row for row in required_rows if str(row.get("status", "")).startswith("wrong_type_required")
+    ]
+    debts = list(candidate.get("evidence_debts", []) or [])
+    owner_commands = [
+        debt.get("owner_command", "")
+        for debt in debts
+        if isinstance(debt, dict) and str(debt.get("owner_command", "")).strip()
+    ]
+    missing_owner_command_count = max(0, len(debts) - len(owner_commands))
+    issue_count = len(missing_required_rows) + len(wrong_type_required_rows) + missing_owner_command_count
+    return {
+        "belief_id": belief_id,
+        "status": "pass_source_refs_present" if issue_count == 0 else "fail_source_refs_missing",
+        "source_ref_count": len(candidate_rows),
+        "required_source_ref_count": len(required_rows),
+        "present_required_source_ref_count": len(
+            [row for row in required_rows if row.get("status") == "present"]
+        ),
+        "missing_required_source_ref_count": len(missing_required_rows),
+        "wrong_type_required_source_ref_count": len(wrong_type_required_rows),
+        "evidence_debt_count": len(debts),
+        "evidence_debt_owner_command_count": len(owner_commands),
+        "missing_evidence_debt_owner_command_count": missing_owner_command_count,
+        "missing_required_source_kinds": _csv_list(
+            [
+                f"{row.get('source_group')}:{row.get('source_kind')}"
+                for row in missing_required_rows + wrong_type_required_rows
+            ]
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_evidence_source_health(
+    *,
+    brief: dict[str, Any],
+    source_root: Path,
+    run_root: Path,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    sorted_candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    for candidate in sorted_candidates:
+        source_refs = candidate.get("source_refs", {}) or {}
+        visual = candidate.get("visual_review", {}) or {}
+        frozen_spec = candidate.get("review_only_frozen_spec", {}) or {}
+        _add_sidecar_metric_source_health_rows(
+            rows,
+            candidate=candidate,
+            source_group="metric_source",
+            source_refs=list(source_refs.get("metric_sources", []) or []),
+            source_root=source_root,
+            run_root=run_root,
+        )
+        _add_sidecar_source_health_row(
+            rows,
+            candidate=candidate,
+            source_group="visual_review",
+            source_kind="visual_review_gallery",
+            source_ref=visual.get("gallery", ""),
+            expected_type="file",
+            required=visual.get("status") == "ready_for_visual_review",
+            source_root=source_root,
+            run_root=run_root,
+        )
+        _add_sidecar_source_health_row(
+            rows,
+            candidate=candidate,
+            source_group="visual_review",
+            source_kind="visual_review_labels_with_images",
+            source_ref=visual.get("labels_with_images", ""),
+            expected_type="file",
+            required=visual.get("status") == "ready_for_visual_review",
+            source_root=source_root,
+            run_root=run_root,
+        )
+        _add_sidecar_metric_source_health_rows(
+            rows,
+            candidate=candidate,
+            source_group="visual_evidence_source",
+            source_refs=list(source_refs.get("visual_evidence_sources", []) or []),
+            source_root=source_root,
+            run_root=run_root,
+        )
+        frozen_spec_ref_required = frozen_spec.get("status") not in {"", "missing_review_only_frozen_spec", None}
+        _add_sidecar_source_health_row(
+            rows,
+            candidate=candidate,
+            source_group="frozen_spec",
+            source_kind="review_only_frozen_spec_result",
+            source_ref=frozen_spec.get("source_result_path", ""),
+            expected_type="file",
+            required=frozen_spec_ref_required,
+            source_root=source_root,
+            run_root=run_root,
+        )
+
+    candidate_summaries = [
+        _sidecar_source_health_candidate_summary(candidate=candidate, rows=rows)
+        for candidate in sorted_candidates
+    ]
+    missing_required_count = sum(
+        int(summary.get("missing_required_source_ref_count", 0) or 0)
+        for summary in candidate_summaries
+    )
+    wrong_type_required_count = sum(
+        int(summary.get("wrong_type_required_source_ref_count", 0) or 0)
+        for summary in candidate_summaries
+    )
+    missing_owner_command_count = sum(
+        int(summary.get("missing_evidence_debt_owner_command_count", 0) or 0)
+        for summary in candidate_summaries
+    )
+    issue_count = missing_required_count + wrong_type_required_count + missing_owner_command_count
+    return {
+        "model": "riskflow_ceo_sidecar_evidence_source_health_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "pass_source_refs_present" if issue_count == 0 else "fail_source_refs_missing",
+        "candidate_count": len(sorted_candidates),
+        "source_ref_count": len(rows),
+        "required_source_ref_count": len([row for row in rows if row.get("required") is True]),
+        "present_required_source_ref_count": len(
+            [row for row in rows if row.get("required") is True and row.get("status") == "present"]
+        ),
+        "missing_required_source_ref_count": missing_required_count,
+        "wrong_type_required_source_ref_count": wrong_type_required_count,
+        "missing_evidence_debt_owner_command_count": missing_owner_command_count,
+        "issue_count": issue_count,
+        "candidate_summaries": candidate_summaries,
+        "rows": rows,
+        "guardrail": (
+            "This audit checks whether source refs cited by the sidecar packet resolve to "
+            "local files or directories with the expected shape. It does not validate, "
+            "promote, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_evidence_source_health(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_EVIDENCE_SOURCE_HEALTH_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_EVIDENCE_SOURCE_HEALTH_FIELDS
+                }
+            )
+
+
+def render_sidecar_evidence_source_health(health: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Evidence Source Health",
+        "",
+        f"Generated: {health.get('generated_at')}",
+        f"Run: {health.get('run_id')}",
+        f"Lab run: {health.get('lab_run_id')}",
+        f"Status: {health.get('status')}",
+        f"Candidates: {health.get('candidate_count')}",
+        f"Source refs: {health.get('source_ref_count')}",
+        f"Required refs: {health.get('required_source_ref_count')}",
+        f"Present required refs: {health.get('present_required_source_ref_count')}",
+        f"Missing required refs: {health.get('missing_required_source_ref_count')}",
+        f"Wrong-type required refs: {health.get('wrong_type_required_source_ref_count')}",
+        f"Missing evidence-debt owner commands: {health.get('missing_evidence_debt_owner_command_count')}",
+        f"Issues: {health.get('issue_count')}",
+        "",
+        "## Candidate Summaries",
+        "",
+    ]
+    summaries = health.get("candidate_summaries", []) or []
+    if not summaries:
+        lines.append("- none")
+    for summary in summaries:
+        lines.extend(
+            [
+                f"### {summary.get('belief_id')}",
+                "",
+                f"- Status: {summary.get('status')}",
+                f"- Source refs: {summary.get('source_ref_count')}",
+                f"- Required source refs: {summary.get('required_source_ref_count')}",
+                f"- Present required source refs: {summary.get('present_required_source_ref_count')}",
+                f"- Missing required source refs: {summary.get('missing_required_source_ref_count')}",
+                f"- Wrong-type required source refs: {summary.get('wrong_type_required_source_ref_count')}",
+                f"- Evidence debt owner commands: {summary.get('evidence_debt_owner_command_count')}",
+                f"- Missing evidence debt owner commands: {summary.get('missing_evidence_debt_owner_command_count')}",
+                f"- Missing required source kinds: {summary.get('missing_required_source_kinds') or 'none'}",
+                f"- Product language allowed: {summary.get('product_language_allowed')}",
+                f"- Production effect: {summary.get('production_effect')}",
+                "",
+            ]
+        )
+    issue_rows = [
+        row
+        for row in health.get("rows", []) or []
+        if str(row.get("status", "")) != "present"
+    ]
+    lines.extend(["## Source Ref Issues", ""])
+    if not issue_rows:
+        lines.append("- none")
+    for row in issue_rows:
+        lines.append(
+            "- "
+            f"{row.get('belief_id')} {row.get('source_group')}:{row.get('source_kind')} "
+            f"status={row.get('status')} ref={row.get('source_ref') or 'none'} "
+            f"resolved={row.get('resolved_path') or 'none'}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(health.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_EVIDENCE_SOURCE_FINGERPRINT_FIELDS = [
+    "belief_id",
+    "source_group",
+    "source_kind",
+    "source_ref",
+    "resolved_path",
+    "expected_type",
+    "source_status",
+    "fingerprint_status",
+    "sha256",
+    "size_bytes",
+    "csv_row_count",
+    "directory_file_count",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _directory_file_count(path: Path) -> int | str:
+    if not path.exists() or not path.is_dir():
+        return ""
+    try:
+        return sum(1 for child in path.iterdir() if child.is_file())
+    except OSError:
+        return ""
+
+
+def _sidecar_source_fingerprint_row(health_row: dict[str, Any]) -> dict[str, Any]:
+    resolved_path = Path(str(health_row.get("resolved_path", "") or ""))
+    source_status = str(health_row.get("status", ""))
+    expected_type = str(health_row.get("expected_type", ""))
+    exists = bool(health_row.get("exists"))
+    type_matches = bool(health_row.get("type_matches"))
+    sha256 = _file_sha256(resolved_path) if expected_type == "file" and exists and type_matches else ""
+    size_bytes: int | str = ""
+    if expected_type == "file" and exists and type_matches:
+        try:
+            size_bytes = resolved_path.stat().st_size
+        except OSError:
+            size_bytes = ""
+    csv_row_count = _csv_data_row_count(resolved_path) if expected_type == "file" and exists and type_matches else ""
+    directory_file_count = _directory_file_count(resolved_path) if expected_type == "directory" and exists and type_matches else ""
+    if source_status != "present":
+        fingerprint_status = "source_ref_not_present"
+    elif expected_type == "file" and sha256:
+        fingerprint_status = "file_fingerprinted"
+    elif expected_type == "directory" and directory_file_count != "":
+        fingerprint_status = "directory_profiled"
+    else:
+        fingerprint_status = "fingerprint_unavailable"
+    return {
+        "belief_id": health_row.get("belief_id", ""),
+        "source_group": health_row.get("source_group", ""),
+        "source_kind": health_row.get("source_kind", ""),
+        "source_ref": health_row.get("source_ref", ""),
+        "resolved_path": health_row.get("resolved_path", ""),
+        "expected_type": expected_type,
+        "source_status": source_status,
+        "fingerprint_status": fingerprint_status,
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        "csv_row_count": csv_row_count,
+        "directory_file_count": directory_file_count,
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _sidecar_source_fingerprint_candidate_summary(
+    *,
+    belief_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    candidate_rows = [row for row in rows if str(row.get("belief_id", "")) == belief_id]
+    file_rows = [row for row in candidate_rows if row.get("expected_type") == "file"]
+    directory_rows = [row for row in candidate_rows if row.get("expected_type") == "directory"]
+    fingerprinted_file_rows = [row for row in file_rows if row.get("fingerprint_status") == "file_fingerprinted"]
+    profiled_directory_rows = [
+        row for row in directory_rows if row.get("fingerprint_status") == "directory_profiled"
+    ]
+    csv_rows = [
+        row
+        for row in file_rows
+        if str(row.get("resolved_path", "")).lower().endswith(".csv")
+    ]
+    csv_rows_with_counts = [row for row in csv_rows if row.get("csv_row_count") != ""]
+    unavailable_rows = [
+        row
+        for row in candidate_rows
+        if row.get("fingerprint_status") in {"source_ref_not_present", "fingerprint_unavailable"}
+    ]
+    return {
+        "belief_id": belief_id,
+        "status": "pass_source_fingerprints_recorded" if not unavailable_rows else "fail_source_fingerprints_missing",
+        "source_ref_count": len(candidate_rows),
+        "file_ref_count": len(file_rows),
+        "fingerprinted_file_count": len(fingerprinted_file_rows),
+        "directory_ref_count": len(directory_rows),
+        "profiled_directory_count": len(profiled_directory_rows),
+        "csv_ref_count": len(csv_rows),
+        "csv_row_count_recorded_count": len(csv_rows_with_counts),
+        "unavailable_fingerprint_count": len(unavailable_rows),
+        "unavailable_source_kinds": _csv_list(
+            [f"{row.get('source_group')}:{row.get('source_kind')}" for row in unavailable_rows]
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_evidence_source_fingerprints(
+    *,
+    source_health: dict[str, Any],
+) -> dict[str, Any]:
+    rows = [
+        _sidecar_source_fingerprint_row(row)
+        for row in source_health.get("rows", []) or []
+    ]
+    candidate_ids = _sidecar_ids(source_health.get("candidate_summaries", []) or [])
+    candidate_summaries = [
+        _sidecar_source_fingerprint_candidate_summary(belief_id=belief_id, rows=rows)
+        for belief_id in candidate_ids
+    ]
+    file_rows = [row for row in rows if row.get("expected_type") == "file"]
+    directory_rows = [row for row in rows if row.get("expected_type") == "directory"]
+    fingerprinted_file_rows = [row for row in file_rows if row.get("fingerprint_status") == "file_fingerprinted"]
+    profiled_directory_rows = [
+        row for row in directory_rows if row.get("fingerprint_status") == "directory_profiled"
+    ]
+    csv_rows = [
+        row
+        for row in file_rows
+        if str(row.get("resolved_path", "")).lower().endswith(".csv")
+    ]
+    csv_rows_with_counts = [row for row in csv_rows if row.get("csv_row_count") != ""]
+    unavailable_rows = [
+        row
+        for row in rows
+        if row.get("fingerprint_status") in {"source_ref_not_present", "fingerprint_unavailable"}
+    ]
+    return {
+        "model": "riskflow_ceo_sidecar_evidence_source_fingerprints_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": source_health.get("run_id", ""),
+        "lab_run_id": source_health.get("lab_run_id", ""),
+        "status": "pass_source_fingerprints_recorded" if not unavailable_rows else "fail_source_fingerprints_missing",
+        "candidate_count": len(candidate_ids),
+        "source_ref_count": len(rows),
+        "file_ref_count": len(file_rows),
+        "fingerprinted_file_count": len(fingerprinted_file_rows),
+        "directory_ref_count": len(directory_rows),
+        "profiled_directory_count": len(profiled_directory_rows),
+        "csv_ref_count": len(csv_rows),
+        "csv_row_count_recorded_count": len(csv_rows_with_counts),
+        "unavailable_fingerprint_count": len(unavailable_rows),
+        "issue_count": len(unavailable_rows),
+        "candidate_summaries": candidate_summaries,
+        "rows": rows,
+        "guardrail": (
+            "This audit records local evidence-source fingerprints and lightweight file profiles. "
+            "It detects source drift for sidecar handoff only; it does not validate, promote, "
+            "or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_evidence_source_fingerprints(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_EVIDENCE_SOURCE_FINGERPRINT_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_EVIDENCE_SOURCE_FINGERPRINT_FIELDS
+                }
+            )
+
+
+def render_sidecar_evidence_source_fingerprints(fingerprints: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Evidence Source Fingerprints",
+        "",
+        f"Generated: {fingerprints.get('generated_at')}",
+        f"Run: {fingerprints.get('run_id')}",
+        f"Lab run: {fingerprints.get('lab_run_id')}",
+        f"Status: {fingerprints.get('status')}",
+        f"Candidates: {fingerprints.get('candidate_count')}",
+        f"Source refs: {fingerprints.get('source_ref_count')}",
+        f"File refs: {fingerprints.get('file_ref_count')}",
+        f"Fingerprinted files: {fingerprints.get('fingerprinted_file_count')}",
+        f"Directory refs: {fingerprints.get('directory_ref_count')}",
+        f"Profiled directories: {fingerprints.get('profiled_directory_count')}",
+        f"CSV refs: {fingerprints.get('csv_ref_count')}",
+        f"CSV row counts recorded: {fingerprints.get('csv_row_count_recorded_count')}",
+        f"Unavailable fingerprints: {fingerprints.get('unavailable_fingerprint_count')}",
+        f"Issues: {fingerprints.get('issue_count')}",
+        "",
+        "## Candidate Summaries",
+        "",
+    ]
+    summaries = fingerprints.get("candidate_summaries", []) or []
+    if not summaries:
+        lines.append("- none")
+    for summary in summaries:
+        lines.extend(
+            [
+                f"### {summary.get('belief_id')}",
+                "",
+                f"- Status: {summary.get('status')}",
+                f"- Source refs: {summary.get('source_ref_count')}",
+                f"- File refs: {summary.get('file_ref_count')}",
+                f"- Fingerprinted files: {summary.get('fingerprinted_file_count')}",
+                f"- Directory refs: {summary.get('directory_ref_count')}",
+                f"- Profiled directories: {summary.get('profiled_directory_count')}",
+                f"- CSV refs: {summary.get('csv_ref_count')}",
+                f"- CSV row counts recorded: {summary.get('csv_row_count_recorded_count')}",
+                f"- Unavailable fingerprints: {summary.get('unavailable_fingerprint_count')}",
+                f"- Unavailable source kinds: {summary.get('unavailable_source_kinds') or 'none'}",
+                f"- Product language allowed: {summary.get('product_language_allowed')}",
+                f"- Production effect: {summary.get('production_effect')}",
+                "",
+            ]
+        )
+    issue_rows = [
+        row
+        for row in fingerprints.get("rows", []) or []
+        if row.get("fingerprint_status") in {"source_ref_not_present", "fingerprint_unavailable"}
+    ]
+    lines.extend(["## Fingerprint Issues", ""])
+    if not issue_rows:
+        lines.append("- none")
+    for row in issue_rows:
+        lines.append(
+            "- "
+            f"{row.get('belief_id')} {row.get('source_group')}:{row.get('source_kind')} "
+            f"status={row.get('fingerprint_status')} ref={row.get('source_ref') or 'none'} "
+            f"resolved={row.get('resolved_path') or 'none'}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(fingerprints.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_CANDIDATE_LEARNING_LEDGER_FIELDS = [
+    "belief_id",
+    "handling_classification",
+    "handling_reason",
+    "product_role",
+    "champion",
+    "challenger",
+    "evidence_status",
+    "operator_evidence_decision",
+    "readiness_tier",
+    "primary_blocker",
+    "quality_status",
+    "quality_hard_findings",
+    "quality_advisory_findings",
+    "source_health_status",
+    "source_fingerprint_status",
+    "data_gate_unlock_status",
+    "validation_authority",
+    "validation_queue_status",
+    "validation_design_status",
+    "next_allowed_action",
+    "next_required_action",
+    "promotion_ceiling",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def _sidecar_summary_by_belief_id(payload: dict[str, Any], key: str = "candidate_summaries") -> dict[str, dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    for item in payload.get(key, []) or []:
+        if not isinstance(item, dict):
+            continue
+        belief_id = str(item.get("belief_id", ""))
+        if belief_id:
+            summaries[belief_id] = item
+    return summaries
+
+
+def _sidecar_candidate_learning_classification(
+    *,
+    candidate: dict[str, Any],
+    readiness: dict[str, Any],
+    quality_check: dict[str, Any],
+) -> tuple[str, str]:
+    advisory_findings = {str(item) for item in quality_check.get("advisory_findings", []) or []}
+    visual_only_advisory_findings = {
+        "human_visual_review_not_started",
+        "visual_label_batch_missing_required_labels",
+        "visual_label_batch_invalid_values",
+    }
+    non_visual_advisory_findings = advisory_findings - visual_only_advisory_findings
+    hard_findings = {str(item) for item in quality_check.get("hard_findings", []) or []}
+    operator_decision = str(readiness.get("operator_evidence_decision") or _sidecar_operator_evidence_decision(candidate))
+    readiness_tier = str(readiness.get("readiness_tier", ""))
+    primary_blocker = str(readiness.get("primary_blocker", ""))
+    if hard_findings:
+        return "quality_blocked_review_only", "hard champion/challenger quality finding blocks learning promotion"
+    if operator_decision == "failure_mode_review_only" or "strict_survivor_false" in advisory_findings:
+        return "archive_failure_mode", "failure-mode evidence; preserve as do-not-repeat learning"
+    if (
+        operator_decision == "cluster_concentrated_review_only"
+        or primary_blocker == "cluster_concentration"
+        or "event_diversity_below_review_threshold" in advisory_findings
+        or readiness_tier == "review_only_cluster_concentrated"
+    ):
+        return "diversity_control_only", "useful as a diversity/fragility control, not as a promotion lead"
+    if (
+        quality_check.get("status") in {"pass_champion_challenger_quality", "pass_with_advisory_quality_findings"}
+        and not non_visual_advisory_findings
+        and candidate.get("evidence_status") == "shadow_review_ready_fresh_data_blocked"
+    ):
+        return "lead_post_data_candidate", "clean same-sample candidate waiting on fresh/control data and human visual labels"
+    return "review_only_candidate", "shadow candidate needs more governed evidence before classification changes"
+
+
+def _sidecar_candidate_learning_next_allowed_action(
+    *,
+    handling_classification: str,
+    data_gate_row: dict[str, Any],
+    candidate: dict[str, Any],
+) -> str:
+    if handling_classification == "archive_failure_mode":
+        return "preserve archive; require a new approved hypothesis before any promotion review"
+    if handling_classification == "quality_blocked_review_only":
+        return "repair champion/challenger quality issues before any further review"
+    if handling_classification == "diversity_control_only":
+        return "after data unlock, run only diversity/fragility control validation"
+    next_after_unlock = str(data_gate_row.get("next_allowed_action_after_unlock", ""))
+    if next_after_unlock:
+        return next_after_unlock
+    return _sidecar_candidate_required_next_action(candidate)
+
+
+def _sidecar_candidate_learning_supporting_artifacts(paths: dict[str, Path]) -> dict[str, str]:
+    keys = [
+        "sidecar_evidence_brief",
+        "sidecar_evidence_candidates",
+        "sidecar_champion_challenger_evidence",
+        "sidecar_champion_challenger_quality_audit",
+        "sidecar_visual_label_worklist",
+        "sidecar_visual_label_worklist_report",
+        "sidecar_visual_label_review_batches",
+        "sidecar_visual_label_review_batches_report",
+        "sidecar_visual_label_progress",
+        "sidecar_visual_label_progress_report",
+        "sidecar_visual_label_next_batch",
+        "sidecar_visual_label_next_batch_report",
+        "sidecar_visual_label_next_batch_gallery",
+        "sidecar_visual_label_rubric",
+        "sidecar_visual_label_rubric_report",
+        "sidecar_visual_label_source_update_manifest",
+        "sidecar_visual_label_source_update_manifest_report",
+        "sidecar_visual_label_source_patch_plan",
+        "sidecar_visual_label_source_patch_plan_yaml",
+        "sidecar_visual_label_source_patch_plan_report",
+        "sidecar_visual_label_completion_audit",
+        "sidecar_visual_label_completion_audit_yaml",
+        "sidecar_visual_label_completion_audit_report",
+        "sidecar_evidence_gap_matrix",
+        "sidecar_candidate_readiness_summary",
+        "sidecar_validation_queue",
+        "sidecar_champion_challenger_validation_design",
+        "sidecar_data_gate_unlock_matrix",
+        "sidecar_evidence_consistency_audit",
+        "sidecar_candidate_decision_cards",
+        "sidecar_shadow_guardrail_audit",
+        "sidecar_evidence_source_manifest",
+        "sidecar_evidence_source_health_yaml",
+        "sidecar_evidence_source_fingerprints_yaml",
+        "sidecar_frozen_spec_review",
+    ]
+    return {key: str(paths[key]) for key in keys if key in paths}
+
+
+def _sidecar_candidate_learning_row(
+    *,
+    candidate: dict[str, Any],
+    quality_check: dict[str, Any],
+    validation_design_candidate: dict[str, Any],
+    data_gate_row: dict[str, Any],
+    source_health_summary: dict[str, Any],
+    source_fingerprint_summary: dict[str, Any],
+) -> dict[str, Any]:
+    readiness = _sidecar_candidate_readiness_summary_row(candidate)
+    handling_classification, handling_reason = _sidecar_candidate_learning_classification(
+        candidate=candidate,
+        readiness=readiness,
+        quality_check=quality_check,
+    )
+    queue_status = _sidecar_validation_queue_status(candidate)
+    next_allowed_action = _sidecar_candidate_learning_next_allowed_action(
+        handling_classification=handling_classification,
+        data_gate_row=data_gate_row,
+        candidate=candidate,
+    )
+    return {
+        "belief_id": candidate.get("belief_id", ""),
+        "handling_classification": handling_classification,
+        "handling_reason": handling_reason,
+        "product_role": candidate.get("product_role", ""),
+        "champion": candidate.get("champion", ""),
+        "challenger": candidate.get("challenger", ""),
+        "evidence_status": candidate.get("evidence_status", ""),
+        "operator_evidence_decision": readiness.get("operator_evidence_decision", ""),
+        "readiness_tier": readiness.get("readiness_tier", ""),
+        "primary_blocker": readiness.get("primary_blocker", ""),
+        "quality_status": quality_check.get("status", ""),
+        "quality_hard_findings": _csv_list(quality_check.get("hard_findings", []) or []),
+        "quality_advisory_findings": _csv_list(quality_check.get("advisory_findings", []) or []),
+        "source_health_status": source_health_summary.get("status", ""),
+        "source_fingerprint_status": source_fingerprint_summary.get("status", ""),
+        "data_gate_unlock_status": data_gate_row.get("unlock_status", ""),
+        "validation_authority": data_gate_row.get("validation_authority", ""),
+        "validation_queue_status": queue_status,
+        "validation_design_status": validation_design_candidate.get("design_status", ""),
+        "next_allowed_action": next_allowed_action,
+        "next_required_action": readiness.get("next_required_action", ""),
+        "promotion_ceiling": candidate.get("promotion_ceiling", ""),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def build_sidecar_candidate_learning_ledger(
+    *,
+    brief: dict[str, Any],
+    validation_design: dict[str, Any],
+    data_gate_unlock_matrix: dict[str, Any],
+    source_health: dict[str, Any],
+    source_fingerprints: dict[str, Any],
+    quality_audit: dict[str, Any],
+    paths: dict[str, Path],
+) -> dict[str, Any]:
+    quality_checks = _sidecar_summary_by_belief_id(quality_audit, key="checks")
+    validation_design_candidates = _sidecar_summary_by_belief_id(validation_design, key="candidates")
+    data_gate_rows = _sidecar_summary_by_belief_id(data_gate_unlock_matrix, key="rows")
+    source_health_summaries = _sidecar_summary_by_belief_id(source_health)
+    source_fingerprint_summaries = _sidecar_summary_by_belief_id(source_fingerprints)
+    sorted_candidates = sorted(brief.get("candidates", []) or [], key=_sidecar_visual_priority, reverse=True)
+    rows: list[dict[str, Any]] = []
+    candidate_ledgers: list[dict[str, Any]] = []
+    supporting_artifacts = _sidecar_candidate_learning_supporting_artifacts(paths)
+    for candidate in sorted_candidates:
+        belief_id = str(candidate.get("belief_id", ""))
+        quality_check = quality_checks.get(belief_id, {})
+        row = _sidecar_candidate_learning_row(
+            candidate=candidate,
+            quality_check=quality_check,
+            validation_design_candidate=validation_design_candidates.get(belief_id, {}),
+            data_gate_row=data_gate_rows.get(belief_id, {}),
+            source_health_summary=source_health_summaries.get(belief_id, {}),
+            source_fingerprint_summary=source_fingerprint_summaries.get(belief_id, {}),
+        )
+        rows.append(row)
+        source_refs = candidate.get("source_refs", {}) or {}
+        candidate_ledgers.append(
+            {
+                **row,
+                "metric_source_dirs": _source_ref_list(source_refs.get("metric_sources", []) or [], "loop_dir"),
+                "visual_evidence_source_dirs": _source_ref_list(
+                    source_refs.get("visual_evidence_sources", []) or [],
+                    "loop_dir",
+                ),
+                "review_only_frozen_spec_source": (candidate.get("review_only_frozen_spec", {}) or {}).get(
+                    "source_result_path",
+                    "",
+                ),
+                "visual_review_gallery": (candidate.get("visual_review", {}) or {}).get("gallery", ""),
+                "visual_review_labels_with_images": (candidate.get("visual_review", {}) or {}).get(
+                    "labels_with_images",
+                    "",
+                ),
+                "supporting_artifacts": supporting_artifacts,
+            }
+        )
+    hard_issue_count = len([row for row in rows if row.get("handling_classification") == "quality_blocked_review_only"])
+    advisory_count = len(
+        [
+            row
+            for row in rows
+            if row.get("handling_classification")
+            in {"diversity_control_only", "archive_failure_mode", "review_only_candidate"}
+        ]
+    )
+    classification_counts: dict[str, int] = {}
+    for row in rows:
+        classification = str(row.get("handling_classification", ""))
+        classification_counts[classification] = classification_counts.get(classification, 0) + 1
+    return {
+        "model": "riskflow_ceo_sidecar_candidate_learning_ledger_v0",
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": (
+            "candidate_learning_ledger_has_hard_issues"
+            if hard_issue_count
+            else "candidate_learning_ledger_written"
+        ),
+        "candidate_count": len(rows),
+        "lead_post_data_candidate_count": classification_counts.get("lead_post_data_candidate", 0),
+        "diversity_control_only_count": classification_counts.get("diversity_control_only", 0),
+        "archive_failure_mode_count": classification_counts.get("archive_failure_mode", 0),
+        "review_only_candidate_count": classification_counts.get("review_only_candidate", 0),
+        "quality_blocked_review_only_count": classification_counts.get("quality_blocked_review_only", 0),
+        "hard_issue_count": hard_issue_count,
+        "advisory_count": advisory_count,
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "validation_design_status": validation_design.get("status", ""),
+        "data_gate_unlock_status": data_gate_unlock_matrix.get("status", ""),
+        "source_health_status": source_health.get("status", ""),
+        "source_fingerprint_status": source_fingerprints.get("status", ""),
+        "quality_audit_status": quality_audit.get("status", ""),
+        "classification_counts": classification_counts,
+        "rows": rows,
+        "candidates": candidate_ledgers,
+        "guardrail": (
+            "This ledger translates existing shadow sidecar evidence into operator learning. "
+            "It does not validate, promote, authorize product language, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_sidecar_candidate_learning_ledger(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_CANDIDATE_LEARNING_LEDGER_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_CANDIDATE_LEARNING_LEDGER_FIELDS
+                }
+            )
+
+
+def render_sidecar_candidate_learning_ledger(ledger: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Candidate Learning Ledger",
+        "",
+        f"Generated: {ledger.get('generated_at')}",
+        f"Run: {ledger.get('run_id')}",
+        f"Lab run: {ledger.get('lab_run_id')}",
+        f"Status: {ledger.get('status')}",
+        f"Candidates: {ledger.get('candidate_count')}",
+        f"Lead post-data candidates: {ledger.get('lead_post_data_candidate_count')}",
+        f"Diversity controls: {ledger.get('diversity_control_only_count')}",
+        f"Archive failure modes: {ledger.get('archive_failure_mode_count')}",
+        f"Review-only candidates: {ledger.get('review_only_candidate_count')}",
+        f"Quality-blocked review-only: {ledger.get('quality_blocked_review_only_count')}",
+        f"Manual data gate active: {ledger.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {ledger.get('safe_to_run_fresh_validation')}",
+        f"Quality audit status: {ledger.get('quality_audit_status')}",
+        f"Source health status: {ledger.get('source_health_status')}",
+        f"Source fingerprint status: {ledger.get('source_fingerprint_status')}",
+        f"Data-gate unlock status: {ledger.get('data_gate_unlock_status')}",
+        "",
+        "This ledger is an operator handoff over shadow-only sidecar evidence. It classifies what to learn from each candidate; it does not validate or promote them.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if not ledger.get("candidates"):
+        lines.append("- No sidecar candidates.")
+    for candidate in ledger.get("candidates", []) or []:
+        lines.extend(
+            [
+                f"### {candidate.get('belief_id')}",
+                "",
+                f"- Handling classification: {candidate.get('handling_classification')}",
+                f"- Handling reason: {candidate.get('handling_reason')}",
+                f"- Product role: {candidate.get('product_role')}",
+                f"- Champion/challenger: {candidate.get('champion')} -> {candidate.get('challenger')}",
+                f"- Evidence status: {candidate.get('evidence_status')}",
+                f"- Operator evidence decision: {candidate.get('operator_evidence_decision')}",
+                f"- Readiness tier: {candidate.get('readiness_tier')}",
+                f"- Primary blocker: {candidate.get('primary_blocker')}",
+                f"- Quality status: {candidate.get('quality_status')}",
+                f"- Quality hard findings: {candidate.get('quality_hard_findings') or 'none'}",
+                f"- Quality advisory findings: {candidate.get('quality_advisory_findings') or 'none'}",
+                f"- Source health/fingerprints: {candidate.get('source_health_status')} / {candidate.get('source_fingerprint_status')}",
+                f"- Data-gate unlock status: {candidate.get('data_gate_unlock_status')}",
+                f"- Validation authority: {candidate.get('validation_authority')}",
+                f"- Validation queue/design status: {candidate.get('validation_queue_status')} / {candidate.get('validation_design_status')}",
+                f"- Next allowed action: {candidate.get('next_allowed_action')}",
+                f"- Next required action: {candidate.get('next_required_action')}",
+                f"- Metric source dirs: {candidate.get('metric_source_dirs') or 'none'}",
+                f"- Visual evidence source dirs: {candidate.get('visual_evidence_source_dirs') or 'none'}",
+                f"- Frozen-spec source: {candidate.get('review_only_frozen_spec_source') or 'none'}",
+                f"- Visual gallery: {candidate.get('visual_review_gallery') or 'none'}",
+                f"- Visual labels: {candidate.get('visual_review_labels_with_images') or 'none'}",
+                f"- Promotion ceiling: {candidate.get('promotion_ceiling')}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(ledger.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sidecar_post_data_sequence(
+    *,
+    ceo_run_id: str,
+    handling_classification: str,
+) -> list[str]:
+    fresh_preflight = f"PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id {ceo_run_id}"
+    sidecar_refresh = f"PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief --run-id {ceo_run_id}"
+    frozen_plan = f"PYTHONPATH=src python3 -m riskflow ceo frozen-candidate-validation --run-id {ceo_run_id}"
+    frozen_executor = f"PYTHONPATH=src python3 -m riskflow ceo frozen-validation-executor --run-id {ceo_run_id}"
+    frozen_rerun = f"PYTHONPATH=src python3 -m riskflow ceo frozen-validation-rerun --run-id {ceo_run_id}"
+    if handling_classification == "archive_failure_mode":
+        return [
+            "preserve archive; do not run promotion validation for this candidate",
+            "only revisit through a new approved frozen hypothesis shape",
+        ]
+    if handling_classification == "quality_blocked_review_only":
+        return [
+            "repair champion/challenger quality findings before any post-data validation",
+            fresh_preflight,
+            sidecar_refresh,
+        ]
+    if handling_classification == "diversity_control_only":
+        return [
+            fresh_preflight,
+            sidecar_refresh,
+            frozen_plan,
+            frozen_executor,
+            frozen_rerun,
+            "record results as diversity/fragility control only; do not promote from cluster-concentrated evidence",
+        ]
+    return [
+        fresh_preflight,
+        sidecar_refresh,
+        frozen_plan,
+        frozen_executor,
+        frozen_rerun,
+        "consider promotion proposal only after passing frozen/fresh evidence, visual review, guardrails, and user approval",
+    ]
+
+
+def build_sidecar_post_data_validation_playbook(
+    *,
+    brief: dict[str, Any],
+    validation_design: dict[str, Any],
+    data_gate_unlock_matrix: dict[str, Any],
+    candidate_learning_ledger: dict[str, Any],
+    visual_label_completion_audit: dict[str, Any],
+    quality_remediation_plan: dict[str, Any],
+) -> dict[str, Any]:
+    ceo_run_id = str(brief.get("run_id", ""))
+    manual_gate_active = brief.get("manual_data_gate_active") is True
+    safe_fresh_validation = brief.get("safe_to_run_fresh_validation") is True
+    candidate_count = len(candidate_learning_ledger.get("candidates", []) or [])
+    raw_visual_label_completion_status = str(visual_label_completion_audit.get("status", ""))
+    visual_label_completion_status = raw_visual_label_completion_status
+    if candidate_count and raw_visual_label_completion_status in {"", "no_pending_visual_label_completion_audit"}:
+        visual_label_completion_status = "pending_required_visual_labels"
+    visual_label_gate_passed = visual_label_completion_status == "visual_label_batch_complete" or (
+        candidate_count == 0 and visual_label_completion_status == "no_pending_visual_label_completion_audit"
+    )
+    quality_remediation_status = str(quality_remediation_plan.get("status", ""))
+    hard_remediation_count = int(quality_remediation_plan.get("hard_remediation_count", 0) or 0)
+    pre_validation_blockers: list[str] = []
+    if manual_gate_active or not safe_fresh_validation:
+        pre_validation_blockers.append("fresh_data_preflight_not_safe")
+    if not visual_label_gate_passed:
+        pre_validation_blockers.append("visual_label_completion_audit_not_passed")
+    if hard_remediation_count:
+        pre_validation_blockers.append("hard_quality_remediation_open")
+    if manual_gate_active and not visual_label_gate_passed:
+        current_required_action = "import_or_curate_fresh_ohlcv_data_and_complete_required_visual_labels"
+    elif manual_gate_active or not safe_fresh_validation:
+        current_required_action = "import_or_curate_fresh_ohlcv_data"
+    elif not visual_label_gate_passed:
+        current_required_action = "complete_required_visual_labels_in_source_rows"
+    elif hard_remediation_count:
+        current_required_action = "repair_hard_quality_remediation_before_validation"
+    else:
+        current_required_action = "rerun_fresh_data_preflight_then_follow_authorized_sequence"
+    validation_design_candidates = _sidecar_summary_by_belief_id(validation_design, key="candidates")
+    data_gate_rows = _sidecar_summary_by_belief_id(data_gate_unlock_matrix, key="rows")
+    candidates: list[dict[str, Any]] = []
+    for ledger_candidate in candidate_learning_ledger.get("candidates", []) or []:
+        belief_id = str(ledger_candidate.get("belief_id", ""))
+        classification = str(ledger_candidate.get("handling_classification", ""))
+        design_candidate = validation_design_candidates.get(belief_id, {})
+        data_gate_row = data_gate_rows.get(belief_id, {})
+        sequence = _sidecar_post_data_sequence(
+            ceo_run_id=ceo_run_id,
+            handling_classification=classification,
+        )
+        candidate_can_execute = (
+            not pre_validation_blockers
+            and str(ledger_candidate.get("validation_authority", "")).startswith("shadow_validation_only")
+        )
+        candidates.append(
+            {
+                "belief_id": belief_id,
+                "handling_classification": classification,
+                "handling_reason": ledger_candidate.get("handling_reason", ""),
+                "product_role": ledger_candidate.get("product_role", ""),
+                "champion": ledger_candidate.get("champion", ""),
+                "challenger": ledger_candidate.get("challenger", ""),
+                "readiness_tier": ledger_candidate.get("readiness_tier", ""),
+                "primary_blocker": ledger_candidate.get("primary_blocker", ""),
+                "validation_queue_status": ledger_candidate.get("validation_queue_status", ""),
+                "validation_design_status": ledger_candidate.get("validation_design_status", ""),
+                "data_gate_unlock_status": ledger_candidate.get("data_gate_unlock_status", ""),
+                "validation_authority": ledger_candidate.get("validation_authority", ""),
+                "visual_label_completion_status": visual_label_completion_status,
+                "visual_label_completion_batch_id": visual_label_completion_audit.get("batch_id", ""),
+                "visual_label_completion_rows": visual_label_completion_audit.get("row_count", ""),
+                "visual_label_completed_rows": visual_label_completion_audit.get("completed_row_count", ""),
+                "visual_label_missing_required_rows": visual_label_completion_audit.get("missing_required_row_count", ""),
+                "visual_label_invalid_rows": visual_label_completion_audit.get("invalid_label_row_count", ""),
+                "visual_label_gate_passed": visual_label_gate_passed,
+                "quality_remediation_status": quality_remediation_status,
+                "quality_remediation_required_action": quality_remediation_plan.get("current_required_action", ""),
+                "run_when_manual_gate_active": False,
+                "can_execute_now": candidate_can_execute,
+                "pre_validation_blockers": pre_validation_blockers,
+                "post_data_sequence": sequence,
+                "next_allowed_action": ledger_candidate.get("next_allowed_action", ""),
+                "next_required_action": ledger_candidate.get("next_required_action", ""),
+                "required_preflight_command": data_gate_row.get(
+                    "required_preflight_command",
+                    f"PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id {ceo_run_id}",
+                ),
+                "post_data_validation_command": design_candidate.get("post_data_validation_command", ""),
+                "acceptance_criteria": design_candidate.get("acceptance_criteria", []) or [],
+                "stop_condition": design_candidate.get("stop_condition", ""),
+                "promotion_authority": "none",
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    return {
+        "model": CEO_SIDECAR_POST_DATA_PLAYBOOK_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": (
+            "manual_data_gate_blocks_post_data_playbook"
+            if manual_gate_active
+            else "visual_or_quality_gate_blocks_post_data_playbook"
+            if pre_validation_blockers
+            else "post_data_playbook_ready_for_runtime_authority"
+        ),
+        "manual_data_gate_active": manual_gate_active,
+        "safe_to_run_fresh_validation": safe_fresh_validation,
+        "visual_label_completion_status": visual_label_completion_status,
+        "visual_label_completion_batch_id": visual_label_completion_audit.get("batch_id", ""),
+        "visual_label_completion_rows": visual_label_completion_audit.get("row_count", ""),
+        "visual_label_completed_rows": visual_label_completion_audit.get("completed_row_count", ""),
+        "visual_label_missing_required_rows": visual_label_completion_audit.get("missing_required_row_count", ""),
+        "visual_label_invalid_rows": visual_label_completion_audit.get("invalid_label_row_count", ""),
+        "visual_label_gate_passed": visual_label_gate_passed,
+        "quality_remediation_status": quality_remediation_status,
+        "quality_remediation_required_action": quality_remediation_plan.get("current_required_action", ""),
+        "quality_remediation_hard_count": hard_remediation_count,
+        "quality_remediation_human_visual_count": quality_remediation_plan.get("human_visual_remediation_count", ""),
+        "quality_remediation_diversity_control_count": quality_remediation_plan.get("diversity_control_remediation_count", ""),
+        "pre_validation_blockers": pre_validation_blockers,
+        "current_required_action": current_required_action,
+        "candidate_count": candidate_count,
+        "lead_post_data_candidate_count": candidate_learning_ledger.get("lead_post_data_candidate_count", 0),
+        "diversity_control_only_count": candidate_learning_ledger.get("diversity_control_only_count", 0),
+        "archive_failure_mode_count": candidate_learning_ledger.get("archive_failure_mode_count", 0),
+        "global_gate_sequence": [
+            "complete required human visual labels until sidecar_visual_label_completion_audit status is visual_label_batch_complete",
+            f"PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id {ceo_run_id}",
+            f"PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief --run-id {ceo_run_id}",
+            f"PYTHONPATH=src python3 -m riskflow ceo frozen-candidate-validation --run-id {ceo_run_id}",
+            f"PYTHONPATH=src python3 -m riskflow ceo frozen-validation-executor --run-id {ceo_run_id}",
+            f"PYTHONPATH=src python3 -m riskflow ceo frozen-validation-rerun --run-id {ceo_run_id}",
+            "do not continue past the pre-validation gates unless fresh data, visual labels, quality remediation, and shadow guardrails are clean",
+        ],
+        "candidates": candidates,
+        "guardrail": (
+            "This playbook is a post-data handoff over existing shadow sidecar artifacts. "
+            "It does not import data, run validation, promote candidates, authorize product language, "
+            "or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+
+
+def render_sidecar_post_data_validation_playbook(playbook: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Post-Data Validation Playbook",
+        "",
+        f"Generated: {playbook.get('generated_at')}",
+        f"Run: {playbook.get('run_id')}",
+        f"Lab run: {playbook.get('lab_run_id')}",
+        f"Status: {playbook.get('status')}",
+        f"Manual data gate active: {playbook.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {playbook.get('safe_to_run_fresh_validation')}",
+        f"Visual-label completion status: {playbook.get('visual_label_completion_status')}",
+        f"Visual-label batch: {playbook.get('visual_label_completion_batch_id')}",
+        (
+            "Visual-label rows/completed/missing/invalid: "
+            f"{playbook.get('visual_label_completion_rows')}/"
+            f"{playbook.get('visual_label_completed_rows')}/"
+            f"{playbook.get('visual_label_missing_required_rows')}/"
+            f"{playbook.get('visual_label_invalid_rows')}"
+        ),
+        f"Visual-label gate passed: {playbook.get('visual_label_gate_passed')}",
+        f"Quality remediation status: {playbook.get('quality_remediation_status')}",
+        f"Quality remediation required action: {playbook.get('quality_remediation_required_action')}",
+        f"Pre-validation blockers: {_csv_list(playbook.get('pre_validation_blockers', []) or []) or 'none'}",
+        f"Current required action: {playbook.get('current_required_action')}",
+        f"Candidates: {playbook.get('candidate_count')}",
+        (
+            "Lead/control/archive: "
+            f"{playbook.get('lead_post_data_candidate_count')}/"
+            f"{playbook.get('diversity_control_only_count')}/"
+            f"{playbook.get('archive_failure_mode_count')}"
+        ),
+        "",
+        "This is a guarded post-data handoff. It does not run validation, promote candidates, or alter production behavior.",
+        "",
+        "## Global Gate Sequence",
+        "",
+    ]
+    for step in playbook.get("global_gate_sequence", []) or []:
+        lines.append(f"- {step}")
+    if not playbook.get("global_gate_sequence"):
+        lines.append("- none")
+    lines.extend(["", "## Candidates", ""])
+    if not playbook.get("candidates"):
+        lines.append("- none")
+    for candidate in playbook.get("candidates", []) or []:
+        lines.extend(
+            [
+                f"### {candidate.get('belief_id')}",
+                "",
+                f"- Handling classification: {candidate.get('handling_classification')}",
+                f"- Handling reason: {candidate.get('handling_reason')}",
+                f"- Product role: {candidate.get('product_role')}",
+                f"- Champion/challenger: {candidate.get('champion')} -> {candidate.get('challenger')}",
+                f"- Readiness tier: {candidate.get('readiness_tier')}",
+                f"- Primary blocker: {candidate.get('primary_blocker')}",
+                f"- Validation queue/design: {candidate.get('validation_queue_status')} / {candidate.get('validation_design_status')}",
+                f"- Data-gate unlock status: {candidate.get('data_gate_unlock_status')}",
+                f"- Validation authority: {candidate.get('validation_authority')}",
+                f"- Visual-label completion status: {candidate.get('visual_label_completion_status')}",
+                f"- Visual-label gate passed: {candidate.get('visual_label_gate_passed')}",
+                (
+                    "- Visual-label rows/completed/missing/invalid: "
+                    f"{candidate.get('visual_label_completion_rows')}/"
+                    f"{candidate.get('visual_label_completed_rows')}/"
+                    f"{candidate.get('visual_label_missing_required_rows')}/"
+                    f"{candidate.get('visual_label_invalid_rows')}"
+                ),
+                f"- Quality remediation status: {candidate.get('quality_remediation_status')}",
+                f"- Quality remediation required action: {candidate.get('quality_remediation_required_action') or 'none'}",
+                f"- Pre-validation blockers: {_csv_list(candidate.get('pre_validation_blockers', []) or []) or 'none'}",
+                f"- Can execute now: {candidate.get('can_execute_now')}",
+                f"- Required preflight command: {candidate.get('required_preflight_command')}",
+                f"- Post-data validation command: {candidate.get('post_data_validation_command') or 'none'}",
+                f"- Next allowed action: {candidate.get('next_allowed_action')}",
+                f"- Next required action: {candidate.get('next_required_action')}",
+                f"- Stop condition: {candidate.get('stop_condition') or 'none'}",
+                f"- Promotion authority: {candidate.get('promotion_authority')}",
+                f"- Product language allowed: {candidate.get('product_language_allowed')}",
+                f"- Production effect: {candidate.get('production_effect')}",
+                "",
+                "Post-data sequence:",
+            ]
+        )
+        for step in candidate.get("post_data_sequence", []) or []:
+            lines.append(f"- {step}")
+        criteria = candidate.get("acceptance_criteria", []) or []
+        lines.extend(["", "Acceptance criteria:"])
+        if criteria:
+            lines.extend(f"- {criterion}" for criterion in criteria)
+        else:
+            lines.append("- none")
+        lines.append("")
+    lines.extend(
+        [
+            "## Guardrail",
+            "",
+            str(playbook.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "Promotion authority: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_sidecar_current_handoff(
+    *,
+    brief: dict[str, Any],
+    candidate_learning_ledger: dict[str, Any],
+    champion_challenger_quality: dict[str, Any],
+    visual_label_entry_sheet: dict[str, Any],
+    visual_label_completion_audit: dict[str, Any],
+    source_health: dict[str, Any],
+    source_fingerprints: dict[str, Any],
+    post_data_playbook: dict[str, Any],
+    paths: dict[str, Path],
+    run_root: Path,
+) -> dict[str, Any]:
+    candidate_rows = [
+        row
+        for row in (
+            candidate_learning_ledger.get("candidates", [])
+            or candidate_learning_ledger.get("rows", [])
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    quality_by_belief_id = {
+        str(row.get("belief_id", "")): row
+        for row in champion_challenger_quality.get("checks", []) or []
+        if isinstance(row, dict)
+    }
+    historical_packet = run_root / "executive_decision_packet.md"
+    historical_packet_text = historical_packet.read_text(encoding="utf-8") if historical_packet.exists() else ""
+    stale_product_delta_snapshot = (
+        bool(candidate_rows)
+        and "No chart-facing candidate" in historical_packet_text
+    )
+    roles = []
+    for row in candidate_rows:
+        belief_id = str(row.get("belief_id", ""))
+        quality = quality_by_belief_id.get(str(row.get("belief_id", "")), {})
+        visual_label_summary = _sidecar_candidate_visual_label_decision_summary(
+            belief_id,
+            visual_label_entry_sheet=visual_label_entry_sheet,
+            visual_label_completion_audit=visual_label_completion_audit,
+        )
+        roles.append(
+            {
+                "belief_id": row.get("belief_id", ""),
+                "product_role": row.get("product_role", ""),
+                "handling_classification": row.get("handling_classification", ""),
+                "handling_reason": row.get("handling_reason", ""),
+                "operator_evidence_decision": row.get("operator_evidence_decision", ""),
+                "readiness_tier": row.get("readiness_tier", ""),
+                "primary_blocker": row.get("primary_blocker", ""),
+                "quality_status": row.get("quality_status", quality.get("status", "")),
+                "quality_hard_findings": row.get(
+                    "quality_hard_findings",
+                    "|".join(quality.get("hard_findings", []) or []),
+                ),
+                "quality_advisory_findings": row.get(
+                    "quality_advisory_findings",
+                    "|".join(quality.get("advisory_findings", []) or []),
+                ),
+                "role_delta_vs_champion_baseline": quality.get("role_delta_vs_champion_baseline", ""),
+                "matched_null_p_value": quality.get("matched_null_p_value", ""),
+                "strict_survivor": quality.get("strict_survivor", ""),
+                "event_diversity": quality.get("event_diversity", ""),
+                "sample_size": quality.get("sample_size", ""),
+                "unique_symbols": quality.get("unique_symbols", ""),
+                "visual_label_entry_status": visual_label_summary.get("entry_status", ""),
+                "visual_label_batch_id": visual_label_summary.get("batch_id", ""),
+                "visual_label_entry_rows": visual_label_summary.get("entry_row_count", ""),
+                "visual_label_missing_required_cells": visual_label_summary.get(
+                    "missing_required_cell_count",
+                    "",
+                ),
+                "visual_label_reference_gaps": visual_label_summary.get("reference_gaps", ""),
+                "visual_label_completion_status": visual_label_summary.get("completion_status", ""),
+                "visual_label_completed_rows": visual_label_summary.get("completed_row_count", ""),
+                "visual_label_missing_required_rows": visual_label_summary.get(
+                    "missing_required_row_count",
+                    "",
+                ),
+                "visual_label_invalid_rows": visual_label_summary.get("invalid_label_row_count", ""),
+                "data_gate_unlock_status": row.get("data_gate_unlock_status", ""),
+                "promotion_ceiling": row.get("promotion_ceiling", ""),
+                "validation_authority": row.get("validation_authority", ""),
+                "next_required_action": row.get("next_required_action", ""),
+                "next_allowed_action": row.get("next_allowed_action", ""),
+                "product_language_allowed": False,
+                "promotion_authority": "none",
+                "production_effect": "none",
+            }
+        )
+    authority_artifacts = {
+        "sidecar_evidence_packet_index": str(paths.get("sidecar_evidence_packet_index", "")),
+        "sidecar_evidence_brief": str(paths.get("sidecar_evidence_brief", "")),
+        "sidecar_current_decision_packet": str(paths.get("sidecar_current_decision_packet", "")),
+        "sidecar_current_decision_packet_report": str(paths.get("sidecar_current_decision_packet_report", "")),
+        "sidecar_evidence_source_manifest": str(paths.get("sidecar_evidence_source_manifest", "")),
+        "sidecar_evidence_source_health": str(paths.get("sidecar_evidence_source_health_yaml", "")),
+        "sidecar_evidence_source_fingerprints": str(paths.get("sidecar_evidence_source_fingerprints_yaml", "")),
+        "sidecar_visual_label_worklist": str(paths.get("sidecar_visual_label_worklist", "")),
+        "sidecar_visual_label_worklist_report": str(paths.get("sidecar_visual_label_worklist_report", "")),
+        "sidecar_visual_label_review_batches": str(paths.get("sidecar_visual_label_review_batches", "")),
+        "sidecar_visual_label_review_batches_report": str(
+            paths.get("sidecar_visual_label_review_batches_report", "")
+        ),
+        "sidecar_visual_label_progress": str(paths.get("sidecar_visual_label_progress", "")),
+        "sidecar_visual_label_progress_report": str(paths.get("sidecar_visual_label_progress_report", "")),
+        "sidecar_visual_label_next_batch": str(paths.get("sidecar_visual_label_next_batch", "")),
+        "sidecar_visual_label_next_batch_report": str(paths.get("sidecar_visual_label_next_batch_report", "")),
+        "sidecar_visual_label_next_batch_gallery": str(
+            paths.get("sidecar_visual_label_next_batch_gallery", "")
+        ),
+        "sidecar_visual_label_rubric": str(paths.get("sidecar_visual_label_rubric", "")),
+        "sidecar_visual_label_rubric_report": str(paths.get("sidecar_visual_label_rubric_report", "")),
+        "sidecar_visual_label_entry_sheet": str(paths.get("sidecar_visual_label_entry_sheet", "")),
+        "sidecar_visual_label_entry_sheet_report": str(
+            paths.get("sidecar_visual_label_entry_sheet_report", "")
+        ),
+        "sidecar_visual_label_source_update_manifest": str(
+            paths.get("sidecar_visual_label_source_update_manifest", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_report": str(
+            paths.get("sidecar_visual_label_source_update_manifest_report", "")
+        ),
+        "sidecar_visual_label_source_patch_plan": str(
+            paths.get("sidecar_visual_label_source_patch_plan", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_yaml": str(
+            paths.get("sidecar_visual_label_source_patch_plan_yaml", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_report": str(
+            paths.get("sidecar_visual_label_source_patch_plan_report", "")
+        ),
+        "sidecar_visual_label_completion_audit": str(paths.get("sidecar_visual_label_completion_audit", "")),
+        "sidecar_visual_label_completion_audit_yaml": str(
+            paths.get("sidecar_visual_label_completion_audit_yaml", "")
+        ),
+        "sidecar_visual_label_completion_audit_report": str(
+            paths.get("sidecar_visual_label_completion_audit_report", "")
+        ),
+        "sidecar_candidate_learning_ledger": str(paths.get("sidecar_candidate_learning_ledger_yaml", "")),
+        "sidecar_quality_remediation_plan": str(paths.get("sidecar_quality_remediation_plan", "")),
+        "sidecar_quality_remediation_plan_report": str(paths.get("sidecar_quality_remediation_plan_report", "")),
+        "sidecar_post_data_validation_playbook": str(paths.get("sidecar_post_data_validation_playbook", "")),
+        "sidecar_candidate_decision_matrix": str(paths.get("sidecar_candidate_decision_matrix", "")),
+        "sidecar_candidate_decision_matrix_report": str(paths.get("sidecar_candidate_decision_matrix_report", "")),
+        "promotion_candidates": str(paths.get("promotion_candidates", "")),
+        "data_gate_import_plan": str(run_root / "data_gate_import_plan.yaml")
+        if (run_root / "data_gate_import_plan.yaml").exists()
+        else "",
+        "data_gate_brief": str(run_root / "data_gate_brief.yaml")
+        if (run_root / "data_gate_brief.yaml").exists()
+        else "",
+        "data_gate_csv_requirements": str(run_root / "data_gate_csv_requirements.csv")
+        if (run_root / "data_gate_csv_requirements.csv").exists()
+        else "",
+        "data_gate_import_batches": str(run_root / "data_gate_import_batches.csv")
+        if (run_root / "data_gate_import_batches.csv").exists()
+        else "",
+        "historical_decision_packet": str(historical_packet) if historical_packet.exists() else "",
+    }
+    source_integrity = {
+        "source_health_status": source_health.get("status", ""),
+        "source_health_issue_count": source_health.get("issue_count", ""),
+        "source_ref_count": source_health.get("source_ref_count", ""),
+        "required_source_ref_count": source_health.get("required_source_ref_count", ""),
+        "present_required_source_ref_count": source_health.get("present_required_source_ref_count", ""),
+        "missing_required_source_ref_count": source_health.get("missing_required_source_ref_count", ""),
+        "wrong_type_required_source_ref_count": source_health.get("wrong_type_required_source_ref_count", ""),
+        "source_fingerprint_status": source_fingerprints.get("status", ""),
+        "source_fingerprint_issue_count": source_fingerprints.get("issue_count", ""),
+        "file_ref_count": source_fingerprints.get("file_ref_count", ""),
+        "fingerprinted_file_count": source_fingerprints.get("fingerprinted_file_count", ""),
+        "directory_ref_count": source_fingerprints.get("directory_ref_count", ""),
+        "profiled_directory_count": source_fingerprints.get("profiled_directory_count", ""),
+        "csv_ref_count": source_fingerprints.get("csv_ref_count", ""),
+        "csv_row_count_recorded_count": source_fingerprints.get("csv_row_count_recorded_count", ""),
+        "unavailable_fingerprint_count": source_fingerprints.get("unavailable_fingerprint_count", ""),
+    }
+    return {
+        "model": CEO_SIDECAR_CURRENT_HANDOFF_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "manual_data_gate_current_handoff" if brief.get("manual_data_gate_active") else "current_handoff_ready",
+        "sidecar_evidence_status": brief.get("status", ""),
+        "candidate_count": len(candidate_rows),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "current_required_action": post_data_playbook.get("current_required_action") or brief.get("next_action", ""),
+        "candidate_roles": roles,
+        "lead_post_data_candidate_count": candidate_learning_ledger.get("lead_post_data_candidate_count", 0),
+        "diversity_control_only_count": candidate_learning_ledger.get("diversity_control_only_count", 0),
+        "archive_failure_mode_count": candidate_learning_ledger.get("archive_failure_mode_count", 0),
+        "quality_blocked_review_only_count": candidate_learning_ledger.get("quality_blocked_review_only_count", 0),
+        "source_integrity": source_integrity,
+        "authoritative_current_artifacts": authority_artifacts,
+        "historical_decision_packet_boundary": {
+            "packet_path": str(historical_packet) if historical_packet.exists() else "",
+            "historical_only": True,
+            "stale_product_delta_snapshot_detected": stale_product_delta_snapshot,
+            "current_state_source": (
+                "sidecar_current_decision_packet plus sidecar_evidence_packet_index "
+                "plus sidecar_candidate_learning_ledger plus sidecar_quality_remediation_plan"
+            ),
+        },
+        "guardrail": (
+            "This handoff summarizes current shadow-sidecar state only. It does not run validation, "
+            "promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "promotion_authority": "none",
+        "production_effect": "none",
+    }
+
+
+def render_sidecar_current_handoff(handoff: dict[str, Any]) -> str:
+    historical = handoff.get("historical_decision_packet_boundary", {}) or {}
+    source_integrity = handoff.get("source_integrity", {}) or {}
+    lines = [
+        "# Riskflow Sidecar Current Handoff",
+        "",
+        f"Generated: {handoff.get('generated_at')}",
+        f"Run: {handoff.get('run_id')}",
+        f"Lab run: {handoff.get('lab_run_id')}",
+        f"Status: {handoff.get('status')}",
+        f"Sidecar evidence status: {handoff.get('sidecar_evidence_status')}",
+        f"Candidates: {handoff.get('candidate_count')}",
+        f"Manual data gate active: {handoff.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {handoff.get('safe_to_run_fresh_validation')}",
+        f"Current required action: {handoff.get('current_required_action') or 'none'}",
+        (
+            "Candidate roles lead/control/archive/blocked: "
+            f"{handoff.get('lead_post_data_candidate_count')}/"
+            f"{handoff.get('diversity_control_only_count')}/"
+            f"{handoff.get('archive_failure_mode_count')}/"
+            f"{handoff.get('quality_blocked_review_only_count')}"
+        ),
+        "",
+        "## Candidate Roles",
+        "",
+    ]
+    for row in handoff.get("candidate_roles", []) or []:
+        lines.append(
+            "- "
+            f"{row.get('belief_id')} role={row.get('product_role')} "
+            f"handling={row.get('handling_classification') or 'unknown'} "
+            f"authority={row.get('validation_authority') or 'none'} "
+            f"promotion_authority={row.get('promotion_authority') or 'none'} "
+            f"next={row.get('next_required_action') or row.get('next_allowed_action') or 'none'}"
+        )
+        lines.extend(
+            [
+                f"  - Evidence decision: {row.get('operator_evidence_decision') or 'none'}",
+                f"  - Readiness/blocker: {row.get('readiness_tier') or 'none'} / {row.get('primary_blocker') or 'none'}",
+                (
+                    "  - Role delta / p / strict / diversity: "
+                    f"{row.get('role_delta_vs_champion_baseline') if row.get('role_delta_vs_champion_baseline') != '' else 'n/a'} / "
+                    f"{row.get('matched_null_p_value') if row.get('matched_null_p_value') != '' else 'n/a'} / "
+                    f"{row.get('strict_survivor') if row.get('strict_survivor') != '' else 'n/a'} / "
+                    f"{row.get('event_diversity') if row.get('event_diversity') != '' else 'n/a'}"
+                ),
+                (
+                    "  - Sample/symbols: "
+                    f"{row.get('sample_size') if row.get('sample_size') != '' else 'n/a'} / "
+                    f"{row.get('unique_symbols') if row.get('unique_symbols') != '' else 'n/a'}"
+                ),
+                f"  - Quality findings: hard={row.get('quality_hard_findings') or 'none'} advisory={row.get('quality_advisory_findings') or 'none'}",
+                (
+                    "  - Visual-label batch: "
+                    f"{row.get('visual_label_entry_status') or 'none'} "
+                    f"batch={row.get('visual_label_batch_id') or 'none'} "
+                    f"rows={row.get('visual_label_entry_rows') if row.get('visual_label_entry_rows') != '' else 'n/a'} "
+                    f"missing_cells={row.get('visual_label_missing_required_cells') if row.get('visual_label_missing_required_cells') != '' else 'n/a'} "
+                    f"refs={row.get('visual_label_reference_gaps') or 'n/a'} "
+                    f"completion={row.get('visual_label_completion_status') or 'none'} "
+                    "completed/missing/invalid="
+                    f"{row.get('visual_label_completed_rows') if row.get('visual_label_completed_rows') != '' else 'n/a'}/"
+                    f"{row.get('visual_label_missing_required_rows') if row.get('visual_label_missing_required_rows') != '' else 'n/a'}/"
+                    f"{row.get('visual_label_invalid_rows') if row.get('visual_label_invalid_rows') != '' else 'n/a'}"
+                ),
+                f"  - Data-gate unlock: {row.get('data_gate_unlock_status') or 'none'}",
+            ]
+        )
+    if not handoff.get("candidate_roles"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Source Integrity",
+            "",
+            f"- Source health: {source_integrity.get('source_health_status') or 'missing'} issues={source_integrity.get('source_health_issue_count') if source_integrity.get('source_health_issue_count') != '' else 'n/a'}",
+            (
+                "- Required source refs present: "
+                f"{source_integrity.get('present_required_source_ref_count') if source_integrity.get('present_required_source_ref_count') != '' else 'n/a'}/"
+                f"{source_integrity.get('required_source_ref_count') if source_integrity.get('required_source_ref_count') != '' else 'n/a'}"
+            ),
+            (
+                "- Missing/wrong-type source refs: "
+                f"{source_integrity.get('missing_required_source_ref_count') if source_integrity.get('missing_required_source_ref_count') != '' else 'n/a'}/"
+                f"{source_integrity.get('wrong_type_required_source_ref_count') if source_integrity.get('wrong_type_required_source_ref_count') != '' else 'n/a'}"
+            ),
+            f"- Source fingerprints: {source_integrity.get('source_fingerprint_status') or 'missing'} issues={source_integrity.get('source_fingerprint_issue_count') if source_integrity.get('source_fingerprint_issue_count') != '' else 'n/a'}",
+            (
+                "- Files fingerprinted: "
+                f"{source_integrity.get('fingerprinted_file_count') if source_integrity.get('fingerprinted_file_count') != '' else 'n/a'}/"
+                f"{source_integrity.get('file_ref_count') if source_integrity.get('file_ref_count') != '' else 'n/a'}"
+            ),
+            (
+                "- Directories profiled: "
+                f"{source_integrity.get('profiled_directory_count') if source_integrity.get('profiled_directory_count') != '' else 'n/a'}/"
+                f"{source_integrity.get('directory_ref_count') if source_integrity.get('directory_ref_count') != '' else 'n/a'}"
+            ),
+            (
+                "- CSV row counts recorded: "
+                f"{source_integrity.get('csv_row_count_recorded_count') if source_integrity.get('csv_row_count_recorded_count') != '' else 'n/a'}/"
+                f"{source_integrity.get('csv_ref_count') if source_integrity.get('csv_ref_count') != '' else 'n/a'}"
+            ),
+            (
+                "- Unavailable fingerprints: "
+                f"{source_integrity.get('unavailable_fingerprint_count') if source_integrity.get('unavailable_fingerprint_count') != '' else 'n/a'}"
+            ),
+        ]
+    )
+    lines.extend(["", "## Authoritative Current Artifacts", ""])
+    for key, value in (handoff.get("authoritative_current_artifacts", {}) or {}).items():
+        lines.append(f"- {key}: {value or 'missing'}")
+    lines.extend(
+        [
+            "",
+            "## Historical Packet Boundary",
+            "",
+            f"- Packet path: {historical.get('packet_path') or 'missing'}",
+            f"- Historical only: {historical.get('historical_only')}",
+            f"- Stale product-delta snapshot detected: {historical.get('stale_product_delta_snapshot_detected')}",
+            f"- Current state source: {historical.get('current_state_source') or 'none'}",
+            "",
+            "## Guardrail",
+            "",
+            str(handoff.get("guardrail")),
+            "Product language allowed: False",
+            "Promotion authority: none.",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SIDECAR_CANDIDATE_DECISION_MATRIX_FIELDS = [
+    "belief_id",
+    "product_role",
+    "handling_classification",
+    "handling_reason",
+    "operator_evidence_decision",
+    "readiness_tier",
+    "primary_blocker",
+    "role_delta_vs_champion_baseline",
+    "matched_null_p_value",
+    "strict_survivor",
+    "event_diversity",
+    "sample_size",
+    "unique_symbols",
+    "quality_status",
+    "quality_hard_findings",
+    "quality_advisory_findings",
+    "visual_label_entry_status",
+    "visual_label_batch_id",
+    "visual_label_entry_rows",
+    "visual_label_missing_required_cells",
+    "visual_label_reference_gaps",
+    "visual_label_completion_status",
+    "visual_label_completed_rows",
+    "visual_label_missing_required_rows",
+    "visual_label_invalid_rows",
+    "data_gate_unlock_status",
+    "validation_authority",
+    "promotion_ceiling",
+    "next_required_action",
+    "next_allowed_action",
+    "product_language_allowed",
+    "promotion_authority",
+    "production_effect",
+]
+
+
+def write_sidecar_candidate_decision_matrix(path: Path, roles: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SIDECAR_CANDIDATE_DECISION_MATRIX_FIELDS)
+        writer.writeheader()
+        for row in roles:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in SIDECAR_CANDIDATE_DECISION_MATRIX_FIELDS
+                }
+            )
+
+
+def render_sidecar_candidate_decision_matrix(handoff: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Sidecar Candidate Decision Matrix",
+        "",
+        f"Generated: {handoff.get('generated_at')}",
+        f"Run: {handoff.get('run_id')}",
+        f"Lab run: {handoff.get('lab_run_id')}",
+        f"Status: {handoff.get('status')}",
+        f"Candidates: {handoff.get('candidate_count')}",
+        f"Manual data gate active: {handoff.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {handoff.get('safe_to_run_fresh_validation')}",
+        f"Current required action: {handoff.get('current_required_action') or 'none'}",
+        "",
+        "This matrix is a shadow decision handoff only. It does not validate, promote, "
+        "authorize product language, or alter production behavior.",
+        "",
+        "## Candidates",
+        "",
+    ]
+    for row in handoff.get("candidate_roles", []) or []:
+        lines.extend(
+            [
+                f"### {row.get('belief_id') or 'unknown'}",
+                "",
+                f"- Product role: {row.get('product_role') or 'none'}",
+                f"- Handling: {row.get('handling_classification') or 'none'}",
+                f"- Evidence decision: {row.get('operator_evidence_decision') or 'none'}",
+                f"- Readiness/blocker: {row.get('readiness_tier') or 'none'} / {row.get('primary_blocker') or 'none'}",
+                (
+                    "- Role delta / p / strict / diversity: "
+                    f"{row.get('role_delta_vs_champion_baseline') if row.get('role_delta_vs_champion_baseline') != '' else 'n/a'} / "
+                    f"{row.get('matched_null_p_value') if row.get('matched_null_p_value') != '' else 'n/a'} / "
+                    f"{row.get('strict_survivor') if row.get('strict_survivor') != '' else 'n/a'} / "
+                    f"{row.get('event_diversity') if row.get('event_diversity') != '' else 'n/a'}"
+                ),
+                (
+                    "- Sample/symbols: "
+                    f"{row.get('sample_size') if row.get('sample_size') != '' else 'n/a'} / "
+                    f"{row.get('unique_symbols') if row.get('unique_symbols') != '' else 'n/a'}"
+                ),
+                f"- Quality status: {row.get('quality_status') or 'none'}",
+                f"- Quality hard findings: {row.get('quality_hard_findings') or 'none'}",
+                f"- Quality advisory findings: {row.get('quality_advisory_findings') or 'none'}",
+                (
+                    "- Visual-label batch: "
+                    f"{row.get('visual_label_entry_status') or 'none'} "
+                    f"batch={row.get('visual_label_batch_id') or 'none'} "
+                    f"rows={row.get('visual_label_entry_rows') if row.get('visual_label_entry_rows') != '' else 'n/a'} "
+                    f"missing_cells={row.get('visual_label_missing_required_cells') if row.get('visual_label_missing_required_cells') != '' else 'n/a'} "
+                    f"refs={row.get('visual_label_reference_gaps') or 'n/a'} "
+                    f"completion={row.get('visual_label_completion_status') or 'none'} "
+                    "completed/missing/invalid="
+                    f"{row.get('visual_label_completed_rows') if row.get('visual_label_completed_rows') != '' else 'n/a'}/"
+                    f"{row.get('visual_label_missing_required_rows') if row.get('visual_label_missing_required_rows') != '' else 'n/a'}/"
+                    f"{row.get('visual_label_invalid_rows') if row.get('visual_label_invalid_rows') != '' else 'n/a'}"
+                ),
+                f"- Data-gate unlock: {row.get('data_gate_unlock_status') or 'none'}",
+                f"- Validation authority: {row.get('validation_authority') or 'none'}",
+                f"- Promotion ceiling: {row.get('promotion_ceiling') or 'none'}",
+                f"- Next required action: {row.get('next_required_action') or 'none'}",
+                f"- Next allowed action: {row.get('next_allowed_action') or 'none'}",
+                f"- Promotion authority: {row.get('promotion_authority') or 'none'}",
+                f"- Production effect: {row.get('production_effect') or 'none'}",
+                "",
+            ]
+        )
+    if not handoff.get("candidate_roles"):
+        lines.append("- none")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_ceo_sidecar_evidence_brief(options: CeoOpsOptions) -> dict[str, Any]:
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    champion_results = _load_yaml_if_exists(root / "champion_challenger_results.yaml")
+    visual_queue = _load_yaml_if_exists(root / "champion_challenger_visual_review_queue.yaml")
+    fresh_control_plan = _load_yaml_if_exists(root / "fresh_control_validation_plan.yaml")
+    fresh_data_preflight = _load_yaml_if_exists(root / "fresh_data_preflight.yaml")
+    evidence_debt_register = _load_yaml_if_exists(root / "evidence_debt_register.yaml")
+    trace_grade = _load_yaml_if_exists(root / "trace_grade.yaml")
+    review_only_frozen_specs = _load_review_only_frozen_specs(root)
+    official_frozen_plan = _load_yaml_if_exists(root / "frozen_candidate_validation_plan.yaml")
+    brief = build_ceo_sidecar_evidence_brief(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        champion_results=champion_results,
+        visual_queue=visual_queue,
+        fresh_control_plan=fresh_control_plan,
+        fresh_data_preflight=fresh_data_preflight,
+        evidence_debt_register=evidence_debt_register,
+        trace_grade=trace_grade,
+        review_only_frozen_specs=review_only_frozen_specs,
+        official_frozen_plan=official_frozen_plan,
+    )
+    brief_path = root / "sidecar_evidence_brief.yaml"
+    report_path = root / "sidecar_evidence_brief.md"
+    candidates_path = root / "sidecar_evidence_candidates.csv"
+    visual_handoff_path = root / "sidecar_visual_review_handoff.csv"
+    visual_coverage_path = root / "sidecar_visual_review_coverage.csv"
+    visual_coverage_report_path = root / "sidecar_visual_review_coverage.md"
+    visual_label_worklist_path = root / "sidecar_visual_label_worklist.csv"
+    visual_label_worklist_report_path = root / "sidecar_visual_label_worklist.md"
+    visual_label_batches_path = root / "sidecar_visual_label_review_batches.csv"
+    visual_label_batches_report_path = root / "sidecar_visual_label_review_batches.md"
+    visual_label_progress_path = root / "sidecar_visual_label_progress.csv"
+    visual_label_progress_report_path = root / "sidecar_visual_label_progress.md"
+    visual_label_next_batch_path = root / "sidecar_visual_label_next_batch.csv"
+    visual_label_next_batch_report_path = root / "sidecar_visual_label_next_batch.md"
+    visual_label_next_batch_gallery_path = root / "sidecar_visual_label_next_batch_gallery.md"
+    visual_label_decision_context_path = root / "sidecar_visual_label_decision_context.yaml"
+    visual_label_decision_context_report_path = root / "sidecar_visual_label_decision_context.md"
+    visual_label_rubric_path = root / "sidecar_visual_label_rubric.yaml"
+    visual_label_rubric_report_path = root / "sidecar_visual_label_rubric.md"
+    visual_label_entry_sheet_path = root / "sidecar_visual_label_entry_sheet.csv"
+    visual_label_entry_sheet_report_path = root / "sidecar_visual_label_entry_sheet.md"
+    visual_label_source_update_manifest_path = root / "sidecar_visual_label_source_update_manifest.csv"
+    visual_label_source_update_manifest_report_path = root / "sidecar_visual_label_source_update_manifest.md"
+    visual_label_source_patch_plan_path = root / "sidecar_visual_label_source_patch_plan.csv"
+    visual_label_source_patch_plan_yaml_path = root / "sidecar_visual_label_source_patch_plan.yaml"
+    visual_label_source_patch_plan_report_path = root / "sidecar_visual_label_source_patch_plan.md"
+    visual_label_completion_audit_path = root / "sidecar_visual_label_completion_audit.csv"
+    visual_label_completion_audit_yaml_path = root / "sidecar_visual_label_completion_audit.yaml"
+    visual_label_completion_audit_report_path = root / "sidecar_visual_label_completion_audit.md"
+    champion_challenger_path = root / "sidecar_champion_challenger_evidence.csv"
+    champion_challenger_quality_path = root / "sidecar_champion_challenger_quality_audit.yaml"
+    champion_challenger_quality_report_path = root / "sidecar_champion_challenger_quality_audit.md"
+    quality_remediation_plan_path = root / "sidecar_quality_remediation_plan.yaml"
+    quality_remediation_plan_report_path = root / "sidecar_quality_remediation_plan.md"
+    gap_matrix_path = root / "sidecar_evidence_gap_matrix.csv"
+    readiness_summary_path = root / "sidecar_candidate_readiness_summary.csv"
+    readiness_summary_report_path = root / "sidecar_candidate_readiness_summary.md"
+    validation_queue_path = root / "sidecar_validation_queue.csv"
+    validation_queue_report_path = root / "sidecar_validation_queue.md"
+    validation_design_path = root / "sidecar_champion_challenger_validation_design.yaml"
+    validation_design_report_path = root / "sidecar_champion_challenger_validation_design.md"
+    data_gate_unlock_matrix_path = root / "sidecar_data_gate_unlock_matrix.csv"
+    data_gate_unlock_matrix_yaml_path = root / "sidecar_data_gate_unlock_matrix.yaml"
+    data_gate_unlock_matrix_report_path = root / "sidecar_data_gate_unlock_matrix.md"
+    consistency_audit_path = root / "sidecar_evidence_consistency_audit.yaml"
+    consistency_audit_report_path = root / "sidecar_evidence_consistency_audit.md"
+    decision_cards_path = root / "sidecar_candidate_decision_cards.md"
+    current_decision_packet_path = root / "sidecar_current_decision_packet.yaml"
+    current_decision_packet_report_path = root / "sidecar_current_decision_packet.md"
+    guardrail_audit_path = root / "sidecar_shadow_guardrail_audit.yaml"
+    guardrail_audit_report_path = root / "sidecar_shadow_guardrail_audit.md"
+    source_manifest_path = root / "sidecar_evidence_source_manifest.csv"
+    source_health_path = root / "sidecar_evidence_source_health.csv"
+    source_health_yaml_path = root / "sidecar_evidence_source_health.yaml"
+    source_health_report_path = root / "sidecar_evidence_source_health.md"
+    source_fingerprints_path = root / "sidecar_evidence_source_fingerprints.csv"
+    source_fingerprints_yaml_path = root / "sidecar_evidence_source_fingerprints.yaml"
+    source_fingerprints_report_path = root / "sidecar_evidence_source_fingerprints.md"
+    candidate_learning_ledger_path = root / "sidecar_candidate_learning_ledger.csv"
+    candidate_learning_ledger_yaml_path = root / "sidecar_candidate_learning_ledger.yaml"
+    candidate_learning_ledger_report_path = root / "sidecar_candidate_learning_ledger.md"
+    post_data_playbook_path = root / "sidecar_post_data_validation_playbook.yaml"
+    post_data_playbook_report_path = root / "sidecar_post_data_validation_playbook.md"
+    current_handoff_path = root / "sidecar_current_handoff.yaml"
+    current_handoff_report_path = root / "sidecar_current_handoff.md"
+    candidate_decision_matrix_path = root / "sidecar_candidate_decision_matrix.csv"
+    candidate_decision_matrix_report_path = root / "sidecar_candidate_decision_matrix.md"
+    frozen_specs_path = root / "sidecar_frozen_spec_review.csv"
+    packet_index_path = root / "sidecar_evidence_packet_index.yaml"
+    packet_index_report_path = root / "sidecar_evidence_packet_index.md"
+    promotion_candidates_path = root / "promotion_candidates.md"
+    guardrail_audit = build_sidecar_shadow_guardrail_audit(brief)
+    visual_coverage = build_sidecar_visual_review_coverage(
+        brief=brief,
+        source_root=options.source_root,
+        run_root=root,
+    )
+    visual_label_worklist = build_sidecar_visual_label_worklist(
+        brief=brief,
+        visual_review_coverage=visual_coverage,
+        source_root=options.source_root,
+        run_root=root,
+    )
+    visual_label_batches = build_sidecar_visual_label_review_batches(worklist=visual_label_worklist)
+    visual_label_progress = build_sidecar_visual_label_progress(
+        worklist=visual_label_worklist,
+        batches=visual_label_batches,
+    )
+    visual_label_next_batch = build_sidecar_visual_label_next_batch_packet(
+        worklist=visual_label_worklist,
+        batches=visual_label_batches,
+        progress=visual_label_progress,
+    )
+    visual_label_rubric = build_sidecar_visual_label_rubric(
+        next_batch=visual_label_next_batch,
+        progress=visual_label_progress,
+    )
+    visual_label_entry_sheet = build_sidecar_visual_label_entry_sheet(
+        next_batch=visual_label_next_batch,
+        rubric=visual_label_rubric,
+        source_root=options.source_root,
+    )
+    visual_label_source_update_manifest = build_sidecar_visual_label_source_update_manifest(
+        visual_label_entry_sheet
+    )
+    visual_label_source_patch_plan = build_sidecar_visual_label_source_patch_plan(
+        visual_label_source_update_manifest
+    )
+    visual_label_completion_audit = build_sidecar_visual_label_completion_audit(
+        next_batch=visual_label_next_batch,
+        rubric=visual_label_rubric,
+    )
+    visual_label_decision_context = build_sidecar_visual_label_decision_context(
+        next_batch=visual_label_next_batch,
+        rubric=visual_label_rubric,
+        entry_sheet=visual_label_entry_sheet,
+        source_patch_plan=visual_label_source_patch_plan,
+        completion_audit=visual_label_completion_audit,
+    )
+    champion_challenger_quality = build_sidecar_champion_challenger_quality_audit(
+        brief,
+        visual_review_coverage=visual_coverage,
+        visual_label_progress=visual_label_progress,
+        visual_label_completion_audit=visual_label_completion_audit,
+    )
+    validation_design = build_sidecar_champion_challenger_validation_design(brief)
+    data_gate_unlock_matrix = build_sidecar_data_gate_unlock_matrix(
+        brief=brief,
+        fresh_data_preflight=fresh_data_preflight,
+    )
+    source_health = build_sidecar_evidence_source_health(
+        brief=brief,
+        source_root=options.source_root,
+        run_root=root,
+    )
+    source_fingerprints = build_sidecar_evidence_source_fingerprints(source_health=source_health)
+    atomic_write_yaml(brief_path, brief)
+    atomic_write_text(report_path, render_ceo_sidecar_evidence_brief(brief))
+    write_sidecar_evidence_candidates(candidates_path, brief.get("candidates", []) or [])
+    write_sidecar_visual_review_handoff(visual_handoff_path, brief.get("candidates", []) or [])
+    write_sidecar_visual_review_coverage(visual_coverage_path, visual_coverage)
+    atomic_write_text(visual_coverage_report_path, render_sidecar_visual_review_coverage(visual_coverage))
+    write_sidecar_visual_label_worklist(visual_label_worklist_path, visual_label_worklist)
+    atomic_write_text(visual_label_worklist_report_path, render_sidecar_visual_label_worklist(visual_label_worklist))
+    write_sidecar_visual_label_review_batches(visual_label_batches_path, visual_label_batches)
+    atomic_write_text(
+        visual_label_batches_report_path,
+        render_sidecar_visual_label_review_batches(visual_label_batches),
+    )
+    write_sidecar_visual_label_progress(visual_label_progress_path, visual_label_progress)
+    atomic_write_text(visual_label_progress_report_path, render_sidecar_visual_label_progress(visual_label_progress))
+    write_sidecar_visual_label_next_batch(visual_label_next_batch_path, visual_label_next_batch)
+    atomic_write_text(
+        visual_label_next_batch_report_path,
+        render_sidecar_visual_label_next_batch(visual_label_next_batch),
+    )
+    atomic_write_yaml(visual_label_rubric_path, visual_label_rubric)
+    atomic_write_text(visual_label_rubric_report_path, render_sidecar_visual_label_rubric(visual_label_rubric))
+    atomic_write_text(
+        visual_label_next_batch_gallery_path,
+        render_sidecar_visual_label_next_batch_gallery(
+            visual_label_next_batch,
+            rubric=visual_label_rubric,
+            gallery_path=visual_label_next_batch_gallery_path,
+            entry_sheet=visual_label_entry_sheet,
+        ),
+    )
+    atomic_write_yaml(visual_label_decision_context_path, visual_label_decision_context)
+    atomic_write_text(
+        visual_label_decision_context_report_path,
+        render_sidecar_visual_label_decision_context(visual_label_decision_context),
+    )
+    write_sidecar_visual_label_entry_sheet(visual_label_entry_sheet_path, visual_label_entry_sheet)
+    atomic_write_text(
+        visual_label_entry_sheet_report_path,
+        render_sidecar_visual_label_entry_sheet(visual_label_entry_sheet),
+    )
+    write_sidecar_visual_label_source_update_manifest(
+        visual_label_source_update_manifest_path,
+        visual_label_source_update_manifest,
+    )
+    atomic_write_text(
+        visual_label_source_update_manifest_report_path,
+        render_sidecar_visual_label_source_update_manifest(visual_label_source_update_manifest),
+    )
+    write_sidecar_visual_label_source_patch_plan(
+        visual_label_source_patch_plan_path,
+        visual_label_source_patch_plan,
+    )
+    atomic_write_yaml(visual_label_source_patch_plan_yaml_path, visual_label_source_patch_plan)
+    atomic_write_text(
+        visual_label_source_patch_plan_report_path,
+        render_sidecar_visual_label_source_patch_plan(visual_label_source_patch_plan),
+    )
+    write_sidecar_visual_label_completion_audit(visual_label_completion_audit_path, visual_label_completion_audit)
+    atomic_write_yaml(visual_label_completion_audit_yaml_path, visual_label_completion_audit)
+    atomic_write_text(
+        visual_label_completion_audit_report_path,
+        render_sidecar_visual_label_completion_audit(visual_label_completion_audit),
+    )
+    write_sidecar_champion_challenger_evidence(champion_challenger_path, brief.get("candidates", []) or [])
+    atomic_write_yaml(champion_challenger_quality_path, champion_challenger_quality)
+    atomic_write_text(
+        champion_challenger_quality_report_path,
+        render_sidecar_champion_challenger_quality_audit(champion_challenger_quality),
+    )
+    write_sidecar_evidence_gap_matrix(gap_matrix_path, brief.get("candidates", []) or [])
+    write_sidecar_candidate_readiness_summary(readiness_summary_path, brief.get("candidates", []) or [])
+    atomic_write_text(readiness_summary_report_path, render_sidecar_candidate_readiness_summary(brief))
+    write_sidecar_validation_queue(validation_queue_path, brief.get("candidates", []) or [])
+    atomic_write_text(validation_queue_report_path, render_sidecar_validation_queue(brief))
+    atomic_write_yaml(validation_design_path, validation_design)
+    atomic_write_text(validation_design_report_path, render_sidecar_champion_challenger_validation_design(validation_design))
+    write_sidecar_data_gate_unlock_matrix(data_gate_unlock_matrix_path, data_gate_unlock_matrix)
+    atomic_write_yaml(data_gate_unlock_matrix_yaml_path, data_gate_unlock_matrix)
+    atomic_write_text(data_gate_unlock_matrix_report_path, render_sidecar_data_gate_unlock_matrix(data_gate_unlock_matrix))
+    atomic_write_text(
+        decision_cards_path,
+        render_sidecar_candidate_decision_cards(
+            brief,
+            quality_audit=champion_challenger_quality,
+            data_gate_unlock_matrix=data_gate_unlock_matrix,
+            visual_label_entry_sheet=visual_label_entry_sheet,
+            visual_label_completion_audit=visual_label_completion_audit,
+        ),
+    )
+    atomic_write_yaml(guardrail_audit_path, guardrail_audit)
+    atomic_write_text(guardrail_audit_report_path, render_sidecar_shadow_guardrail_audit(guardrail_audit))
+    write_sidecar_evidence_source_manifest(source_manifest_path, brief.get("candidates", []) or [])
+    write_sidecar_evidence_source_health(source_health_path, source_health.get("rows", []) or [])
+    atomic_write_yaml(source_health_yaml_path, source_health)
+    atomic_write_text(source_health_report_path, render_sidecar_evidence_source_health(source_health))
+    write_sidecar_evidence_source_fingerprints(
+        source_fingerprints_path,
+        source_fingerprints.get("rows", []) or [],
+    )
+    atomic_write_yaml(source_fingerprints_yaml_path, source_fingerprints)
+    atomic_write_text(
+        source_fingerprints_report_path,
+        render_sidecar_evidence_source_fingerprints(source_fingerprints),
+    )
+    write_sidecar_frozen_spec_review(
+        frozen_specs_path,
+        brief.get("review_only_frozen_specs", []) or [],
+        official_frozen_plan_exists=brief.get("official_frozen_candidate_validation_plan_exists") is True,
+    )
+    sidecar_paths = {
+        "sidecar_evidence_brief": brief_path,
+        "sidecar_evidence_brief_report": report_path,
+        "sidecar_evidence_candidates": candidates_path,
+        "sidecar_visual_review_handoff": visual_handoff_path,
+        "sidecar_visual_review_coverage": visual_coverage_path,
+        "sidecar_visual_review_coverage_report": visual_coverage_report_path,
+        "sidecar_visual_label_worklist": visual_label_worklist_path,
+        "sidecar_visual_label_worklist_report": visual_label_worklist_report_path,
+        "sidecar_visual_label_review_batches": visual_label_batches_path,
+        "sidecar_visual_label_review_batches_report": visual_label_batches_report_path,
+        "sidecar_visual_label_progress": visual_label_progress_path,
+        "sidecar_visual_label_progress_report": visual_label_progress_report_path,
+        "sidecar_visual_label_next_batch": visual_label_next_batch_path,
+        "sidecar_visual_label_next_batch_report": visual_label_next_batch_report_path,
+        "sidecar_visual_label_next_batch_gallery": visual_label_next_batch_gallery_path,
+        "sidecar_visual_label_decision_context": visual_label_decision_context_path,
+        "sidecar_visual_label_decision_context_report": visual_label_decision_context_report_path,
+        "sidecar_visual_label_rubric": visual_label_rubric_path,
+        "sidecar_visual_label_rubric_report": visual_label_rubric_report_path,
+        "sidecar_visual_label_entry_sheet": visual_label_entry_sheet_path,
+        "sidecar_visual_label_entry_sheet_report": visual_label_entry_sheet_report_path,
+        "sidecar_visual_label_source_update_manifest": visual_label_source_update_manifest_path,
+        "sidecar_visual_label_source_update_manifest_report": visual_label_source_update_manifest_report_path,
+        "sidecar_visual_label_source_patch_plan": visual_label_source_patch_plan_path,
+        "sidecar_visual_label_source_patch_plan_yaml": visual_label_source_patch_plan_yaml_path,
+        "sidecar_visual_label_source_patch_plan_report": visual_label_source_patch_plan_report_path,
+        "sidecar_visual_label_completion_audit": visual_label_completion_audit_path,
+        "sidecar_visual_label_completion_audit_yaml": visual_label_completion_audit_yaml_path,
+        "sidecar_visual_label_completion_audit_report": visual_label_completion_audit_report_path,
+        "sidecar_champion_challenger_evidence": champion_challenger_path,
+        "sidecar_champion_challenger_quality_audit": champion_challenger_quality_path,
+        "sidecar_champion_challenger_quality_audit_report": champion_challenger_quality_report_path,
+        "sidecar_quality_remediation_plan": quality_remediation_plan_path,
+        "sidecar_quality_remediation_plan_report": quality_remediation_plan_report_path,
+        "sidecar_evidence_gap_matrix": gap_matrix_path,
+        "sidecar_candidate_readiness_summary": readiness_summary_path,
+        "sidecar_candidate_readiness_summary_report": readiness_summary_report_path,
+        "sidecar_validation_queue": validation_queue_path,
+        "sidecar_validation_queue_report": validation_queue_report_path,
+        "sidecar_champion_challenger_validation_design": validation_design_path,
+        "sidecar_champion_challenger_validation_design_report": validation_design_report_path,
+        "sidecar_data_gate_unlock_matrix": data_gate_unlock_matrix_path,
+        "sidecar_data_gate_unlock_matrix_yaml": data_gate_unlock_matrix_yaml_path,
+        "sidecar_data_gate_unlock_matrix_report": data_gate_unlock_matrix_report_path,
+        "sidecar_evidence_consistency_audit": consistency_audit_path,
+        "sidecar_evidence_consistency_audit_report": consistency_audit_report_path,
+        "sidecar_evidence_packet_index": packet_index_path,
+        "sidecar_evidence_packet_index_report": packet_index_report_path,
+        "sidecar_candidate_decision_cards": decision_cards_path,
+        "sidecar_current_decision_packet": current_decision_packet_path,
+        "sidecar_current_decision_packet_report": current_decision_packet_report_path,
+        "promotion_candidates": promotion_candidates_path,
+        "sidecar_shadow_guardrail_audit": guardrail_audit_path,
+        "sidecar_shadow_guardrail_audit_report": guardrail_audit_report_path,
+        "sidecar_evidence_source_manifest": source_manifest_path,
+        "sidecar_evidence_source_health": source_health_path,
+        "sidecar_evidence_source_health_yaml": source_health_yaml_path,
+        "sidecar_evidence_source_health_report": source_health_report_path,
+        "sidecar_evidence_source_fingerprints": source_fingerprints_path,
+        "sidecar_evidence_source_fingerprints_yaml": source_fingerprints_yaml_path,
+        "sidecar_evidence_source_fingerprints_report": source_fingerprints_report_path,
+        "sidecar_candidate_learning_ledger": candidate_learning_ledger_path,
+        "sidecar_candidate_learning_ledger_yaml": candidate_learning_ledger_yaml_path,
+        "sidecar_candidate_learning_ledger_report": candidate_learning_ledger_report_path,
+        "sidecar_post_data_validation_playbook": post_data_playbook_path,
+        "sidecar_post_data_validation_playbook_report": post_data_playbook_report_path,
+        "sidecar_current_handoff": current_handoff_path,
+        "sidecar_current_handoff_report": current_handoff_report_path,
+        "sidecar_candidate_decision_matrix": candidate_decision_matrix_path,
+        "sidecar_candidate_decision_matrix_report": candidate_decision_matrix_report_path,
+        "sidecar_frozen_spec_review": frozen_specs_path,
+    }
+    candidate_learning_ledger = build_sidecar_candidate_learning_ledger(
+        brief=brief,
+        validation_design=validation_design,
+        data_gate_unlock_matrix=data_gate_unlock_matrix,
+        source_health=source_health,
+        source_fingerprints=source_fingerprints,
+        quality_audit=champion_challenger_quality,
+        paths=sidecar_paths,
+    )
+    write_sidecar_candidate_learning_ledger(
+        candidate_learning_ledger_path,
+        candidate_learning_ledger.get("rows", []) or [],
+    )
+    atomic_write_yaml(candidate_learning_ledger_yaml_path, candidate_learning_ledger)
+    atomic_write_text(
+        candidate_learning_ledger_report_path,
+        render_sidecar_candidate_learning_ledger(candidate_learning_ledger),
+    )
+    quality_remediation_plan = build_sidecar_quality_remediation_plan(
+        brief=brief,
+        quality_audit=champion_challenger_quality,
+        candidate_learning_ledger=candidate_learning_ledger,
+    )
+    atomic_write_yaml(quality_remediation_plan_path, quality_remediation_plan)
+    atomic_write_text(
+        quality_remediation_plan_report_path,
+        render_sidecar_quality_remediation_plan(quality_remediation_plan),
+    )
+    atomic_write_text(
+        promotion_candidates_path,
+        render_promotion_candidates(
+            {},
+            sidecar_evidence_brief=brief,
+            sidecar_candidate_learning_ledger=candidate_learning_ledger,
+        ),
+    )
+    post_data_playbook = build_sidecar_post_data_validation_playbook(
+        brief=brief,
+        validation_design=validation_design,
+        data_gate_unlock_matrix=data_gate_unlock_matrix,
+        candidate_learning_ledger=candidate_learning_ledger,
+        visual_label_completion_audit=visual_label_completion_audit,
+        quality_remediation_plan=quality_remediation_plan,
+    )
+    atomic_write_yaml(post_data_playbook_path, post_data_playbook)
+    atomic_write_text(
+        post_data_playbook_report_path,
+        render_sidecar_post_data_validation_playbook(post_data_playbook),
+    )
+    current_handoff = build_sidecar_current_handoff(
+        brief=brief,
+        candidate_learning_ledger=candidate_learning_ledger,
+        champion_challenger_quality=champion_challenger_quality,
+        visual_label_entry_sheet=visual_label_entry_sheet,
+        visual_label_completion_audit=visual_label_completion_audit,
+        source_health=source_health,
+        source_fingerprints=source_fingerprints,
+        post_data_playbook=post_data_playbook,
+        paths=sidecar_paths,
+        run_root=root,
+    )
+    atomic_write_yaml(current_handoff_path, current_handoff)
+    atomic_write_text(current_handoff_report_path, render_sidecar_current_handoff(current_handoff))
+    candidate_decision_matrix_rows = current_handoff.get("candidate_roles", []) or []
+    write_sidecar_candidate_decision_matrix(
+        candidate_decision_matrix_path,
+        candidate_decision_matrix_rows,
+    )
+    atomic_write_text(
+        candidate_decision_matrix_report_path,
+        render_sidecar_candidate_decision_matrix(current_handoff),
+    )
+    consistency_audit = build_sidecar_evidence_consistency_audit(
+        brief=brief,
+        guardrail_audit=guardrail_audit,
+        visual_review_coverage=visual_coverage,
+        champion_challenger_quality=champion_challenger_quality,
+        validation_design=validation_design,
+        data_gate_unlock_matrix=data_gate_unlock_matrix,
+        quality_remediation_plan=quality_remediation_plan,
+        visual_label_entry_sheet=visual_label_entry_sheet,
+        visual_label_source_update_manifest=visual_label_source_update_manifest,
+        visual_label_source_patch_plan=visual_label_source_patch_plan,
+        visual_label_completion_audit=visual_label_completion_audit,
+        candidate_learning_ledger=candidate_learning_ledger,
+        post_data_playbook=post_data_playbook,
+        current_handoff=current_handoff,
+        candidate_decision_matrix_rows=candidate_decision_matrix_rows,
+        evidence_debt_register=evidence_debt_register,
+    )
+    atomic_write_yaml(consistency_audit_path, consistency_audit)
+    atomic_write_text(consistency_audit_report_path, render_sidecar_evidence_consistency_audit(consistency_audit))
+    current_decision_packet = build_sidecar_current_decision_packet(
+        brief=brief,
+        candidate_learning_ledger=candidate_learning_ledger,
+        current_handoff=current_handoff,
+        champion_challenger_quality=champion_challenger_quality,
+        quality_remediation_plan=quality_remediation_plan,
+        consistency_audit=consistency_audit,
+        evidence_debt_register=evidence_debt_register,
+    )
+    atomic_write_yaml(current_decision_packet_path, current_decision_packet)
+    atomic_write_text(current_decision_packet_report_path, render_sidecar_current_decision_packet(current_decision_packet))
+    packet_index = build_sidecar_evidence_packet_index(
+        brief=brief,
+        guardrail_audit=guardrail_audit,
+        paths=sidecar_paths,
+    )
+    atomic_write_yaml(packet_index_path, packet_index)
+    atomic_write_text(packet_index_report_path, render_sidecar_evidence_packet_index(packet_index))
+    sidecar_paths["sidecar_evidence_packet_index"] = packet_index_path
+    sidecar_paths["sidecar_evidence_packet_index_report"] = packet_index_report_path
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "brief": brief,
+        "guardrail_audit": guardrail_audit,
+        "visual_review_coverage": visual_coverage,
+        "visual_label_worklist": visual_label_worklist,
+        "visual_label_batches": visual_label_batches,
+        "visual_label_progress": visual_label_progress,
+        "visual_label_next_batch": visual_label_next_batch,
+        "visual_label_decision_context": visual_label_decision_context,
+        "visual_label_rubric": visual_label_rubric,
+        "visual_label_entry_sheet": visual_label_entry_sheet,
+        "visual_label_source_update_manifest": visual_label_source_update_manifest,
+        "visual_label_source_patch_plan": visual_label_source_patch_plan,
+        "visual_label_completion_audit": visual_label_completion_audit,
+        "champion_challenger_quality": champion_challenger_quality,
+        "quality_remediation_plan": quality_remediation_plan,
+        "validation_design": validation_design,
+        "data_gate_unlock_matrix": data_gate_unlock_matrix,
+        "consistency_audit": consistency_audit,
+        "source_health": source_health,
+        "source_fingerprints": source_fingerprints,
+        "candidate_learning_ledger": candidate_learning_ledger,
+        "post_data_playbook": post_data_playbook,
+        "current_handoff": current_handoff,
+        "current_decision_packet": current_decision_packet,
+        "packet_index": packet_index,
+        "paths": sidecar_paths,
+    }
+
+
+def _asset_symbols_with_status(timeframe: dict[str, Any], status: str) -> list[str]:
+    return [
+        str(asset.get("symbol", ""))
+        for asset in timeframe.get("assets", []) or []
+        if asset.get("symbol") and asset.get("status") == status
+    ]
+
+
+def _csv_requirement_action(status: str) -> str:
+    if status == "missing":
+        return "import_csv"
+    if status == "stale":
+        return "refresh_csv"
+    if status == "load_failed":
+        return "repair_csv_parse_failure"
+    return "none"
+
+
+def _csv_requirements_for_timeframe(timeframe: dict[str, Any], *, data_dir: str) -> list[dict[str, Any]]:
+    requirements: list[dict[str, Any]] = []
+    timeframe_id = str(timeframe.get("timeframe", ""))
+    for asset in timeframe.get("assets", []) or []:
+        status = str(asset.get("status", ""))
+        if status == "ready":
+            continue
+        symbol = str(asset.get("symbol", ""))
+        existing_path = str(asset.get("path", ""))
+        expected_path = existing_path
+        if not expected_path and symbol and timeframe_id:
+            expected_path = str(Path(data_dir) / f"{symbol}_{timeframe_id}.csv") if data_dir else f"{symbol}_{timeframe_id}.csv"
+        requirements.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe_id,
+                "status": status,
+                "expected_path": expected_path,
+                "latest_date": asset.get("latest_date", ""),
+                "age_days": asset.get("age_days"),
+                "stale_limit_days": asset.get("stale_limit_days", timeframe.get("stale_limit_days")),
+                "row_count": asset.get("row_count", 0),
+                "required_action": _csv_requirement_action(status),
+                "production_effect": "none",
+            }
+        )
+    return requirements
+
+
+def _fresh_data_role_blockers(role_queue: dict[str, Any]) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for task in role_queue.get("tasks", []) or []:
+        if task.get("status") != "blocked":
+            continue
+        source_artifact = str(task.get("source_artifact", ""))
+        owner_command = str(task.get("owner_command", ""))
+        task_id = str(task.get("task_id", ""))
+        if (
+            source_artifact != "fresh_data_preflight.yaml"
+            and owner_command != "import_or_curate_fresh_ohlcv_data"
+            and "fresh_data" not in task_id
+        ):
+            continue
+        blockers.append(
+            {
+                "task_id": task_id,
+                "role_id": task.get("role_id", ""),
+                "source_artifact": source_artifact,
+                "owner_command": owner_command,
+                "validation_status": task.get("validation_status", ""),
+                "result_finding": task.get("result_finding", ""),
+                "recommended_next_action": task.get("result_recommended_next_action", ""),
+                "closure_command": task.get("closure_command", ""),
+                "production_effect": "none",
+            }
+        )
+    return blockers
+
+
+def build_ceo_data_gate_brief(
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+    fresh_data_preflight: dict[str, Any],
+    sidecar_evidence_brief: dict[str, Any],
+    role_task_queue: dict[str, Any],
+    sidecar_candidate_learning_ledger: dict[str, Any] | None = None,
+    sidecar_data_gate_unlock_matrix: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    sidecar_candidate_learning_ledger = sidecar_candidate_learning_ledger or {}
+    sidecar_data_gate_unlock_matrix = sidecar_data_gate_unlock_matrix or {}
+    sidecar_learning_rows = sidecar_candidate_learning_ledger.get("rows", []) or []
+    sidecar_learning_by_belief_id = {
+        str(row.get("belief_id", "")): row
+        for row in sidecar_learning_rows
+        if isinstance(row, dict) and row.get("belief_id")
+    }
+    sidecar_unlock_rows = sidecar_data_gate_unlock_matrix.get("rows", []) or []
+    sidecar_learning_status = sidecar_candidate_learning_ledger.get(
+        "status",
+        "missing_sidecar_candidate_learning_ledger",
+    )
+    timeframe_requirements: list[dict[str, Any]] = []
+    csv_requirements: list[dict[str, Any]] = []
+    data_dir = str(fresh_data_preflight.get("data_dir", ""))
+    for timeframe in fresh_data_preflight.get("timeframes", []) or []:
+        timeframe_csv_requirements = _csv_requirements_for_timeframe(timeframe, data_dir=data_dir)
+        csv_requirements.extend(timeframe_csv_requirements)
+        timeframe_requirements.append(
+            {
+                "timeframe": timeframe.get("timeframe", ""),
+                "status": timeframe.get("status", ""),
+                "asset_count": timeframe.get("asset_count", 0),
+                "ready_count": timeframe.get("active_count", 0),
+                "missing_count": timeframe.get("missing_count", 0),
+                "stale_count": timeframe.get("stale_count", 0),
+                "load_failure_count": timeframe.get("load_failure_count", 0),
+                "min_active_members": timeframe.get("min_active_members", 0),
+                "meets_min_active_members": timeframe.get("meets_min_active_members", False),
+                "stale_limit_days": timeframe.get("stale_limit_days"),
+                "ready_symbols": _asset_symbols_with_status(timeframe, "ready"),
+                "missing_symbols": _asset_symbols_with_status(timeframe, "missing"),
+                "stale_symbols": _asset_symbols_with_status(timeframe, "stale"),
+                "load_failed_symbols": _asset_symbols_with_status(timeframe, "load_failed"),
+                "csv_requirement_count": len(timeframe_csv_requirements),
+            }
+        )
+
+    blocked_candidates: list[dict[str, Any]] = []
+    for candidate in sidecar_evidence_brief.get("candidates", []) or []:
+        evidence_status = str(candidate.get("evidence_status", ""))
+        validation = candidate.get("validation", {}) or {}
+        if "fresh_data_blocked" not in evidence_status and validation.get("validation_completed") is True:
+            continue
+        metric = candidate.get("metric_summary", {}) or {}
+        blocked_candidates.append(
+            {
+                "belief_id": candidate.get("belief_id", ""),
+                "product_role": candidate.get("product_role", ""),
+                "evidence_status": evidence_status,
+                "best_family_id": metric.get("best_family_id", ""),
+                "timeframe": metric.get("timeframe", ""),
+                "direction": metric.get("direction", ""),
+                "classification": metric.get("classification", ""),
+                "validation_route": validation.get("route", ""),
+                "validation_result": validation.get("validation_result", ""),
+                "required_tests": validation.get("required_tests", []),
+                "promotion_ceiling": candidate.get("promotion_ceiling", "shadow_candidate"),
+                "learning_classification": sidecar_learning_by_belief_id.get(
+                    str(candidate.get("belief_id", "")),
+                    {},
+                ).get("handling_classification", ""),
+                "learning_next_allowed_action": sidecar_learning_by_belief_id.get(
+                    str(candidate.get("belief_id", "")),
+                    {},
+                ).get("next_allowed_action", ""),
+                "production_effect": "none",
+            }
+        )
+
+    role_blockers = _fresh_data_role_blockers(role_task_queue)
+    safe_to_run = fresh_data_preflight.get("safe_to_run_fresh_validation") is True
+    manual_data_gate = sidecar_evidence_brief.get("manual_data_gate_active") is True or not safe_to_run
+    candidate_unlocks: list[dict[str, Any]] = []
+    for row in sidecar_unlock_rows:
+        if not isinstance(row, dict):
+            continue
+        belief_id = str(row.get("belief_id", ""))
+        learning = sidecar_learning_by_belief_id.get(belief_id, {})
+        candidate_unlocks.append(
+            {
+                "belief_id": belief_id,
+                "product_role": row.get("product_role", ""),
+                "learning_classification": learning.get("handling_classification", ""),
+                "champion": row.get("champion", ""),
+                "challenger": row.get("challenger", ""),
+                "unlock_status": row.get("unlock_status", ""),
+                "validation_authority": row.get("validation_authority", ""),
+                "required_timeframes": row.get("required_timeframes", ""),
+                "blocked_timeframes": row.get("blocked_timeframes", ""),
+                "csv_requirement_count": row.get("csv_requirement_count", ""),
+                "csv_requirement_actions": row.get("csv_requirement_actions", ""),
+                "next_allowed_action_after_unlock": row.get("next_allowed_action_after_unlock", ""),
+                "learning_next_allowed_action": learning.get("next_allowed_action", ""),
+                "stop_condition": row.get("stop_condition", ""),
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    if not candidate_unlocks:
+        for candidate in blocked_candidates:
+            belief_id = str(candidate.get("belief_id", ""))
+            learning = sidecar_learning_by_belief_id.get(belief_id, {})
+            candidate_unlocks.append(
+                {
+                    "belief_id": belief_id,
+                    "product_role": candidate.get("product_role", ""),
+                    "learning_classification": learning.get("handling_classification", ""),
+                    "champion": "",
+                    "challenger": "",
+                    "unlock_status": "missing_sidecar_data_gate_unlock_matrix",
+                    "validation_authority": "blocked_by_manual_data_gate" if manual_data_gate else "",
+                    "required_timeframes": _csv_list(
+                        [item.get("timeframe", "") for item in timeframe_requirements if item.get("timeframe")]
+                    ),
+                    "blocked_timeframes": _csv_list(
+                        [
+                            item.get("timeframe", "")
+                            for item in timeframe_requirements
+                            if item.get("status") not in {"ready", "ready_for_fresh_validation"}
+                        ]
+                    ),
+                    "csv_requirement_count": len(csv_requirements),
+                    "csv_requirement_actions": "",
+                    "next_allowed_action_after_unlock": "",
+                    "learning_next_allowed_action": learning.get("next_allowed_action", ""),
+                    "stop_condition": "",
+                    "product_language_allowed": False,
+                    "production_effect": "none",
+                }
+            )
+    lead_count = sidecar_candidate_learning_ledger.get("lead_post_data_candidate_count", 0)
+    control_count = sidecar_candidate_learning_ledger.get("diversity_control_only_count", 0)
+    archive_count = sidecar_candidate_learning_ledger.get("archive_failure_mode_count", 0)
+    review_count = sidecar_candidate_learning_ledger.get("review_only_candidate_count", 0)
+    blocked_count = sidecar_candidate_learning_ledger.get("quality_blocked_review_only_count", 0)
+    if not fresh_data_preflight:
+        status = "missing_fresh_data_preflight"
+        next_action = "run_fresh_data_preflight"
+    elif not safe_to_run:
+        status = "fresh_data_gate_blocked"
+        next_action = "import_or_curate_fresh_ohlcv_data"
+    elif sidecar_evidence_brief.get("manual_data_gate_active") is True:
+        status = "stale_sidecar_brief_after_data_refresh"
+        next_action = "rerun_sidecar_evidence_brief"
+    elif blocked_candidates:
+        status = "fresh_data_gate_clear_for_shadow_validation_planning"
+        next_action = "run_frozen_candidate_validation"
+    else:
+        status = "no_sidecar_data_gate_blockers"
+        next_action = "continue_evidence_review"
+
+    next_verification_command = f"PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id {ceo_run_id}"
+    return {
+        "model": CEO_DATA_GATE_BRIEF_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": status,
+        "universe": fresh_data_preflight.get("universe", ""),
+        "data_dir": data_dir,
+        "preflight_status": fresh_data_preflight.get("overall_status", "missing"),
+        "safe_to_run_fresh_validation": safe_to_run,
+        "manual_data_gate_active": manual_data_gate,
+        "required_timeframes": [item.get("timeframe", "") for item in timeframe_requirements if item.get("timeframe")],
+        "timeframe_requirements": timeframe_requirements,
+        "csv_requirement_count": len(csv_requirements),
+        "csv_requirements": csv_requirements,
+        "blocked_candidate_count": len(blocked_candidates),
+        "blocked_candidates": blocked_candidates,
+        "candidate_unlock_count": len(candidate_unlocks),
+        "candidate_unlocks": candidate_unlocks,
+        "candidate_unlock_table_status": (
+            sidecar_data_gate_unlock_matrix.get("status")
+            if sidecar_data_gate_unlock_matrix
+            else "missing_sidecar_data_gate_unlock_matrix"
+        ),
+        "sidecar_learning_status": sidecar_learning_status,
+        "sidecar_learning_candidate_count": sidecar_candidate_learning_ledger.get("candidate_count", 0),
+        "sidecar_learning_lead_count": lead_count,
+        "sidecar_learning_control_count": control_count,
+        "sidecar_learning_archive_count": archive_count,
+        "sidecar_learning_review_count": review_count,
+        "sidecar_learning_blocked_count": blocked_count,
+        "sidecar_learning_unlock_summary": (
+            f"Manual data refresh would unlock fresh/control review for {lead_count} lead candidate(s), "
+            f"diversity/fragility control review for {control_count} candidate(s), and preserve "
+            f"{archive_count} archived failure-mode candidate(s) as non-promotional learning."
+        ),
+        "fresh_data_role_blocker_count": len(role_blockers),
+        "fresh_data_role_blockers": role_blockers,
+        "next_action": next_action,
+        "next_verification_command": next_verification_command,
+        "operator_summary": (
+            "Fresh OHLCV coverage is required before warning/reset sidecar validation can proceed."
+            if manual_data_gate
+            else "Fresh data gate is clear; use downstream validation gates before any promotion language."
+        ),
+        "guardrail": (
+            "This brief is diagnostic only. It does not import OHLCV data, run validation, promote candidates, "
+            "or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_ceo_data_gate_brief(brief: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Data Gate Brief",
+        "",
+        f"Generated: {brief.get('generated_at')}",
+        f"Run: {brief.get('run_id')}",
+        f"Lab run: {brief.get('lab_run_id')}",
+        f"Status: {brief.get('status')}",
+        f"Universe: {brief.get('universe') or 'unknown'}",
+        f"Data dir: {brief.get('data_dir') or 'unknown'}",
+        f"Preflight status: {brief.get('preflight_status')}",
+        f"Safe to run fresh validation: {brief.get('safe_to_run_fresh_validation')}",
+        f"Manual data gate active: {brief.get('manual_data_gate_active')}",
+        f"CSV requirements: {brief.get('csv_requirement_count')}",
+        f"Blocked candidates: {brief.get('blocked_candidate_count')}",
+        f"Sidecar learning ledger: {brief.get('sidecar_learning_status')}",
+        (
+            "Sidecar learning lead/control/archive/review/blocked: "
+            f"{brief.get('sidecar_learning_lead_count')}/"
+            f"{brief.get('sidecar_learning_control_count')}/"
+            f"{brief.get('sidecar_learning_archive_count')}/"
+            f"{brief.get('sidecar_learning_review_count')}/"
+            f"{brief.get('sidecar_learning_blocked_count')}"
+        ),
+        f"Sidecar learning unlock summary: {brief.get('sidecar_learning_unlock_summary')}",
+        f"Fresh-data role blockers: {brief.get('fresh_data_role_blocker_count')}",
+        f"Next action: {brief.get('next_action')}",
+        f"Next verification command: {brief.get('next_verification_command')}",
+        "",
+        "## Timeframe Requirements",
+        "",
+    ]
+    for item in brief.get("timeframe_requirements", []) or []:
+        lines.append(
+            "- "
+            f"{item.get('timeframe')} status={item.get('status')} "
+            f"ready={item.get('ready_count')}/{item.get('asset_count')} "
+            f"missing={item.get('missing_count')} stale={item.get('stale_count')} "
+            f"load_failed={item.get('load_failure_count')} min_active={item.get('min_active_members')} "
+            f"csv_requirements={item.get('csv_requirement_count')}"
+        )
+    if not brief.get("timeframe_requirements"):
+        lines.append("- none")
+    lines.extend(["", "## Candidate Unlock Handoff", ""])
+    for row in brief.get("candidate_unlocks", []) or []:
+        lines.append(
+            "- "
+            f"{row.get('belief_id')} learning={row.get('learning_classification') or 'unknown'} "
+            f"unlock={row.get('unlock_status') or 'unknown'} "
+            f"authority={row.get('validation_authority') or 'unknown'} "
+            f"blocked_tfs={row.get('blocked_timeframes') or 'none'} "
+            f"next={row.get('next_allowed_action_after_unlock') or row.get('learning_next_allowed_action') or 'none'}"
+        )
+    if not brief.get("candidate_unlocks"):
+        lines.append("- none")
+    lines.extend(["", "## CSV Import Matrix", ""])
+    for requirement in brief.get("csv_requirements", []) or []:
+        lines.append(
+            "- "
+            f"{requirement.get('symbol')} tf={requirement.get('timeframe')} "
+            f"status={requirement.get('status')} action={requirement.get('required_action')} "
+            f"path={requirement.get('expected_path') or 'n/a'} "
+            f"latest={requirement.get('latest_date') or 'n/a'} "
+            f"age_days={requirement.get('age_days') if requirement.get('age_days') is not None else 'n/a'} "
+            f"limit={requirement.get('stale_limit_days') if requirement.get('stale_limit_days') is not None else 'n/a'}"
+        )
+    if not brief.get("csv_requirements"):
+        lines.append("- none")
+    lines.extend(["", "## Blocked Candidates", ""])
+    for candidate in brief.get("blocked_candidates", []) or []:
+        lines.append(
+            "- "
+            f"{candidate.get('belief_id')} role={candidate.get('product_role')} "
+            f"tf={candidate.get('timeframe') or 'n/a'} status={candidate.get('evidence_status')} "
+            f"validation={candidate.get('validation_result')} "
+            f"learning={candidate.get('learning_classification') or 'unknown'}"
+        )
+    if not brief.get("blocked_candidates"):
+        lines.append("- none")
+    lines.extend(["", "## Role Queue Blockers", ""])
+    for blocker in brief.get("fresh_data_role_blockers", []) or []:
+        lines.append(
+            "- "
+            f"{blocker.get('task_id')} role={blocker.get('role_id')} "
+            f"validation={blocker.get('validation_status') or 'unknown'} "
+            f"next={blocker.get('recommended_next_action') or blocker.get('owner_command')}"
+        )
+    if not brief.get("fresh_data_role_blockers"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(brief.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _ordered_unique_strings(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        item = str(value or "")
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def _count_strings(values: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        item = str(value or "")
+        if not item:
+            continue
+        counts[item] = counts.get(item, 0) + 1
+    return counts
+
+
+def _compact_counts(counts: dict[str, int]) -> str:
+    return "|".join(f"{key}:{counts[key]}" for key in sorted(counts))
+
+
+def _max_numeric(values: list[Any]) -> float | None:
+    numbers: list[float] = []
+    for value in values:
+        number = _safe_float(value)
+        if number is not None:
+            numbers.append(number)
+    return max(numbers) if numbers else None
+
+
+def _min_numeric(values: list[Any]) -> float | None:
+    numbers: list[float] = []
+    for value in values:
+        number = _safe_float(value)
+        if number is not None:
+            numbers.append(number)
+    return min(numbers) if numbers else None
+
+
+def build_ceo_data_gate_import_plan(brief: dict[str, Any]) -> dict[str, Any]:
+    requirements = [
+        row
+        for row in brief.get("csv_requirements", []) or []
+        if isinstance(row, dict)
+    ]
+    candidate_unlocks = [
+        row
+        for row in brief.get("candidate_unlocks", []) or []
+        if isinstance(row, dict)
+    ]
+    required_timeframes = _ordered_unique_strings(
+        list(brief.get("required_timeframes", []) or [])
+        + [row.get("timeframe", "") for row in requirements]
+    )
+    batches: list[dict[str, Any]] = []
+    for timeframe in required_timeframes:
+        rows = [row for row in requirements if str(row.get("timeframe", "")) == timeframe]
+        symbols = _ordered_unique_strings([row.get("symbol", "") for row in rows])
+        paths = _ordered_unique_strings([row.get("expected_path", "") for row in rows])
+        batches.append(
+            {
+                "batch_id": f"{timeframe}_csv_import_batch",
+                "timeframe": timeframe,
+                "requirement_count": len(rows),
+                "required_actions": _compact_counts(_count_strings([row.get("required_action", "") for row in rows])),
+                "status_counts": _compact_counts(_count_strings([row.get("status", "") for row in rows])),
+                "symbol_count": len(symbols),
+                "symbols": _csv_list(symbols),
+                "expected_path_count": len(paths),
+                "expected_paths": _csv_list(paths),
+                "max_age_days": _max_numeric([row.get("age_days") for row in rows]),
+                "stale_limit_days": _min_numeric([row.get("stale_limit_days") for row in rows]),
+                "readiness_after_batch": "rerun_fresh_data_preflight_before_any_validation",
+                "production_effect": "none",
+            }
+        )
+
+    lead_unlocks = [
+        row.get("belief_id", "")
+        for row in candidate_unlocks
+        if row.get("learning_classification") == "lead_post_data_candidate"
+    ]
+    control_unlocks = [
+        row.get("belief_id", "")
+        for row in candidate_unlocks
+        if row.get("learning_classification") == "diversity_control_only"
+    ]
+    archive_unlocks = [
+        row.get("belief_id", "")
+        for row in candidate_unlocks
+        if row.get("learning_classification") == "archive_failure_mode"
+    ]
+    verification_command = str(brief.get("next_verification_command") or "")
+    run_id = str(brief.get("run_id") or "")
+    post_import_sequence = [
+        f"Import or refresh all {len(requirements)} required OHLCV CSVs under {brief.get('data_dir') or 'data/raw'}.",
+        verification_command or "Run the fresh-data preflight for this CEO run.",
+        f"PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id {run_id}" if run_id else "Rerun the data-gate brief.",
+        f"PYTHONPATH=src python3 -m riskflow ceo sidecar-evidence-brief --run-id {run_id}" if run_id else "Rerun the sidecar evidence brief.",
+        "Only after preflight is safe, use the sidecar post-data validation playbook; do not promote from import completion alone.",
+    ]
+    status = "manual_data_import_required" if requirements else "no_data_import_required"
+    return {
+        "model": CEO_DATA_GATE_IMPORT_PLAN_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": run_id,
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": status,
+        "universe": brief.get("universe", ""),
+        "data_dir": brief.get("data_dir", ""),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "can_run_validation_now": False,
+        "required_timeframes": required_timeframes,
+        "required_batch_count": len(batches),
+        "required_csv_count": len(requirements),
+        "import_batches": batches,
+        "candidate_unlock_count": len(candidate_unlocks),
+        "lead_post_data_candidates": _csv_list(lead_unlocks),
+        "diversity_control_candidates": _csv_list(control_unlocks),
+        "archive_failure_mode_candidates": _csv_list(archive_unlocks),
+        "post_import_sequence": post_import_sequence,
+        "next_verification_command": verification_command,
+        "guardrail": (
+            "This import plan is a manual data handoff only. It does not import OHLCV data, run validation, "
+            "promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_ceo_data_gate_import_plan(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Data Gate Import Plan",
+        "",
+        f"Generated: {plan.get('generated_at')}",
+        f"Run: {plan.get('run_id')}",
+        f"Lab run: {plan.get('lab_run_id')}",
+        f"Status: {plan.get('status')}",
+        f"Universe: {plan.get('universe') or 'unknown'}",
+        f"Data dir: {plan.get('data_dir') or 'unknown'}",
+        f"Manual data gate active: {plan.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {plan.get('safe_to_run_fresh_validation')}",
+        f"Can run validation now: {plan.get('can_run_validation_now')}",
+        f"Required CSVs: {plan.get('required_csv_count')}",
+        f"Required batches: {plan.get('required_batch_count')}",
+        f"Candidate unlocks: {plan.get('candidate_unlock_count')}",
+        f"Next verification command: {plan.get('next_verification_command') or 'none'}",
+        "",
+        "## Import Batches",
+        "",
+    ]
+    for batch in plan.get("import_batches", []) or []:
+        lines.append(
+            "- "
+            f"{batch.get('batch_id')} timeframe={batch.get('timeframe')} "
+            f"requirements={batch.get('requirement_count')} actions={batch.get('required_actions') or 'none'} "
+            f"statuses={batch.get('status_counts') or 'none'} symbols={batch.get('symbols') or 'none'} "
+            f"max_age_days={batch.get('max_age_days') if batch.get('max_age_days') is not None else 'n/a'} "
+            f"limit_days={batch.get('stale_limit_days') if batch.get('stale_limit_days') is not None else 'n/a'}"
+        )
+    if not plan.get("import_batches"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Candidate Unlock Context",
+            "",
+            f"- Lead post-data candidates: {plan.get('lead_post_data_candidates') or 'none'}",
+            f"- Diversity/control candidates: {plan.get('diversity_control_candidates') or 'none'}",
+            f"- Archive failure-mode candidates: {plan.get('archive_failure_mode_candidates') or 'none'}",
+            "",
+            "## Post-Import Sequence",
+            "",
+        ]
+    )
+    for index, step in enumerate(plan.get("post_import_sequence", []) or [], start=1):
+        lines.append(f"{index}. {step}")
+    if not plan.get("post_import_sequence"):
+        lines.append("1. none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(plan.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+DATA_GATE_IMPORT_CHECKLIST_FIELDS = [
+    "checklist_id",
+    "batch_id",
+    "symbol",
+    "timeframe",
+    "current_status",
+    "required_action",
+    "expected_path",
+    "latest_date",
+    "age_days",
+    "stale_limit_days",
+    "row_count",
+    "import_status",
+    "import_instruction",
+    "after_import_verification_command",
+    "can_run_validation_after_row",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+def build_data_gate_import_checklist(brief: dict[str, Any]) -> dict[str, Any]:
+    requirements = [
+        row
+        for row in brief.get("csv_requirements", []) or []
+        if isinstance(row, dict)
+    ]
+    verification_command = str(brief.get("next_verification_command") or "")
+    rows: list[dict[str, Any]] = []
+    for index, requirement in enumerate(requirements, start=1):
+        symbol = str(requirement.get("symbol") or "")
+        timeframe = str(requirement.get("timeframe") or "")
+        status = str(requirement.get("status") or "")
+        required_action = str(requirement.get("required_action") or "")
+        expected_path = str(requirement.get("expected_path") or "")
+        import_status = "complete_ready" if status == "ready" else "pending_manual_import"
+        if status == "missing":
+            import_instruction = f"create_or_import_csv:{expected_path}"
+        elif status == "stale":
+            import_instruction = f"refresh_csv:{expected_path}"
+        elif required_action:
+            import_instruction = f"{required_action}:{expected_path}"
+        else:
+            import_instruction = f"verify_csv:{expected_path}"
+        rows.append(
+            {
+                "checklist_id": f"{index:03d}_{symbol}_{timeframe}",
+                "batch_id": f"{timeframe}_csv_import_batch" if timeframe else "",
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "current_status": status,
+                "required_action": required_action,
+                "expected_path": expected_path,
+                "latest_date": requirement.get("latest_date", ""),
+                "age_days": requirement.get("age_days", ""),
+                "stale_limit_days": requirement.get("stale_limit_days", ""),
+                "row_count": requirement.get("row_count", ""),
+                "import_status": import_status,
+                "import_instruction": import_instruction,
+                "after_import_verification_command": verification_command,
+                "can_run_validation_after_row": False,
+                "product_language_allowed": False,
+                "production_effect": "none",
+            }
+        )
+    status_counts = _count_strings([row.get("current_status", "") for row in rows])
+    action_counts = _count_strings([row.get("required_action", "") for row in rows])
+    import_status_counts = _count_strings([row.get("import_status", "") for row in rows])
+    return {
+        "model": CEO_DATA_GATE_IMPORT_CHECKLIST_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "manual_data_import_checklist" if rows else "no_data_import_checklist_rows",
+        "universe": brief.get("universe", ""),
+        "data_dir": brief.get("data_dir", ""),
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "can_run_validation_now": False,
+        "csv_requirement_count": len(requirements),
+        "checklist_row_count": len(rows),
+        "pending_import_count": sum(1 for row in rows if row.get("import_status") == "pending_manual_import"),
+        "complete_ready_count": sum(1 for row in rows if row.get("import_status") == "complete_ready"),
+        "symbol_count": len(_ordered_unique_strings([row.get("symbol", "") for row in rows])),
+        "timeframe_count": len(_ordered_unique_strings([row.get("timeframe", "") for row in rows])),
+        "required_timeframes": _ordered_unique_strings([row.get("timeframe", "") for row in rows]),
+        "status_counts": _compact_counts(status_counts),
+        "required_action_counts": _compact_counts(action_counts),
+        "import_status_counts": _compact_counts(import_status_counts),
+        "next_verification_command": verification_command,
+        "rows": rows,
+        "guardrail": (
+            "This checklist is a manual data handoff only. It does not import OHLCV data, run validation, "
+            "promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_data_gate_import_checklist(path: Path, checklist: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATA_GATE_IMPORT_CHECKLIST_FIELDS)
+        writer.writeheader()
+        for row in checklist.get("rows", []) or []:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in DATA_GATE_IMPORT_CHECKLIST_FIELDS
+                }
+            )
+
+
+def render_data_gate_import_checklist(checklist: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Data Gate Import Checklist",
+        "",
+        f"Generated: {checklist.get('generated_at')}",
+        f"Run: {checklist.get('run_id')}",
+        f"Lab run: {checklist.get('lab_run_id')}",
+        f"Status: {checklist.get('status')}",
+        f"Universe: {checklist.get('universe') or 'unknown'}",
+        f"Data dir: {checklist.get('data_dir') or 'unknown'}",
+        f"Manual data gate active: {checklist.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {checklist.get('safe_to_run_fresh_validation')}",
+        f"Can run validation now: {checklist.get('can_run_validation_now')}",
+        f"Checklist rows: {checklist.get('checklist_row_count')}",
+        f"Pending imports: {checklist.get('pending_import_count')}",
+        f"Complete/ready rows: {checklist.get('complete_ready_count')}",
+        f"Symbols: {checklist.get('symbol_count')}",
+        f"Timeframes: {checklist.get('timeframe_count')}",
+        f"Required timeframes: {_csv_list(checklist.get('required_timeframes', []) or []) or 'none'}",
+        f"Current status counts: {checklist.get('status_counts') or 'none'}",
+        f"Required action counts: {checklist.get('required_action_counts') or 'none'}",
+        f"Import status counts: {checklist.get('import_status_counts') or 'none'}",
+        f"Next verification command: {checklist.get('next_verification_command') or 'none'}",
+        "",
+        "## Checklist Rows",
+        "",
+    ]
+    for row in checklist.get("rows", []) or []:
+        lines.append(
+            "- "
+            f"{row.get('checklist_id')} {row.get('symbol')} {row.get('timeframe')} "
+            f"status={row.get('current_status') or 'none'} "
+            f"action={row.get('required_action') or 'none'} "
+            f"path={row.get('expected_path') or 'none'} "
+            f"import_status={row.get('import_status') or 'none'}"
+        )
+    if not checklist.get("rows"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(checklist.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _audit_check(check_id: str, *, expected: Any, actual: Any, passed: bool, detail: str) -> dict[str, Any]:
+    return {
+        "check_id": check_id,
+        "status": "pass" if passed else "fail",
+        "expected": expected,
+        "actual": actual,
+        "detail": detail,
+        "production_effect": "none",
+    }
+
+
+def build_data_gate_handoff_audit(
+    *,
+    brief: dict[str, Any],
+    import_plan: dict[str, Any],
+    import_checklist: dict[str, Any],
+    symbol_matrix: dict[str, Any],
+) -> dict[str, Any]:
+    requirements = [
+        row
+        for row in brief.get("csv_requirements", []) or []
+        if isinstance(row, dict)
+    ]
+    checklist_rows = [
+        row
+        for row in import_checklist.get("rows", []) or []
+        if isinstance(row, dict)
+    ]
+    non_ready_requirement_count = sum(1 for row in requirements if row.get("status") != "ready")
+    import_batch_requirement_sum = sum(
+        int(batch.get("requirement_count", 0) or 0)
+        for batch in import_plan.get("import_batches", []) or []
+        if isinstance(batch, dict)
+    )
+    symbol_matrix_requirement_sum = sum(
+        int(row.get("requirement_count", 0) or 0)
+        for row in symbol_matrix.get("rows", []) or []
+        if isinstance(row, dict)
+    )
+    checklist_row_count = len(checklist_rows)
+    checklist_pending_count = int(import_checklist.get("pending_import_count", 0) or 0)
+    checklist_paths = {str(row.get("expected_path", "")) for row in checklist_rows if row.get("expected_path")}
+    requirement_paths = {str(row.get("expected_path", "")) for row in requirements if row.get("expected_path")}
+    all_rows_guarded = all(
+        row.get("can_run_validation_after_row") is False
+        and row.get("product_language_allowed") is False
+        and row.get("production_effect") == "none"
+        for row in checklist_rows
+    )
+    verification_command = str(import_checklist.get("next_verification_command") or "")
+    all_rows_have_verification_command = bool(verification_command) and all(
+        str(row.get("after_import_verification_command") or "") == verification_command
+        for row in checklist_rows
+    )
+    checks = [
+        _audit_check(
+            "csv_requirement_count_matches_checklist",
+            expected=len(requirements),
+            actual=checklist_row_count,
+            passed=len(requirements) == checklist_row_count,
+            detail="The manual import checklist must have one row per CSV requirement.",
+        ),
+        _audit_check(
+            "checklist_pending_matches_non_ready_requirements",
+            expected=non_ready_requirement_count,
+            actual=checklist_pending_count,
+            passed=non_ready_requirement_count == checklist_pending_count,
+            detail="Pending manual imports should equal non-ready preflight requirements.",
+        ),
+        _audit_check(
+            "import_plan_required_csv_count_matches_checklist",
+            expected=import_plan.get("required_csv_count", ""),
+            actual=checklist_row_count,
+            passed=int(import_plan.get("required_csv_count", 0) or 0) == checklist_row_count,
+            detail="The import-plan total must agree with checklist row count.",
+        ),
+        _audit_check(
+            "import_batch_requirement_sum_matches_checklist",
+            expected=checklist_row_count,
+            actual=import_batch_requirement_sum,
+            passed=import_batch_requirement_sum == checklist_row_count,
+            detail="The sum of import batch requirements must agree with checklist row count.",
+        ),
+        _audit_check(
+            "symbol_matrix_requirement_sum_matches_checklist",
+            expected=checklist_row_count,
+            actual=symbol_matrix_requirement_sum,
+            passed=symbol_matrix_requirement_sum == checklist_row_count,
+            detail="The sum of symbol-matrix requirements must agree with checklist row count.",
+        ),
+        _audit_check(
+            "checklist_paths_match_requirement_paths",
+            expected=len(requirement_paths),
+            actual=len(checklist_paths),
+            passed=checklist_paths == requirement_paths,
+            detail="Checklist expected paths must match CSV requirement expected paths.",
+        ),
+        _audit_check(
+            "checklist_rows_have_verification_command",
+            expected=True,
+            actual=all_rows_have_verification_command,
+            passed=all_rows_have_verification_command or checklist_row_count == 0,
+            detail="Each checklist row should point to the same post-import preflight command.",
+        ),
+        _audit_check(
+            "checklist_rows_are_handoff_only",
+            expected=True,
+            actual=all_rows_guarded,
+            passed=all_rows_guarded,
+            detail="Checklist rows must not claim validation, product language, or production effect authority.",
+        ),
+    ]
+    issues = [check for check in checks if check.get("status") != "pass"]
+    return {
+        "model": CEO_DATA_GATE_HANDOFF_AUDIT_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": "pass_data_gate_handoff_consistency" if not issues else "fail_data_gate_handoff_consistency",
+        "check_count": len(checks),
+        "issue_count": len(issues),
+        "checks": checks,
+        "issues": issues,
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "authority_scope": "data-gate handoff artifact consistency only",
+        "guardrail": (
+            "This audit only checks consistency among manual data-gate handoff artifacts. It does not import "
+            "OHLCV data, run validation, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def render_data_gate_handoff_audit(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Data Gate Handoff Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Run: {audit.get('run_id')}",
+        f"Lab run: {audit.get('lab_run_id')}",
+        f"Status: {audit.get('status')}",
+        f"Checks/issues: {audit.get('check_count')}/{audit.get('issue_count')}",
+        f"Manual data gate active: {audit.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {audit.get('safe_to_run_fresh_validation')}",
+        f"Authority scope: {audit.get('authority_scope')}",
+        "",
+        "## Checks",
+        "",
+    ]
+    for check in audit.get("checks", []) or []:
+        lines.append(
+            "- "
+            f"{check.get('status')} {check.get('check_id')} "
+            f"expected={check.get('expected')} actual={check.get('actual')}"
+        )
+    if not audit.get("checks"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(audit.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+DATA_GATE_SYMBOL_MATRIX_MODEL = "riskflow_ceo_data_gate_symbol_matrix_v0"
+
+
+DATA_GATE_SYMBOL_MATRIX_FIELDS = [
+    "symbol",
+    "requirement_count",
+    "required_timeframes",
+    "status_counts",
+    "required_actions",
+    "missing_count",
+    "stale_count",
+    "ready_count",
+    "expected_path_count",
+    "expected_paths",
+    "max_age_days",
+    "stale_limit_days",
+    "next_action",
+    "production_effect",
+]
+
+
+def build_data_gate_symbol_matrix(brief: dict[str, Any]) -> dict[str, Any]:
+    requirements = [
+        row
+        for row in brief.get("csv_requirements", []) or []
+        if isinstance(row, dict)
+    ]
+    rows: list[dict[str, Any]] = []
+    for symbol in _ordered_unique_strings([row.get("symbol", "") for row in requirements]):
+        symbol_rows = [row for row in requirements if str(row.get("symbol", "")) == symbol]
+        statuses = _count_strings([row.get("status", "") for row in symbol_rows])
+        paths = _ordered_unique_strings([row.get("expected_path", "") for row in symbol_rows])
+        stale_limit_days = _min_numeric([row.get("stale_limit_days") for row in symbol_rows])
+        rows.append(
+            {
+                "symbol": symbol,
+                "requirement_count": len(symbol_rows),
+                "required_timeframes": _csv_list(
+                    _ordered_unique_strings([row.get("timeframe", "") for row in symbol_rows])
+                ),
+                "status_counts": _compact_counts(statuses),
+                "required_actions": _compact_counts(_count_strings([row.get("required_action", "") for row in symbol_rows])),
+                "missing_count": statuses.get("missing", 0),
+                "stale_count": statuses.get("stale", 0),
+                "ready_count": statuses.get("ready", 0),
+                "expected_path_count": len(paths),
+                "expected_paths": _csv_list(paths),
+                "max_age_days": _max_numeric([row.get("age_days") for row in symbol_rows]),
+                "stale_limit_days": stale_limit_days,
+                "next_action": "import_or_refresh_symbol_timeframe_csvs",
+                "production_effect": "none",
+            }
+        )
+    status = "manual_data_gate_symbol_matrix" if rows else "no_symbol_requirements"
+    return {
+        "model": DATA_GATE_SYMBOL_MATRIX_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": brief.get("run_id", ""),
+        "lab_run_id": brief.get("lab_run_id", ""),
+        "status": status,
+        "manual_data_gate_active": brief.get("manual_data_gate_active"),
+        "safe_to_run_fresh_validation": brief.get("safe_to_run_fresh_validation"),
+        "symbol_count": len(rows),
+        "requirement_count": len(requirements),
+        "required_timeframes": brief.get("required_timeframes", []),
+        "rows": rows,
+        "guardrail": (
+            "This symbol matrix is a manual data handoff only. It does not import OHLCV data, run validation, "
+            "promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def write_data_gate_symbol_matrix(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATA_GATE_SYMBOL_MATRIX_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in DATA_GATE_SYMBOL_MATRIX_FIELDS
+                }
+            )
+
+
+def render_data_gate_symbol_matrix(matrix: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Data Gate Symbol Matrix",
+        "",
+        f"Generated: {matrix.get('generated_at')}",
+        f"Run: {matrix.get('run_id')}",
+        f"Lab run: {matrix.get('lab_run_id')}",
+        f"Status: {matrix.get('status')}",
+        f"Manual data gate active: {matrix.get('manual_data_gate_active')}",
+        f"Safe to run fresh validation: {matrix.get('safe_to_run_fresh_validation')}",
+        f"Symbols: {matrix.get('symbol_count')}",
+        f"CSV requirements: {matrix.get('requirement_count')}",
+        f"Required timeframes: {matrix.get('required_timeframes') or []}",
+        "",
+        "## Symbol Requirements",
+        "",
+    ]
+    for row in matrix.get("rows", []) or []:
+        lines.append(
+            "- "
+            f"{row.get('symbol')} requirements={row.get('requirement_count')} "
+            f"timeframes={row.get('required_timeframes') or 'none'} "
+            f"statuses={row.get('status_counts') or 'none'} "
+            f"actions={row.get('required_actions') or 'none'} "
+            f"paths={row.get('expected_paths') or 'none'}"
+        )
+    if not matrix.get("rows"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(matrix.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+DATA_GATE_CSV_REQUIREMENT_FIELDS = [
+    "symbol",
+    "timeframe",
+    "status",
+    "required_action",
+    "expected_path",
+    "latest_date",
+    "age_days",
+    "stale_limit_days",
+    "row_count",
+    "production_effect",
+]
+
+
+DATA_GATE_CANDIDATE_UNLOCK_FIELDS = [
+    "belief_id",
+    "product_role",
+    "learning_classification",
+    "champion",
+    "challenger",
+    "unlock_status",
+    "validation_authority",
+    "required_timeframes",
+    "blocked_timeframes",
+    "csv_requirement_count",
+    "csv_requirement_actions",
+    "next_allowed_action_after_unlock",
+    "learning_next_allowed_action",
+    "stop_condition",
+    "product_language_allowed",
+    "production_effect",
+]
+
+
+DATA_GATE_IMPORT_BATCH_FIELDS = [
+    "batch_id",
+    "timeframe",
+    "requirement_count",
+    "required_actions",
+    "status_counts",
+    "symbol_count",
+    "symbols",
+    "expected_path_count",
+    "expected_paths",
+    "max_age_days",
+    "stale_limit_days",
+    "readiness_after_batch",
+    "production_effect",
+]
+
+
+def write_data_gate_csv_requirements(path: Path, requirements: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATA_GATE_CSV_REQUIREMENT_FIELDS)
+        writer.writeheader()
+        for requirement in requirements:
+            writer.writerow(
+                {
+                    field: "" if requirement.get(field) is None else requirement.get(field, "")
+                    for field in DATA_GATE_CSV_REQUIREMENT_FIELDS
+                }
+            )
+
+
+def write_data_gate_candidate_unlocks(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATA_GATE_CANDIDATE_UNLOCK_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: "" if row.get(field) is None else row.get(field, "")
+                    for field in DATA_GATE_CANDIDATE_UNLOCK_FIELDS
+                }
+            )
+
+
+def write_data_gate_import_batches(path: Path, batches: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATA_GATE_IMPORT_BATCH_FIELDS)
+        writer.writeheader()
+        for batch in batches:
+            writer.writerow(
+                {
+                    field: "" if batch.get(field) is None else batch.get(field, "")
+                    for field in DATA_GATE_IMPORT_BATCH_FIELDS
+                }
+            )
+
+
+def run_ceo_data_gate_brief(options: CeoOpsOptions) -> dict[str, Any]:
+    ceo_run_id = resolve_ceo_run_id(options)
+    lab_run_id = resolve_lab_run_id(options, ceo_run_id)
+    root = ceo_dir(options, ceo_run_id)
+    root.mkdir(parents=True, exist_ok=True)
+    fresh_data_preflight = _load_yaml_if_exists(root / "fresh_data_preflight.yaml")
+    sidecar_evidence_brief = _load_yaml_if_exists(root / "sidecar_evidence_brief.yaml")
+    sidecar_candidate_learning_ledger = _load_yaml_if_exists(root / "sidecar_candidate_learning_ledger.yaml")
+    sidecar_data_gate_unlock_matrix = _load_yaml_if_exists(root / "sidecar_data_gate_unlock_matrix.yaml")
+    if not sidecar_data_gate_unlock_matrix and sidecar_evidence_brief:
+        sidecar_data_gate_unlock_matrix = build_sidecar_data_gate_unlock_matrix(
+            brief=sidecar_evidence_brief,
+            fresh_data_preflight=fresh_data_preflight,
+        )
+    role_task_queue = _load_yaml_if_exists(root / "role_task_queue.yaml")
+    brief = build_ceo_data_gate_brief(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        fresh_data_preflight=fresh_data_preflight,
+        sidecar_evidence_brief=sidecar_evidence_brief,
+        sidecar_candidate_learning_ledger=sidecar_candidate_learning_ledger,
+        sidecar_data_gate_unlock_matrix=sidecar_data_gate_unlock_matrix,
+        role_task_queue=role_task_queue,
+    )
+    brief_path = root / "data_gate_brief.yaml"
+    report_path = root / "data_gate_brief.md"
+    csv_requirements_path = root / "data_gate_csv_requirements.csv"
+    candidate_unlocks_path = root / "data_gate_candidate_unlocks.csv"
+    import_plan_path = root / "data_gate_import_plan.yaml"
+    import_plan_report_path = root / "data_gate_import_plan.md"
+    import_batches_path = root / "data_gate_import_batches.csv"
+    import_plan = build_ceo_data_gate_import_plan(brief)
+    import_checklist_path = root / "data_gate_import_checklist.csv"
+    import_checklist_yaml_path = root / "data_gate_import_checklist.yaml"
+    import_checklist_report_path = root / "data_gate_import_checklist.md"
+    import_checklist = build_data_gate_import_checklist(brief)
+    symbol_matrix_path = root / "data_gate_symbol_matrix.csv"
+    symbol_matrix_report_path = root / "data_gate_symbol_matrix.md"
+    symbol_matrix = build_data_gate_symbol_matrix(brief)
+    handoff_audit_path = root / "data_gate_handoff_audit.yaml"
+    handoff_audit_report_path = root / "data_gate_handoff_audit.md"
+    handoff_audit = build_data_gate_handoff_audit(
+        brief=brief,
+        import_plan=import_plan,
+        import_checklist=import_checklist,
+        symbol_matrix=symbol_matrix,
+    )
+    atomic_write_yaml(brief_path, brief)
+    atomic_write_text(report_path, render_ceo_data_gate_brief(brief))
+    write_data_gate_csv_requirements(csv_requirements_path, brief.get("csv_requirements", []) or [])
+    write_data_gate_candidate_unlocks(candidate_unlocks_path, brief.get("candidate_unlocks", []) or [])
+    atomic_write_yaml(import_plan_path, import_plan)
+    atomic_write_text(import_plan_report_path, render_ceo_data_gate_import_plan(import_plan))
+    write_data_gate_import_batches(import_batches_path, import_plan.get("import_batches", []) or [])
+    write_data_gate_import_checklist(import_checklist_path, import_checklist)
+    atomic_write_yaml(import_checklist_yaml_path, import_checklist)
+    atomic_write_text(import_checklist_report_path, render_data_gate_import_checklist(import_checklist))
+    write_data_gate_symbol_matrix(symbol_matrix_path, symbol_matrix.get("rows", []) or [])
+    atomic_write_text(symbol_matrix_report_path, render_data_gate_symbol_matrix(symbol_matrix))
+    atomic_write_yaml(handoff_audit_path, handoff_audit)
+    atomic_write_text(handoff_audit_report_path, render_data_gate_handoff_audit(handoff_audit))
+    return {
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "brief": brief,
+        "import_plan": import_plan,
+        "import_checklist": import_checklist,
+        "symbol_matrix": symbol_matrix,
+        "handoff_audit": handoff_audit,
+        "paths": {
+            "data_gate_brief": brief_path,
+            "data_gate_brief_report": report_path,
+            "data_gate_csv_requirements": csv_requirements_path,
+            "data_gate_candidate_unlocks": candidate_unlocks_path,
+            "data_gate_import_plan": import_plan_path,
+            "data_gate_import_plan_report": import_plan_report_path,
+            "data_gate_import_batches": import_batches_path,
+            "data_gate_import_checklist": import_checklist_path,
+            "data_gate_import_checklist_yaml": import_checklist_yaml_path,
+            "data_gate_import_checklist_report": import_checklist_report_path,
+            "data_gate_symbol_matrix": symbol_matrix_path,
+            "data_gate_symbol_matrix_report": symbol_matrix_report_path,
+            "data_gate_handoff_audit": handoff_audit_path,
+            "data_gate_handoff_audit_report": handoff_audit_report_path,
+        },
+    }
 
 
 def _freshness_limit_days(timeframe: str) -> float:
@@ -6184,6 +18507,20 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
     trace_grade = _load_yaml_if_exists(root / "trace_grade.yaml")
     approval_queue = _load_yaml_if_exists(root / "approval_queue.yaml")
     approval_status = _load_yaml_if_exists(root / "approval_status.yaml")
+    sidecar_evidence_brief = _load_yaml_if_exists(root / "sidecar_evidence_brief.yaml")
+    sidecar_champion_challenger_quality = _load_yaml_if_exists(root / "sidecar_champion_challenger_quality_audit.yaml")
+    sidecar_quality_remediation_plan = _load_yaml_if_exists(root / "sidecar_quality_remediation_plan.yaml")
+    sidecar_consistency_audit = _load_yaml_if_exists(root / "sidecar_evidence_consistency_audit.yaml")
+    sidecar_current_decision_packet = _load_yaml_if_exists(root / "sidecar_current_decision_packet.yaml")
+    sidecar_guardrail_audit = _load_yaml_if_exists(root / "sidecar_shadow_guardrail_audit.yaml")
+    sidecar_source_health = _load_yaml_if_exists(root / "sidecar_evidence_source_health.yaml")
+    sidecar_source_fingerprints = _load_yaml_if_exists(root / "sidecar_evidence_source_fingerprints.yaml")
+    sidecar_candidate_learning_ledger = _load_yaml_if_exists(root / "sidecar_candidate_learning_ledger.yaml")
+    sidecar_post_data_playbook = _load_yaml_if_exists(root / "sidecar_post_data_validation_playbook.yaml")
+    sidecar_visual_label_rubric = _load_yaml_if_exists(root / "sidecar_visual_label_rubric.yaml")
+    sidecar_visual_label_completion_audit = _load_yaml_if_exists(root / "sidecar_visual_label_completion_audit.yaml")
+    evidence_debt_register = _load_yaml_if_exists(root / "evidence_debt_register.yaml")
+    data_gate_brief = _load_yaml_if_exists(root / "data_gate_brief.yaml")
     role_queue = _load_yaml_if_exists(root / "role_task_queue.yaml")
     role_result_validation = _load_yaml_if_exists(root / "role_result_validation.yaml")
     action_board_primary = action_board.get("primary_action", {}) or {}
@@ -6198,6 +18535,63 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
     )
     live_stop_requested = status.get("stop_requested") is True
     live_stop_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {ceo_run_id}"
+    approval_pending_count = _safe_int(approval_queue.get("pending_count", approval_status.get("pending_count", 0))) or 0
+    data_gate_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id {ceo_run_id}"
+    repair_apply_required = _repair_apply_required_by_current_plan(repair_plan)
+    repair_apply_status = repair_apply.get("status", "")
+    if not repair_apply_status:
+        repair_apply_status = (
+            "missing_repair_apply"
+            if repair_apply_required
+            else "not_required_by_current_repair_plan"
+        )
+    manual_data_gate_active = (
+        data_gate_brief.get("manual_data_gate_active") is True
+        or data_gate_brief.get("status") == "fresh_data_gate_blocked"
+        or data_gate_brief.get("next_action") == "import_or_curate_fresh_ohlcv_data"
+    )
+    sidecar_visual_review_top = _sidecar_visual_review_top_action(sidecar_evidence_brief)
+    sidecar_visual_coverage_path = root / "sidecar_visual_review_coverage.csv"
+    sidecar_visual_coverage_summary = _sidecar_visual_review_coverage_csv_summary(sidecar_visual_coverage_path)
+    sidecar_visual_label_worklist_path = root / "sidecar_visual_label_worklist.csv"
+    sidecar_visual_label_worklist_summary = _sidecar_visual_label_worklist_csv_summary(
+        sidecar_visual_label_worklist_path
+    )
+    sidecar_visual_label_batches_path = root / "sidecar_visual_label_review_batches.csv"
+    sidecar_visual_label_batches_summary = _sidecar_visual_label_batches_csv_summary(
+        sidecar_visual_label_batches_path
+    )
+    sidecar_visual_label_progress_path = root / "sidecar_visual_label_progress.csv"
+    sidecar_visual_label_progress_summary = _sidecar_visual_label_progress_csv_summary(
+        sidecar_visual_label_progress_path
+    )
+    sidecar_visual_label_next_batch_path = root / "sidecar_visual_label_next_batch.csv"
+    sidecar_visual_label_next_batch_summary = _sidecar_visual_label_next_batch_csv_summary(
+        sidecar_visual_label_next_batch_path
+    )
+    sidecar_visual_label_decision_context = _load_yaml_if_exists(
+        root / "sidecar_visual_label_decision_context.yaml"
+    )
+    sidecar_visual_label_entry_sheet_path = root / "sidecar_visual_label_entry_sheet.csv"
+    sidecar_visual_label_entry_sheet_summary = _sidecar_visual_label_entry_sheet_csv_summary(
+        sidecar_visual_label_entry_sheet_path
+    )
+    sidecar_visual_label_source_update_manifest_path = root / "sidecar_visual_label_source_update_manifest.csv"
+    sidecar_visual_label_source_update_manifest_summary = (
+        _sidecar_visual_label_source_update_manifest_csv_summary(
+            sidecar_visual_label_source_update_manifest_path
+        )
+    )
+    sidecar_visual_label_source_patch_plan_path = root / "sidecar_visual_label_source_patch_plan.csv"
+    sidecar_visual_label_source_patch_plan_summary = _sidecar_visual_label_source_patch_plan_csv_summary(
+        sidecar_visual_label_source_patch_plan_path
+    )
+    data_gate_import_checklist_path = root / "data_gate_import_checklist.csv"
+    data_gate_import_checklist_summary = _data_gate_import_checklist_csv_summary(
+        data_gate_import_checklist_path
+    )
+    data_gate_handoff_audit = _load_yaml_if_exists(root / "data_gate_handoff_audit.yaml")
+    sidecar_learning_summary = _sidecar_learning_action_summary(sidecar_candidate_learning_ledger)
     if live_stop_requested:
         effective_operator = {
             **effective_operator,
@@ -6214,6 +18608,10 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
         default_handoff_command = live_stop_handoff_command
         default_handoff_reason = "live_stop_requested"
         resumption_status = "blocked_stop_requested"
+    elif manual_data_gate_active and approval_pending_count == 0:
+        default_handoff_command = data_gate_handoff_command
+        default_handoff_reason = "manual_data_gate"
+        resumption_status = resumption_brief.get("resume_status", "missing_resumption_brief")
     else:
         default_handoff_command = resumption_next_command or f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {ceo_run_id}"
         default_handoff_reason = "resumption_brief" if resumption_next_command else "missing_resumption_brief"
@@ -6265,7 +18663,7 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
         "top_repair": repair_plan.get("top_repair", ""),
         "top_repair_kind": repair_plan.get("top_repair_kind", ""),
         "repair_next_command": repair_plan.get("next_command", ""),
-        "repair_apply_status": repair_apply.get("status", "missing_repair_apply"),
+        "repair_apply_status": repair_apply_status,
         "repair_apply_key": repair_apply.get("repair_key", ""),
         "repair_apply_executed": repair_apply.get("action_executed", ""),
         "repair_apply_closed": repair_apply.get("repair_closed", ""),
@@ -6325,6 +18723,678 @@ def run_ceo_status(options: CeoOpsOptions) -> dict[str, Any]:
             else operator_brief.get("plain_english_summary", "")
         ),
         "operator_brief_next_action": live_stop_handoff_command if live_stop_requested else operator_brief.get("recommended_next_action", ""),
+        "sidecar_evidence_brief_status": sidecar_evidence_brief.get("status", "missing_sidecar_evidence_brief"),
+        "sidecar_candidate_count": sidecar_evidence_brief.get("candidate_count", ""),
+        "sidecar_ready_visual_review_count": sidecar_evidence_brief.get("ready_visual_review_count", ""),
+        "sidecar_fresh_data_blocked_count": sidecar_evidence_brief.get("fresh_data_blocked_count", ""),
+        "sidecar_review_only_frozen_spec_count": sidecar_evidence_brief.get("review_only_frozen_spec_count", ""),
+        "sidecar_official_frozen_plan_exists": sidecar_evidence_brief.get("official_frozen_candidate_validation_plan_exists", ""),
+        "sidecar_official_frozen_plan_status": sidecar_evidence_brief.get("official_frozen_candidate_validation_plan_status", ""),
+        "sidecar_manual_data_gate_active": sidecar_evidence_brief.get("manual_data_gate_active", ""),
+        "sidecar_safe_to_run_fresh_validation": sidecar_evidence_brief.get("safe_to_run_fresh_validation", ""),
+        "sidecar_next_action": sidecar_evidence_brief.get("next_action", ""),
+        "sidecar_evidence_brief_report": str(root / "sidecar_evidence_brief.md") if sidecar_evidence_brief else "",
+        "sidecar_evidence_candidate_table": str(root / "sidecar_evidence_candidates.csv") if sidecar_evidence_brief else "",
+        "sidecar_visual_review_handoff_count": sidecar_evidence_brief.get("ready_visual_review_count", ""),
+        "sidecar_visual_review_handoff_table": str(root / "sidecar_visual_review_handoff.csv") if sidecar_evidence_brief else "",
+        "sidecar_visual_review_coverage": str(sidecar_visual_coverage_path) if sidecar_visual_coverage_summary else "",
+        "sidecar_visual_review_coverage_report": (
+            str(root / "sidecar_visual_review_coverage.md")
+            if sidecar_visual_coverage_summary and (root / "sidecar_visual_review_coverage.md").exists()
+            else ""
+        ),
+        "sidecar_visual_review_coverage_row_count": sidecar_visual_coverage_summary.get("row_count", ""),
+        "sidecar_visual_review_coverage_ready_count": sidecar_visual_coverage_summary.get("ready_count", ""),
+        "sidecar_visual_review_coverage_missing_count": sidecar_visual_coverage_summary.get("missing_count", ""),
+        "sidecar_visual_review_coverage_empty_label_count": sidecar_visual_coverage_summary.get(
+            "empty_label_count",
+            "",
+        ),
+        "sidecar_visual_review_human_review_started_count": sidecar_visual_coverage_summary.get(
+            "human_review_started_count",
+            "",
+        ),
+        "sidecar_visual_review_human_review_pending_count": sidecar_visual_coverage_summary.get(
+            "human_review_pending_count",
+            "",
+        ),
+        "sidecar_visual_label_worklist": (
+            str(sidecar_visual_label_worklist_path) if sidecar_visual_label_worklist_summary else ""
+        ),
+        "sidecar_visual_label_worklist_report": (
+            str(root / "sidecar_visual_label_worklist.md")
+            if sidecar_visual_label_worklist_summary and (root / "sidecar_visual_label_worklist.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_worklist_row_count": sidecar_visual_label_worklist_summary.get("row_count", ""),
+        "sidecar_visual_label_worklist_candidate_count": sidecar_visual_label_worklist_summary.get(
+            "candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_worklist_exact_variant_count": sidecar_visual_label_worklist_summary.get(
+            "exact_variant_count",
+            "",
+        ),
+        "sidecar_visual_label_worklist_family_timeframe_count": sidecar_visual_label_worklist_summary.get(
+            "family_timeframe_count",
+            "",
+        ),
+        "sidecar_visual_label_worklist_family_context_count": sidecar_visual_label_worklist_summary.get(
+            "family_context_count",
+            "",
+        ),
+        "sidecar_visual_label_review_batches": (
+            str(sidecar_visual_label_batches_path) if sidecar_visual_label_batches_summary else ""
+        ),
+        "sidecar_visual_label_review_batches_report": (
+            str(root / "sidecar_visual_label_review_batches.md")
+            if sidecar_visual_label_batches_summary and (root / "sidecar_visual_label_review_batches.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_review_batch_count": sidecar_visual_label_batches_summary.get("batch_count", ""),
+        "sidecar_visual_label_review_batch_row_count": sidecar_visual_label_batches_summary.get("row_count", ""),
+        "sidecar_visual_label_review_batch_candidate_count": sidecar_visual_label_batches_summary.get(
+            "candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_review_batch_exact_variant_count": sidecar_visual_label_batches_summary.get(
+            "exact_variant_count",
+            "",
+        ),
+        "sidecar_visual_label_review_batch_family_timeframe_count": sidecar_visual_label_batches_summary.get(
+            "family_timeframe_count",
+            "",
+        ),
+        "sidecar_visual_label_review_batch_family_context_count": sidecar_visual_label_batches_summary.get(
+            "family_context_count",
+            "",
+        ),
+        "sidecar_visual_label_progress": (
+            str(sidecar_visual_label_progress_path) if sidecar_visual_label_progress_summary else ""
+        ),
+        "sidecar_visual_label_progress_report": (
+            str(root / "sidecar_visual_label_progress.md")
+            if sidecar_visual_label_progress_summary and (root / "sidecar_visual_label_progress.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_progress_candidate_count": sidecar_visual_label_progress_summary.get(
+            "candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_matched_rows": sidecar_visual_label_progress_summary.get(
+            "matched_label_row_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_pending_rows": sidecar_visual_label_progress_summary.get(
+            "pending_label_row_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_completed_rows": sidecar_visual_label_progress_summary.get(
+            "completed_label_row_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_not_started_candidates": sidecar_visual_label_progress_summary.get(
+            "not_started_candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_incomplete_candidates": sidecar_visual_label_progress_summary.get(
+            "incomplete_candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_complete_candidates": sidecar_visual_label_progress_summary.get(
+            "complete_candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_progress_statuses": sidecar_visual_label_progress_summary.get("statuses", ""),
+        "sidecar_visual_label_progress_next_batch_id": sidecar_visual_label_progress_summary.get("next_batch_id", ""),
+        "sidecar_visual_label_next_batch": (
+            str(sidecar_visual_label_next_batch_path) if sidecar_visual_label_next_batch_summary else ""
+        ),
+        "sidecar_visual_label_next_batch_report": (
+            str(root / "sidecar_visual_label_next_batch.md")
+            if sidecar_visual_label_next_batch_summary and (root / "sidecar_visual_label_next_batch.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_next_batch_gallery": (
+            str(root / "sidecar_visual_label_next_batch_gallery.md")
+            if sidecar_visual_label_next_batch_summary
+            and (root / "sidecar_visual_label_next_batch_gallery.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_next_batch_id": sidecar_visual_label_next_batch_summary.get("batch_id", ""),
+        "sidecar_visual_label_next_batch_row_count": sidecar_visual_label_next_batch_summary.get("row_count", ""),
+        "sidecar_visual_label_next_batch_candidate_count": sidecar_visual_label_next_batch_summary.get(
+            "candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_next_batch_source_file_count": sidecar_visual_label_next_batch_summary.get(
+            "source_label_file_count",
+            "",
+        ),
+        "sidecar_visual_label_next_batch_exact_variant_count": sidecar_visual_label_next_batch_summary.get(
+            "exact_variant_count",
+            "",
+        ),
+        "sidecar_visual_label_next_batch_family_timeframe_count": sidecar_visual_label_next_batch_summary.get(
+            "family_timeframe_count",
+            "",
+        ),
+        "sidecar_visual_label_next_batch_family_context_count": sidecar_visual_label_next_batch_summary.get(
+            "family_context_count",
+            "",
+        ),
+        "sidecar_visual_label_next_batch_missing_required_labels": sidecar_visual_label_next_batch_summary.get(
+            "missing_required_labels",
+            "",
+        ),
+        "sidecar_visual_label_decision_context": (
+            str(root / "sidecar_visual_label_decision_context.yaml")
+            if sidecar_visual_label_decision_context
+            else ""
+        ),
+        "sidecar_visual_label_decision_context_report": (
+            str(root / "sidecar_visual_label_decision_context.md")
+            if sidecar_visual_label_decision_context
+            and (root / "sidecar_visual_label_decision_context.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_decision_context_status": sidecar_visual_label_decision_context.get("status", ""),
+        "sidecar_visual_label_decision_context_batch_id": sidecar_visual_label_decision_context.get("batch_id", ""),
+        "sidecar_visual_label_decision_context_row_count": sidecar_visual_label_decision_context.get(
+            "row_count",
+            "",
+        ),
+        "sidecar_visual_label_decision_context_context_counts": sidecar_visual_label_decision_context.get(
+            "context_kind_counts",
+            "",
+        ),
+        "sidecar_visual_label_decision_context_false_warning_probe_count": sidecar_visual_label_decision_context.get(
+            "missed_upside_false_warning_probe_count",
+            "",
+        ),
+        "sidecar_visual_label_decision_context_avoided_downside_probe_count": (
+            sidecar_visual_label_decision_context.get("avoided_downside_warning_probe_count", "")
+        ),
+        "sidecar_visual_label_decision_context_pending_entry_cells": sidecar_visual_label_decision_context.get(
+            "pending_entry_cells",
+            "",
+        ),
+        "sidecar_visual_label_decision_context_entry_reference_gaps": sidecar_visual_label_decision_context.get(
+            "entry_reference_gaps",
+            "",
+        ),
+        "sidecar_visual_label_rubric": (
+            str(root / "sidecar_visual_label_rubric.yaml") if sidecar_visual_label_rubric else ""
+        ),
+        "sidecar_visual_label_rubric_report": (
+            str(root / "sidecar_visual_label_rubric.md")
+            if sidecar_visual_label_rubric and (root / "sidecar_visual_label_rubric.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_rubric_status": sidecar_visual_label_rubric.get("status", ""),
+        "sidecar_visual_label_rubric_batch_id": sidecar_visual_label_rubric.get("batch_id", ""),
+        "sidecar_visual_label_rubric_required_fields": _csv_list(
+            sidecar_visual_label_rubric.get("required_label_fields", []) or []
+        ),
+        "sidecar_visual_label_rubric_field_count": len(sidecar_visual_label_rubric.get("field_contracts", []) or []),
+        "sidecar_visual_label_entry_sheet": (
+            str(sidecar_visual_label_entry_sheet_path) if sidecar_visual_label_entry_sheet_summary else ""
+        ),
+        "sidecar_visual_label_entry_sheet_report": (
+            str(root / "sidecar_visual_label_entry_sheet.md")
+            if sidecar_visual_label_entry_sheet_summary and (root / "sidecar_visual_label_entry_sheet.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_entry_sheet_batch_id": sidecar_visual_label_entry_sheet_summary.get("batch_id", ""),
+        "sidecar_visual_label_entry_sheet_row_count": sidecar_visual_label_entry_sheet_summary.get("row_count", ""),
+        "sidecar_visual_label_entry_sheet_candidate_count": sidecar_visual_label_entry_sheet_summary.get(
+            "candidate_count",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_source_file_count": sidecar_visual_label_entry_sheet_summary.get(
+            "source_label_file_count",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_required_fields": sidecar_visual_label_entry_sheet_summary.get(
+            "required_label_fields",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_missing_required_cells": sidecar_visual_label_entry_sheet_summary.get(
+            "missing_required_cell_count",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_missing_source_files": sidecar_visual_label_entry_sheet_summary.get(
+            "missing_source_label_file_count",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_missing_source_rows": sidecar_visual_label_entry_sheet_summary.get(
+            "missing_source_label_row_count",
+            "",
+        ),
+        "sidecar_visual_label_entry_sheet_missing_images": sidecar_visual_label_entry_sheet_summary.get(
+            "missing_image_count",
+            "",
+        ),
+        "sidecar_visual_label_source_update_manifest": (
+            str(sidecar_visual_label_source_update_manifest_path)
+            if sidecar_visual_label_source_update_manifest_summary
+            else ""
+        ),
+        "sidecar_visual_label_source_update_manifest_report": (
+            str(root / "sidecar_visual_label_source_update_manifest.md")
+            if sidecar_visual_label_source_update_manifest_summary
+            and (root / "sidecar_visual_label_source_update_manifest.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_source_update_manifest_batch_id": (
+            sidecar_visual_label_source_update_manifest_summary.get("batch_id", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_row_count": (
+            sidecar_visual_label_source_update_manifest_summary.get("row_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_candidate_count": (
+            sidecar_visual_label_source_update_manifest_summary.get("candidate_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_source_file_count": (
+            sidecar_visual_label_source_update_manifest_summary.get("source_label_file_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_pending_update_rows": (
+            sidecar_visual_label_source_update_manifest_summary.get("pending_update_row_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_required_update_cells": (
+            sidecar_visual_label_source_update_manifest_summary.get("required_update_cell_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_blocked_reference_rows": (
+            sidecar_visual_label_source_update_manifest_summary.get("blocked_reference_row_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_complete_rows": (
+            sidecar_visual_label_source_update_manifest_summary.get("complete_row_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_required_update_fields": (
+            sidecar_visual_label_source_update_manifest_summary.get("required_update_fields", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_missing_source_files": (
+            sidecar_visual_label_source_update_manifest_summary.get("missing_source_label_file_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_missing_source_rows": (
+            sidecar_visual_label_source_update_manifest_summary.get("missing_source_label_row_count", "")
+        ),
+        "sidecar_visual_label_source_update_manifest_missing_images": (
+            sidecar_visual_label_source_update_manifest_summary.get("missing_image_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan": (
+            str(sidecar_visual_label_source_patch_plan_path)
+            if sidecar_visual_label_source_patch_plan_summary
+            else ""
+        ),
+        "sidecar_visual_label_source_patch_plan_yaml": (
+            str(root / "sidecar_visual_label_source_patch_plan.yaml")
+            if sidecar_visual_label_source_patch_plan_summary
+            and (root / "sidecar_visual_label_source_patch_plan.yaml").exists()
+            else ""
+        ),
+        "sidecar_visual_label_source_patch_plan_report": (
+            str(root / "sidecar_visual_label_source_patch_plan.md")
+            if sidecar_visual_label_source_patch_plan_summary
+            and (root / "sidecar_visual_label_source_patch_plan.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_source_patch_plan_batch_id": (
+            sidecar_visual_label_source_patch_plan_summary.get("batch_id", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_cell_count": (
+            sidecar_visual_label_source_patch_plan_summary.get("row_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_pending_cells": (
+            sidecar_visual_label_source_patch_plan_summary.get("pending_source_patch_cell_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_blocked_cells": (
+            sidecar_visual_label_source_patch_plan_summary.get("blocked_source_patch_cell_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_source_files": (
+            sidecar_visual_label_source_patch_plan_summary.get("source_file_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_source_rows": (
+            sidecar_visual_label_source_patch_plan_summary.get("source_row_count", "")
+        ),
+        "sidecar_visual_label_source_patch_plan_required_fields": (
+            sidecar_visual_label_source_patch_plan_summary.get("required_update_fields", "")
+        ),
+        "sidecar_visual_label_completion_audit": (
+            str(root / "sidecar_visual_label_completion_audit.csv") if sidecar_visual_label_completion_audit else ""
+        ),
+        "sidecar_visual_label_completion_audit_yaml": (
+            str(root / "sidecar_visual_label_completion_audit.yaml")
+            if sidecar_visual_label_completion_audit
+            else ""
+        ),
+        "sidecar_visual_label_completion_audit_report": (
+            str(root / "sidecar_visual_label_completion_audit.md")
+            if sidecar_visual_label_completion_audit
+            and (root / "sidecar_visual_label_completion_audit.md").exists()
+            else ""
+        ),
+        "sidecar_visual_label_completion_audit_status": sidecar_visual_label_completion_audit.get("status", ""),
+        "sidecar_visual_label_completion_audit_batch_id": sidecar_visual_label_completion_audit.get("batch_id", ""),
+        "sidecar_visual_label_completion_audit_rows": sidecar_visual_label_completion_audit.get("row_count", ""),
+        "sidecar_visual_label_completion_audit_completed_rows": sidecar_visual_label_completion_audit.get(
+            "completed_row_count",
+            "",
+        ),
+        "sidecar_visual_label_completion_audit_missing_rows": sidecar_visual_label_completion_audit.get(
+            "missing_required_row_count",
+            "",
+        ),
+        "sidecar_visual_label_completion_audit_invalid_rows": sidecar_visual_label_completion_audit.get(
+            "invalid_label_row_count",
+            "",
+        ),
+        "sidecar_visual_label_completion_audit_next_action": sidecar_visual_label_completion_audit.get(
+            "next_action",
+            "",
+        ),
+        **sidecar_visual_review_top,
+        "sidecar_champion_challenger_evidence_count": sidecar_evidence_brief.get("candidate_count", ""),
+        "sidecar_champion_challenger_evidence_table": (
+            str(root / "sidecar_champion_challenger_evidence.csv") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_champion_challenger_quality_status": sidecar_champion_challenger_quality.get("status", ""),
+        "sidecar_champion_challenger_quality_issue_count": sidecar_champion_challenger_quality.get("issue_count", ""),
+        "sidecar_champion_challenger_quality_hard_issue_count": (
+            sidecar_champion_challenger_quality.get("hard_issue_count", "")
+        ),
+        "sidecar_champion_challenger_quality_advisory_issue_count": (
+            sidecar_champion_challenger_quality.get("advisory_issue_count", "")
+        ),
+        "sidecar_champion_challenger_quality_hard_issue_summary": _sidecar_quality_issue_summary(
+            sidecar_champion_challenger_quality.get("hard_issues", []) or []
+        ),
+        "sidecar_champion_challenger_quality_advisory_issue_summary": _sidecar_quality_issue_summary(
+            sidecar_champion_challenger_quality.get("advisory_issues", []) or []
+        ),
+        "sidecar_champion_challenger_quality_audit": (
+            str(root / "sidecar_champion_challenger_quality_audit.yaml")
+            if sidecar_champion_challenger_quality
+            else ""
+        ),
+        "sidecar_champion_challenger_quality_audit_report": (
+            str(root / "sidecar_champion_challenger_quality_audit.md")
+            if sidecar_champion_challenger_quality
+            else ""
+        ),
+        "sidecar_quality_remediation_plan": (
+            str(root / "sidecar_quality_remediation_plan.yaml")
+            if sidecar_quality_remediation_plan
+            else ""
+        ),
+        "sidecar_quality_remediation_plan_report": (
+            str(root / "sidecar_quality_remediation_plan.md")
+            if sidecar_quality_remediation_plan
+            and (root / "sidecar_quality_remediation_plan.md").exists()
+            else ""
+        ),
+        "sidecar_quality_remediation_plan_status": sidecar_quality_remediation_plan.get("status", ""),
+        "sidecar_quality_remediation_plan_current_required_action": (
+            sidecar_quality_remediation_plan.get("current_required_action", "")
+        ),
+        "sidecar_quality_remediation_plan_autonomous_clearable_now_count": (
+            sidecar_quality_remediation_plan.get("autonomous_clearable_now_count", "")
+        ),
+        "sidecar_quality_remediation_plan_human_visual_remediation_count": (
+            sidecar_quality_remediation_plan.get("human_visual_remediation_count", "")
+        ),
+        "sidecar_quality_remediation_plan_diversity_control_remediation_count": (
+            sidecar_quality_remediation_plan.get("diversity_control_remediation_count", "")
+        ),
+        "sidecar_quality_remediation_plan_archive_only_count": (
+            sidecar_quality_remediation_plan.get("archive_only_count", "")
+        ),
+        "sidecar_evidence_gap_matrix": str(root / "sidecar_evidence_gap_matrix.csv") if sidecar_evidence_brief else "",
+        "sidecar_candidate_readiness_summary": (
+            str(root / "sidecar_candidate_readiness_summary.csv") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_candidate_readiness_summary_report": (
+            str(root / "sidecar_candidate_readiness_summary.md") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_validation_queue": str(root / "sidecar_validation_queue.csv") if sidecar_evidence_brief else "",
+        "sidecar_validation_queue_report": str(root / "sidecar_validation_queue.md") if sidecar_evidence_brief else "",
+        "sidecar_champion_challenger_validation_design": (
+            str(root / "sidecar_champion_challenger_validation_design.yaml") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_champion_challenger_validation_design_report": (
+            str(root / "sidecar_champion_challenger_validation_design.md") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_data_gate_unlock_matrix": str(root / "sidecar_data_gate_unlock_matrix.csv") if sidecar_evidence_brief else "",
+        "sidecar_data_gate_unlock_matrix_yaml": str(root / "sidecar_data_gate_unlock_matrix.yaml") if sidecar_evidence_brief else "",
+        "sidecar_data_gate_unlock_matrix_report": str(root / "sidecar_data_gate_unlock_matrix.md") if sidecar_evidence_brief else "",
+        "sidecar_evidence_consistency_audit": str(root / "sidecar_evidence_consistency_audit.yaml") if sidecar_evidence_brief else "",
+        "sidecar_evidence_consistency_audit_report": (
+            str(root / "sidecar_evidence_consistency_audit.md") if sidecar_evidence_brief else ""
+        ),
+        "sidecar_evidence_consistency_audit_status": sidecar_consistency_audit.get("status", ""),
+        "sidecar_evidence_consistency_audit_check_count": sidecar_consistency_audit.get("check_count", ""),
+        "sidecar_evidence_consistency_audit_issue_count": sidecar_consistency_audit.get("issue_count", ""),
+        "sidecar_evidence_packet_index": str(root / "sidecar_evidence_packet_index.yaml") if sidecar_evidence_brief else "",
+        "sidecar_evidence_packet_index_report": str(root / "sidecar_evidence_packet_index.md") if sidecar_evidence_brief else "",
+        "sidecar_candidate_decision_cards": str(root / "sidecar_candidate_decision_cards.md") if sidecar_evidence_brief else "",
+        "sidecar_current_decision_packet": (
+            str(root / "sidecar_current_decision_packet.yaml") if sidecar_current_decision_packet else ""
+        ),
+        "sidecar_current_decision_packet_report": (
+            str(root / "sidecar_current_decision_packet.md")
+            if sidecar_current_decision_packet and (root / "sidecar_current_decision_packet.md").exists()
+            else ""
+        ),
+        "sidecar_current_decision_packet_status": sidecar_current_decision_packet.get("status", ""),
+        "sidecar_current_decision_packet_decision": sidecar_current_decision_packet.get("executive_decision", ""),
+        "sidecar_current_decision_packet_required_action": sidecar_current_decision_packet.get(
+            "current_required_action",
+            "",
+        ),
+        "sidecar_current_decision_packet_candidate_count": sidecar_current_decision_packet.get("candidate_count", ""),
+        "sidecar_current_decision_packet_quality_remediation_status": (
+            sidecar_current_decision_packet.get("quality_remediation_status", "")
+        ),
+        "sidecar_current_decision_packet_quality_remediation_required_action": (
+            sidecar_current_decision_packet.get("quality_remediation_current_required_action", "")
+        ),
+        "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count": (
+            sidecar_current_decision_packet.get("quality_remediation_autonomous_clearable_now_count", "")
+        ),
+        "sidecar_current_decision_packet_quality_remediation_human_visual_count": (
+            sidecar_current_decision_packet.get("quality_remediation_human_visual_remediation_count", "")
+        ),
+        "sidecar_current_decision_packet_quality_remediation_diversity_control_count": (
+            sidecar_current_decision_packet.get("quality_remediation_diversity_control_remediation_count", "")
+        ),
+        "sidecar_current_decision_packet_quality_remediation_archive_only_count": (
+            sidecar_current_decision_packet.get("quality_remediation_archive_only_count", "")
+        ),
+        "sidecar_shadow_guardrail_status": sidecar_guardrail_audit.get("status", ""),
+        "sidecar_shadow_guardrail_violation_count": sidecar_guardrail_audit.get("violation_count", ""),
+        "sidecar_shadow_guardrail_audit": str(root / "sidecar_shadow_guardrail_audit.yaml") if sidecar_guardrail_audit else "",
+        "sidecar_shadow_guardrail_report": str(root / "sidecar_shadow_guardrail_audit.md") if sidecar_guardrail_audit else "",
+        "sidecar_evidence_source_manifest": str(root / "sidecar_evidence_source_manifest.csv") if sidecar_evidence_brief else "",
+        "sidecar_evidence_source_health_status": sidecar_source_health.get("status", ""),
+        "sidecar_evidence_source_health_issue_count": sidecar_source_health.get("issue_count", ""),
+        "sidecar_evidence_source_health_missing_required": (
+            sidecar_source_health.get("missing_required_source_ref_count", "")
+        ),
+        "sidecar_evidence_source_health_wrong_type_required": (
+            sidecar_source_health.get("wrong_type_required_source_ref_count", "")
+        ),
+        "sidecar_evidence_source_health": str(root / "sidecar_evidence_source_health.csv") if sidecar_source_health else "",
+        "sidecar_evidence_source_health_yaml": str(root / "sidecar_evidence_source_health.yaml") if sidecar_source_health else "",
+        "sidecar_evidence_source_health_report": str(root / "sidecar_evidence_source_health.md") if sidecar_source_health else "",
+        "sidecar_evidence_source_fingerprints_status": sidecar_source_fingerprints.get("status", ""),
+        "sidecar_evidence_source_fingerprints_issue_count": sidecar_source_fingerprints.get("issue_count", ""),
+        "sidecar_evidence_source_fingerprints_file_count": sidecar_source_fingerprints.get("file_ref_count", ""),
+        "sidecar_evidence_source_fingerprints_fingerprinted_file_count": (
+            sidecar_source_fingerprints.get("fingerprinted_file_count", "")
+        ),
+        "sidecar_evidence_source_fingerprints_csv_count": sidecar_source_fingerprints.get("csv_ref_count", ""),
+        "sidecar_evidence_source_fingerprints_csv_row_count_recorded_count": (
+            sidecar_source_fingerprints.get("csv_row_count_recorded_count", "")
+        ),
+        "sidecar_evidence_source_fingerprints": (
+            str(root / "sidecar_evidence_source_fingerprints.csv") if sidecar_source_fingerprints else ""
+        ),
+        "sidecar_evidence_source_fingerprints_yaml": (
+            str(root / "sidecar_evidence_source_fingerprints.yaml") if sidecar_source_fingerprints else ""
+        ),
+        "sidecar_evidence_source_fingerprints_report": (
+            str(root / "sidecar_evidence_source_fingerprints.md") if sidecar_source_fingerprints else ""
+        ),
+        "sidecar_candidate_learning_ledger_status": sidecar_candidate_learning_ledger.get("status", ""),
+        "sidecar_candidate_learning_ledger_candidate_count": sidecar_candidate_learning_ledger.get("candidate_count", ""),
+        "sidecar_candidate_learning_ledger_lead_count": (
+            sidecar_candidate_learning_ledger.get("lead_post_data_candidate_count", "")
+        ),
+        "sidecar_candidate_learning_ledger_diversity_control_count": (
+            sidecar_candidate_learning_ledger.get("diversity_control_only_count", "")
+        ),
+        "sidecar_candidate_learning_ledger_archive_count": (
+            sidecar_candidate_learning_ledger.get("archive_failure_mode_count", "")
+        ),
+        "sidecar_candidate_learning_ledger_review_only_count": (
+            sidecar_candidate_learning_ledger.get("review_only_candidate_count", "")
+        ),
+        "sidecar_candidate_learning_ledger_quality_blocked_count": (
+            sidecar_candidate_learning_ledger.get("quality_blocked_review_only_count", "")
+        ),
+        "sidecar_candidate_learning_ledger": (
+            str(root / "sidecar_candidate_learning_ledger.csv") if sidecar_candidate_learning_ledger else ""
+        ),
+        "sidecar_candidate_learning_ledger_yaml": (
+            str(root / "sidecar_candidate_learning_ledger.yaml") if sidecar_candidate_learning_ledger else ""
+        ),
+        "sidecar_candidate_learning_ledger_report": (
+            str(root / "sidecar_candidate_learning_ledger.md") if sidecar_candidate_learning_ledger else ""
+        ),
+        **sidecar_learning_summary,
+        **_sidecar_post_data_payload(
+            sidecar_post_data_playbook,
+            root=root,
+            key_prefix="sidecar_post_data_validation_playbook",
+        ),
+        "sidecar_current_handoff": (
+            str(root / "sidecar_current_handoff.yaml")
+            if (root / "sidecar_current_handoff.yaml").exists()
+            else ""
+        ),
+        "sidecar_current_handoff_report": (
+            str(root / "sidecar_current_handoff.md")
+            if (root / "sidecar_current_handoff.md").exists()
+            else ""
+        ),
+        "sidecar_candidate_decision_matrix": (
+            str(root / "sidecar_candidate_decision_matrix.csv")
+            if (root / "sidecar_candidate_decision_matrix.csv").exists()
+            else ""
+        ),
+        "sidecar_candidate_decision_matrix_report": (
+            str(root / "sidecar_candidate_decision_matrix.md")
+            if (root / "sidecar_candidate_decision_matrix.md").exists()
+            else ""
+        ),
+        "sidecar_candidate_decision_matrix_row_count": (
+            _csv_data_row_count(root / "sidecar_candidate_decision_matrix.csv")
+            if (root / "sidecar_candidate_decision_matrix.csv").exists()
+            else ""
+        ),
+        "sidecar_frozen_spec_review_table": str(root / "sidecar_frozen_spec_review.csv") if sidecar_evidence_brief else "",
+        "evidence_debt_register_status": evidence_debt_register.get("status", "missing_evidence_debt_register"),
+        "evidence_debt_count": evidence_debt_register.get("debt_count", ""),
+        "evidence_debt_candidate_count": evidence_debt_register.get("candidate_debt_count", ""),
+        "evidence_debt_global_count": evidence_debt_register.get("global_debt_count", ""),
+        "evidence_debt_archived_candidate_count": evidence_debt_register.get("archived_candidate_count", ""),
+        "evidence_debt_next_action": evidence_debt_register.get("next_action", ""),
+        "evidence_debt_strategic_next_action": evidence_debt_register.get("strategic_next_action", ""),
+        "evidence_debt_current_runtime_handoff_action": evidence_debt_register.get("current_runtime_handoff_action", ""),
+        "evidence_debt_current_runtime_handoff_status": evidence_debt_register.get("current_runtime_handoff_status", ""),
+        "evidence_debt_current_runtime_handoff_reason": evidence_debt_register.get("current_runtime_handoff_reason", ""),
+        "evidence_debt_strategic_blocked_by_current_handoff": evidence_debt_register.get(
+            "strategic_next_action_blocked_by_current_handoff",
+            "",
+        ),
+        "evidence_debt_register_report": str(root / "evidence_debt_register.md") if evidence_debt_register else "",
+        "data_gate_brief_status": data_gate_brief.get("status", "missing_data_gate_brief"),
+        "data_gate_preflight_status": data_gate_brief.get("preflight_status", ""),
+        "data_gate_safe_to_run_fresh_validation": data_gate_brief.get("safe_to_run_fresh_validation", ""),
+        "data_gate_manual_gate_active": data_gate_brief.get("manual_data_gate_active", ""),
+        "data_gate_required_timeframes": data_gate_brief.get("required_timeframes", []),
+        "data_gate_csv_requirement_count": data_gate_brief.get("csv_requirement_count", ""),
+        "data_gate_blocked_candidate_count": data_gate_brief.get("blocked_candidate_count", ""),
+        "data_gate_candidate_unlock_count": data_gate_brief.get("candidate_unlock_count", ""),
+        "data_gate_role_blocker_count": data_gate_brief.get("fresh_data_role_blocker_count", ""),
+        "data_gate_next_action": data_gate_brief.get("next_action", ""),
+        "data_gate_next_verification_command": data_gate_brief.get("next_verification_command", ""),
+        "data_gate_brief_report": str(root / "data_gate_brief.md") if data_gate_brief else "",
+        "data_gate_candidate_unlocks": str(root / "data_gate_candidate_unlocks.csv") if data_gate_brief else "",
+        "data_gate_import_plan": str(root / "data_gate_import_plan.yaml") if data_gate_brief else "",
+        "data_gate_import_plan_report": str(root / "data_gate_import_plan.md") if data_gate_brief else "",
+        "data_gate_import_batches": str(root / "data_gate_import_batches.csv") if data_gate_brief else "",
+        "data_gate_import_checklist": (
+            str(data_gate_import_checklist_path)
+            if data_gate_import_checklist_summary
+            else ""
+        ),
+        "data_gate_import_checklist_yaml": (
+            str(root / "data_gate_import_checklist.yaml")
+            if data_gate_import_checklist_summary
+            and (root / "data_gate_import_checklist.yaml").exists()
+            else ""
+        ),
+        "data_gate_import_checklist_report": (
+            str(root / "data_gate_import_checklist.md")
+            if data_gate_import_checklist_summary
+            and (root / "data_gate_import_checklist.md").exists()
+            else ""
+        ),
+        "data_gate_import_checklist_row_count": (
+            data_gate_import_checklist_summary.get("row_count", "")
+        ),
+        "data_gate_import_checklist_pending_imports": (
+            data_gate_import_checklist_summary.get("pending_import_count", "")
+        ),
+        "data_gate_import_checklist_complete_ready": (
+            data_gate_import_checklist_summary.get("complete_ready_count", "")
+        ),
+        "data_gate_import_checklist_missing_count": (
+            data_gate_import_checklist_summary.get("missing_count", "")
+        ),
+        "data_gate_import_checklist_stale_count": (
+            data_gate_import_checklist_summary.get("stale_count", "")
+        ),
+        "data_gate_handoff_audit": (
+            str(root / "data_gate_handoff_audit.yaml")
+            if data_gate_handoff_audit
+            else ""
+        ),
+        "data_gate_handoff_audit_report": (
+            str(root / "data_gate_handoff_audit.md")
+            if data_gate_handoff_audit
+            and (root / "data_gate_handoff_audit.md").exists()
+            else ""
+        ),
+        "data_gate_handoff_audit_status": data_gate_handoff_audit.get("status", ""),
+        "data_gate_handoff_audit_check_count": data_gate_handoff_audit.get("check_count", ""),
+        "data_gate_handoff_audit_issue_count": data_gate_handoff_audit.get("issue_count", ""),
+        "data_gate_symbol_matrix": (
+            str(root / "data_gate_symbol_matrix.csv")
+            if (root / "data_gate_symbol_matrix.csv").exists()
+            else ""
+        ),
+        "data_gate_symbol_matrix_report": (
+            str(root / "data_gate_symbol_matrix.md")
+            if (root / "data_gate_symbol_matrix.md").exists()
+            else ""
+        ),
+        "data_gate_symbol_matrix_row_count": (
+            _csv_data_row_count(root / "data_gate_symbol_matrix.csv")
+            if (root / "data_gate_symbol_matrix.csv").exists()
+            else ""
+        ),
         "role_queue_status": role_queue.get("status", "missing_role_task_queue"),
         "role_pending_task_count": role_queue.get("pending_task_count", ""),
         "role_pending_manual_task_count": role_queue.get("pending_manual_task_count", ""),
@@ -7516,6 +20586,49 @@ def _promotion_missing_debt(missing: str) -> tuple[int, str, str, str]:
     )
 
 
+def _evidence_debt_runtime_handoff(
+    *,
+    debts: list[dict[str, Any]],
+    fresh_data_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    strategic_next_action = debts[0]["retire_action"] if debts else "wait_for_user_approval"
+    safe_fresh_data = fresh_data_preflight.get("safe_to_run_fresh_validation")
+    if fresh_data_preflight and safe_fresh_data is False:
+        current_action = str(fresh_data_preflight.get("next_action") or "import_or_curate_fresh_ohlcv_data")
+        blocked_actions = sorted(
+            {
+                str(debt.get("retire_action", ""))
+                for debt in debts
+                if debt.get("retire_action") and str(debt.get("retire_action")) != current_action
+            }
+        )
+        return {
+            "strategic_next_action": strategic_next_action,
+            "current_runtime_handoff_action": current_action,
+            "current_runtime_handoff_status": "manual_data_gate_required",
+            "current_runtime_handoff_reason": "fresh_data_preflight_not_ready_blocks_validation_evidence",
+            "strategic_next_action_blocked_by_current_handoff": True,
+            "blocked_strategic_actions": blocked_actions,
+        }
+    if debts:
+        return {
+            "strategic_next_action": strategic_next_action,
+            "current_runtime_handoff_action": strategic_next_action,
+            "current_runtime_handoff_status": "evidence_debt_action_ready",
+            "current_runtime_handoff_reason": "no_manual_data_gate_in_evidence_register",
+            "strategic_next_action_blocked_by_current_handoff": False,
+            "blocked_strategic_actions": [],
+        }
+    return {
+        "strategic_next_action": strategic_next_action,
+        "current_runtime_handoff_action": "wait_for_user_approval",
+        "current_runtime_handoff_status": "no_open_evidence_debt",
+        "current_runtime_handoff_reason": "no_open_evidence_debt",
+        "strategic_next_action_blocked_by_current_handoff": False,
+        "blocked_strategic_actions": [],
+    }
+
+
 def build_ceo_evidence_debt_register(
     *,
     ceo_run_id: str,
@@ -7528,8 +20641,11 @@ def build_ceo_evidence_debt_register(
     fresh_withheld_execution: dict[str, Any],
     promotion_proposal: dict[str, Any],
     trace_grade: dict[str, Any],
+    sidecar_candidate_learning_ledger: dict[str, Any] | None = None,
+    sidecar_visual_review_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     debts: list[dict[str, Any]] = []
+    archived_candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     execution_completed = bool(fresh_withheld_execution.get("validation_completed"))
     execution_result = str(fresh_withheld_execution.get("validation_result", ""))
@@ -7548,12 +20664,41 @@ def build_ceo_evidence_debt_register(
     champion_by_id = {str(item.get("belief_id", "")): item for item in champion_results.get("results", []) or []}
     visual_by_id = {str(item.get("belief_id", "")): item for item in visual_queue.get("items", []) or []}
     frozen_by_id = {str(item.get("belief_id", "")): item for item in frozen_plan.get("validation_specs", []) or []}
+    learning_by_id = {
+        str(item.get("belief_id", "")): item
+        for item in (sidecar_candidate_learning_ledger or {}).get("candidates", []) or []
+        if str(item.get("belief_id", ""))
+    }
+    visual_coverage_by_id = {
+        str(item.get("belief_id", "")): item
+        for item in (sidecar_visual_review_coverage or {}).get("rows", []) or []
+        if str(item.get("belief_id", ""))
+    }
 
     for item in candidate_portfolio:
         candidate_id = str(item.get("belief_id", "") or "")
         if not candidate_id:
             continue
         product_role = str(item.get("product_role", "") or "")
+        learning_item = learning_by_id.get(candidate_id, {})
+        handling_classification = str(learning_item.get("handling_classification", ""))
+        if handling_classification == "archive_failure_mode":
+            archived_candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "product_role": product_role,
+                    "handling_classification": handling_classification,
+                    "handling_reason": learning_item.get("handling_reason", ""),
+                    "validation_authority": learning_item.get("validation_authority", ""),
+                    "next_allowed_action": learning_item.get("next_allowed_action", ""),
+                    "next_required_action": learning_item.get("next_required_action", ""),
+                    "source_artifact": "sidecar_candidate_learning_ledger.yaml",
+                    "blocks_promotion": False,
+                    "blocks_product_language": True,
+                    "production_effect": "none",
+                }
+            )
+            continue
         champion = champion_by_id.get(candidate_id, {})
         checklist = item.get("metric_checklist", {}) or champion.get("product_metric_checklist", {}) or {}
         missing_metrics = list(checklist.get("missing", []) or [])
@@ -7596,6 +20741,24 @@ def build_ceo_evidence_debt_register(
                 evidence_required="visual readability, product-role match, false-positive shape, and promotion-blocker labels",
                 retire_action="complete_champion_challenger_visual_review",
                 source_artifact="champion_challenger_visual_review_queue.yaml",
+            )
+        visual_coverage = visual_coverage_by_id.get(candidate_id, {})
+        human_label_status = str(visual_coverage.get("human_label_completion_status", ""))
+        if human_label_status and human_label_status != "human_review_labels_populated":
+            _append_evidence_debt(
+                debts,
+                seen,
+                candidate_id=candidate_id,
+                product_role=product_role,
+                debt_kind="human_visual_review_labels",
+                priority=4,
+                blocker_type=human_label_status,
+                evidence_required=(
+                    "completed human visual labels for visual_readability, product_role_match, "
+                    "false_positive_shape, and promotion_blocker"
+                ),
+                retire_action="complete_champion_challenger_visual_review",
+                source_artifact="sidecar_visual_review_coverage.csv",
             )
         if not item.get("fresh_control_route"):
             _append_evidence_debt(
@@ -7749,6 +20912,7 @@ def build_ceo_evidence_debt_register(
     debts = sorted(debts, key=lambda debt: (int(debt.get("priority", 99)), str(debt.get("candidate_id") or ""), str(debt.get("debt_kind", ""))))
     candidate_debt_count = len([debt for debt in debts if debt.get("candidate_id")])
     global_debt_count = len(debts) - candidate_debt_count
+    archived_candidate_count = len(archived_candidates)
     if debts:
         status = "open_evidence_debt"
     elif promotion_proposal.get("status") == "ready_for_user_approval":
@@ -7757,6 +20921,7 @@ def build_ceo_evidence_debt_register(
         status = "candidate_portfolio_present_no_open_debt"
     else:
         status = "no_candidates"
+    handoff = _evidence_debt_runtime_handoff(debts=debts, fresh_data_preflight=fresh_data_preflight)
     return {
         "model": CEO_EVIDENCE_DEBT_REGISTER_MODEL,
         "generated_at": utc_now_iso(),
@@ -7766,8 +20931,18 @@ def build_ceo_evidence_debt_register(
         "debt_count": len(debts),
         "candidate_debt_count": candidate_debt_count,
         "global_debt_count": global_debt_count,
+        "archived_candidate_count": archived_candidate_count,
+        "archived_candidates": archived_candidates,
         "debts": debts,
-        "next_action": debts[0]["retire_action"] if debts else "wait_for_user_approval",
+        "next_action": handoff["strategic_next_action"],
+        "strategic_next_action": handoff["strategic_next_action"],
+        "current_runtime_handoff_action": handoff["current_runtime_handoff_action"],
+        "current_runtime_handoff_status": handoff["current_runtime_handoff_status"],
+        "current_runtime_handoff_reason": handoff["current_runtime_handoff_reason"],
+        "strategic_next_action_blocked_by_current_handoff": handoff[
+            "strategic_next_action_blocked_by_current_handoff"
+        ],
+        "blocked_strategic_actions": handoff["blocked_strategic_actions"],
         "promotion_status": promotion_proposal.get("status", ""),
         "guardrail": "This register tracks missing product evidence only. It does not validate, promote, or change production behavior.",
         "product_language_allowed": False,
@@ -7784,7 +20959,14 @@ def render_ceo_evidence_debt_register(register: dict[str, Any]) -> str:
         f"Lab run: {register.get('lab_run_id')}",
         f"Status: {register.get('status')}",
         f"Debts: {register.get('debt_count')}",
+        f"Archived non-promotional candidates: {register.get('archived_candidate_count', 0)}",
         f"Next action: {register.get('next_action')}",
+        f"Strategic next action: {register.get('strategic_next_action') or register.get('next_action')}",
+        f"Current runtime handoff: {register.get('current_runtime_handoff_action') or register.get('next_action')}",
+        f"Current runtime handoff status: {register.get('current_runtime_handoff_status') or 'unknown'}",
+        f"Current runtime handoff reason: {register.get('current_runtime_handoff_reason') or 'unknown'}",
+        "Strategic action blocked by current handoff: "
+        f"{register.get('strategic_next_action_blocked_by_current_handoff', False)}",
         f"Promotion status: {register.get('promotion_status')}",
         "",
         "## Open Debts",
@@ -7798,6 +20980,18 @@ def render_ceo_evidence_debt_register(register: dict[str, Any]) -> str:
             f"kind={debt.get('debt_kind')} retire={debt.get('retire_action')}"
         )
     if not register.get("debts"):
+        lines.append("- none")
+    lines.extend(["", "## Archived Non-Promotional Candidates", ""])
+    for candidate in register.get("archived_candidates", []) or []:
+        lines.append(
+            "- "
+            f"{candidate.get('candidate_id')} "
+            f"role={candidate.get('product_role')} "
+            f"classification={candidate.get('handling_classification')} "
+            f"authority={candidate.get('validation_authority') or 'none'} "
+            f"next={candidate.get('next_allowed_action') or candidate.get('next_required_action') or 'preserve archive'}"
+        )
+    if not register.get("archived_candidates"):
         lines.append("- none")
     lines.extend(
         [
@@ -7857,6 +21051,10 @@ def run_ceo_evidence_debt_register(options: CeoOpsOptions) -> dict[str, Any]:
         fresh_withheld_execution=_load_yaml_if_exists(root / "fresh_withheld_validation_execution_result.yaml"),
         promotion_proposal=_load_yaml_if_exists(root / "promotion_proposal.yaml"),
         trace_grade=_load_yaml_if_exists(root / "trace_grade.yaml"),
+        sidecar_candidate_learning_ledger=_load_yaml_if_exists(root / "sidecar_candidate_learning_ledger.yaml"),
+        sidecar_visual_review_coverage={
+            "rows": _csv_rows(root / "sidecar_visual_review_coverage.csv"),
+        },
     )
     path = root / "evidence_debt_register.yaml"
     report_path = root / "evidence_debt_register.md"
@@ -8289,11 +21487,13 @@ def build_ceo_executive_kpis(
     incident_register: dict[str, Any] | None = None,
     repair_plan: dict[str, Any] | None = None,
     role_queue: dict[str, Any] | None = None,
+    sidecar_learning_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocker_stack = blocker_stack or {}
     incident_register = incident_register or {}
     repair_plan = repair_plan or {}
     role_queue = role_queue or {}
+    sidecar_learning_ledger = sidecar_learning_ledger or {}
     validation_gate = {
         "execution_status": fresh_withheld_execution.get("status", ""),
         "validation_completed": bool(fresh_withheld_execution.get("validation_completed")),
@@ -8332,6 +21532,16 @@ def build_ceo_executive_kpis(
         "open_approval_count": int(approval_queue.get("pending_count", 0) or 0),
         "evidence_debt_count": int(evidence_debt_register.get("debt_count", 0) or 0),
         "candidate_count": len(candidate_portfolio),
+        "sidecar_learning_status": sidecar_learning_ledger.get(
+            "status",
+            "missing_sidecar_candidate_learning_ledger",
+        ),
+        "sidecar_learning_candidate_count": sidecar_learning_ledger.get("candidate_count", ""),
+        "sidecar_learning_lead_count": sidecar_learning_ledger.get("lead_post_data_candidate_count", ""),
+        "sidecar_learning_control_count": sidecar_learning_ledger.get("diversity_control_only_count", ""),
+        "sidecar_learning_archive_count": sidecar_learning_ledger.get("archive_failure_mode_count", ""),
+        "sidecar_learning_review_count": sidecar_learning_ledger.get("review_only_candidate_count", ""),
+        "sidecar_learning_blocked_count": sidecar_learning_ledger.get("quality_blocked_review_only_count", ""),
         "capability_backlog_count": len(capability_backlog),
         "trace_score": trace_grade.get("score"),
         "trace_verdict": trace_verdict,
@@ -8495,6 +21705,7 @@ def run_ceo_executive_kpis(options: CeoOpsOptions) -> dict[str, Any]:
         incident_register=_load_yaml_if_exists(root / "operating_incident_register.yaml"),
         repair_plan=_load_yaml_if_exists(root / "repair_plan.yaml"),
         role_queue=_load_yaml_if_exists(root / "role_task_queue.yaml"),
+        sidecar_learning_ledger=_load_yaml_if_exists(root / "sidecar_candidate_learning_ledger.yaml"),
     )
     path = root / "executive_kpis.yaml"
     report_path = root / "executive_kpis.md"
@@ -10852,7 +24063,6 @@ def build_ceo_eval_suite(
         "resumption_brief",
     }
     required_usable_receipt_fingerprints = {
-        "decision_packet",
         "action_contract",
         "preflight_gate",
         "trace_grade",
@@ -12944,11 +26154,13 @@ def _hard_artifact_coherence_issues(artifact_coherence: dict[str, Any]) -> list[
             mismatches = (item.get("evidence", {}) or {}).get("trust_fingerprint_mismatches", []) or []
             mismatch_artifacts = {str(mismatch.get("artifact", "")) for mismatch in mismatches}
             mutable_diagnostics = {
+                "preflight_gate",
                 "trace_grade",
                 "ceo_replay",
                 "ceo_eval_suite",
                 "guardrail_audit",
                 "mission_score",
+                "strategy_capital_dashboard",
                 "artifact_coherence",
                 "approval_queue",
                 "approval_status",
@@ -13141,6 +26353,17 @@ def _artifact_coherence_item(
     }
 
 
+def _repair_apply_required_by_current_plan(repair_plan: dict[str, Any]) -> bool:
+    if not repair_plan:
+        return True
+    status = str(repair_plan.get("status", ""))
+    runnable_count = _safe_int(
+        repair_plan.get("runnable_repair_count", repair_plan.get("autonomous_repair_count", 0))
+    ) or 0
+    top_kind = str(repair_plan.get("top_repair_kind", ""))
+    return status == "repair_plan_ready" or runnable_count > 0 or top_kind in {"diagnostic_refresh", "runnable_cli"}
+
+
 def _handoff_semantic_coherence_issues(
     *,
     action_board: dict[str, Any],
@@ -13248,6 +26471,8 @@ def build_ceo_artifact_coherence(*, ceo_run_id: str, lab_run_id: str, root: Path
     binding_action = _load_yaml_if_exists(root / "binding_action_result.yaml")
     latest_action = binding_action or (ledger_entries[-1] if ledger_entries else {})
     latest_action_at = _parse_utc_datetime(latest_action.get("generated_at")) if latest_action else None
+    repair_plan = _load_yaml_if_exists(root / "repair_plan.yaml")
+    repair_apply_required = _repair_apply_required_by_current_plan(repair_plan)
     action_contract_path = root / "action_contract.yaml"
     action_contract = _load_yaml_if_exists(action_contract_path)
     dispatch_receipt_path = root / "dispatch_receipt.yaml"
@@ -13293,6 +26518,18 @@ def build_ceo_artifact_coherence(*, ceo_run_id: str, lab_run_id: str, root: Path
         )
         for name, path, payload, require_generated_after_action in artifact_specs
     ]
+    if not repair_apply_required:
+        for item in artifacts:
+            if item.get("artifact") == "repair_apply" and item.get("exists") is False:
+                item["issues"] = [issue for issue in item.get("issues", []) or [] if issue != "missing_artifact"]
+                item["status"] = "not_required_by_current_repair_plan"
+                item["applicability"] = "not_required_by_current_repair_plan"
+                item["repair_plan_status"] = repair_plan.get("status", "")
+                item["repair_plan_runnable_repair_count"] = repair_plan.get(
+                    "runnable_repair_count",
+                    repair_plan.get("autonomous_repair_count", 0),
+                )
+                item["repair_plan_top_repair"] = repair_plan.get("top_repair", "")
     issues = [
         {
             "artifact": item.get("artifact"),
@@ -13452,11 +26689,13 @@ def render_ceo_artifact_coherence(coherence: dict[str, Any]) -> str:
         "",
     ]
     for item in coherence.get("artifacts", []) or []:
+        applicability = f" applicability={item.get('applicability')}" if item.get("applicability") else ""
         lines.append(
             "- "
             f"{item.get('artifact')}: exists={item.get('exists')} "
             f"generated_at={item.get('generated_at') or 'missing'} "
             f"issues={item.get('issues') or []}"
+            f"{applicability}"
         )
     lines.extend(["", "## Issues", ""])
     issues = coherence.get("issues", []) or []
@@ -13859,6 +27098,13 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
         eval_suite = _load_yaml_if_exists(run_dir / "ceo_eval_suite.yaml")
         approval_queue = _load_yaml_if_exists(run_dir / "approval_queue.yaml")
         approval_status = _load_yaml_if_exists(run_dir / "approval_status.yaml")
+        data_gate_brief = _load_yaml_if_exists(run_dir / "data_gate_brief.yaml")
+        sidecar_evidence_brief = _load_yaml_if_exists(run_dir / "sidecar_evidence_brief.yaml")
+        sidecar_learning_ledger = _load_yaml_if_exists(run_dir / "sidecar_candidate_learning_ledger.yaml")
+        sidecar_post_data_playbook = _load_yaml_if_exists(run_dir / "sidecar_post_data_validation_playbook.yaml")
+        sidecar_quality_audit = _load_yaml_if_exists(run_dir / "sidecar_champion_challenger_quality_audit.yaml")
+        sidecar_consistency_audit = _load_yaml_if_exists(run_dir / "sidecar_evidence_consistency_audit.yaml")
+        evidence_debt_register = _load_yaml_if_exists(run_dir / "evidence_debt_register.yaml")
         role_queue = _load_yaml_if_exists(run_dir / "role_task_queue.yaml")
         role_result_validation = _load_yaml_if_exists(run_dir / "role_result_validation.yaml")
         mission = _load_yaml_if_exists(run_dir / "mission_score.yaml")
@@ -13882,6 +27128,12 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
             decision_quality=decision_quality,
         )
         live_stop_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo approval-queue --run-id {run_id}"
+        data_gate_handoff_command = f"PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id {run_id}"
+        manual_data_gate_active = (
+            data_gate_brief.get("manual_data_gate_active") is True
+            or data_gate_brief.get("status") == "fresh_data_gate_blocked"
+            or data_gate_brief.get("next_action") == "import_or_curate_fresh_ohlcv_data"
+        )
         if stop_requested:
             resume_status = "blocked_stop_requested"
             effective_operator = {
@@ -14009,6 +27261,74 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
                     "severity",
                     "unknown" if artifact_coherence_top_issue else "",
                 ),
+                "data_gate_brief_status": data_gate_brief.get("status", "missing_data_gate_brief"),
+                "data_gate_preflight_status": data_gate_brief.get("preflight_status", ""),
+                "data_gate_safe_to_run_fresh_validation": data_gate_brief.get("safe_to_run_fresh_validation", ""),
+                "data_gate_required_timeframes": data_gate_brief.get("required_timeframes", []),
+                "data_gate_csv_requirement_count": data_gate_brief.get("csv_requirement_count", ""),
+                "data_gate_blocked_candidate_count": data_gate_brief.get("blocked_candidate_count", ""),
+                "data_gate_role_blocker_count": data_gate_brief.get("fresh_data_role_blocker_count", ""),
+                "data_gate_next_action": data_gate_brief.get("next_action", ""),
+                "data_gate_next_verification_command": data_gate_brief.get("next_verification_command", ""),
+                "sidecar_learning_status": sidecar_learning_ledger.get(
+                    "status",
+                    "missing_sidecar_candidate_learning_ledger",
+                ),
+                "sidecar_learning_candidate_count": sidecar_learning_ledger.get("candidate_count", ""),
+                "sidecar_learning_lead_count": sidecar_learning_ledger.get("lead_post_data_candidate_count", ""),
+                "sidecar_learning_control_count": sidecar_learning_ledger.get("diversity_control_only_count", ""),
+                "sidecar_learning_archive_count": sidecar_learning_ledger.get("archive_failure_mode_count", ""),
+                "sidecar_learning_review_count": sidecar_learning_ledger.get("review_only_candidate_count", ""),
+                "sidecar_learning_blocked_count": sidecar_learning_ledger.get(
+                    "quality_blocked_review_only_count",
+                    "",
+                ),
+                **_sidecar_learning_action_summary(sidecar_learning_ledger),
+                **_sidecar_post_data_payload(
+                    sidecar_post_data_playbook,
+                    root=run_dir,
+                    key_prefix="sidecar_post_data_playbook",
+                ),
+                "sidecar_quality_status": sidecar_quality_audit.get("status", ""),
+                "sidecar_quality_issue_count": sidecar_quality_audit.get("issue_count", ""),
+                "sidecar_quality_hard_issue_count": sidecar_quality_audit.get("hard_issue_count", ""),
+                "sidecar_quality_advisory_issue_count": sidecar_quality_audit.get("advisory_issue_count", ""),
+                "sidecar_quality_hard_issue_summary": _sidecar_quality_issue_summary(
+                    sidecar_quality_audit.get("hard_issues", []) or []
+                ),
+                "sidecar_quality_advisory_issue_summary": _sidecar_quality_issue_summary(
+                    sidecar_quality_audit.get("advisory_issues", []) or []
+                ),
+                "sidecar_evidence_consistency_audit_status": sidecar_consistency_audit.get("status", ""),
+                "sidecar_evidence_consistency_audit_check_count": sidecar_consistency_audit.get("check_count", ""),
+                "sidecar_evidence_consistency_audit_issue_count": sidecar_consistency_audit.get("issue_count", ""),
+                **_sidecar_visual_review_top_action(sidecar_evidence_brief),
+                "evidence_debt_status": evidence_debt_register.get(
+                    "status",
+                    "missing_evidence_debt_register",
+                ),
+                "evidence_debt_count": evidence_debt_register.get("debt_count", ""),
+                "evidence_debt_candidate_count": evidence_debt_register.get("candidate_debt_count", ""),
+                "evidence_debt_global_count": evidence_debt_register.get("global_debt_count", ""),
+                "evidence_debt_archived_candidate_count": evidence_debt_register.get("archived_candidate_count", ""),
+                "evidence_debt_next_action": evidence_debt_register.get("next_action", ""),
+                "evidence_debt_strategic_next_action": evidence_debt_register.get("strategic_next_action", ""),
+                "evidence_debt_current_runtime_handoff_action": evidence_debt_register.get(
+                    "current_runtime_handoff_action",
+                    "",
+                ),
+                "evidence_debt_current_runtime_handoff_status": evidence_debt_register.get(
+                    "current_runtime_handoff_status",
+                    "",
+                ),
+                "evidence_debt_current_runtime_handoff_reason": evidence_debt_register.get(
+                    "current_runtime_handoff_reason",
+                    "",
+                ),
+                "evidence_debt_strategic_blocked_by_current_handoff": evidence_debt_register.get(
+                    "strategic_next_action_blocked_by_current_handoff",
+                    "",
+                ),
                 "approval_queue_status": approval_queue.get("status", approval_status.get("status", "missing_approval_queue")),
                 "approval_pending_count": approval_queue.get("pending_count", approval_status.get("pending_count", "")),
                 "approval_top_pending_id": approval_queue.get("top_pending_approval_id", ""),
@@ -14062,6 +27382,8 @@ def build_ceo_run_index(options: CeoOpsOptions, *, limit: int = 25) -> dict[str,
                 "next_command": (
                     live_stop_handoff_command
                     if stop_requested
+                    else data_gate_handoff_command
+                    if manual_data_gate_active and pending_approval_count == 0
                     else resumption.get(
                         "next_command",
                         f"PYTHONPATH=src python3 -m riskflow ceo resumption-brief --run-id {run_id}",
@@ -14144,6 +27466,36 @@ def render_ceo_run_index(index: dict[str, Any]) -> str:
             f"readiness_blockers={row.get('nine_nine_blocking_case_count')} "
             f"coherence={row.get('artifact_coherence_status') or 'missing_artifact_coherence'} "
             f"coherence_issues={row.get('artifact_coherence_issue_count') if row.get('artifact_coherence_issue_count') != '' else 'n/a'} "
+            f"data_gate={row.get('data_gate_brief_status') or 'missing_data_gate_brief'} "
+            f"data_gate_safe={row.get('data_gate_safe_to_run_fresh_validation') if row.get('data_gate_safe_to_run_fresh_validation') != '' else 'n/a'} "
+            f"data_gate_csvs={row.get('data_gate_csv_requirement_count') if row.get('data_gate_csv_requirement_count') != '' else 'n/a'} "
+            f"data_gate_candidates={row.get('data_gate_blocked_candidate_count') if row.get('data_gate_blocked_candidate_count') != '' else 'n/a'} "
+            f"data_gate_role_blockers={row.get('data_gate_role_blocker_count') if row.get('data_gate_role_blocker_count') != '' else 'n/a'} "
+            f"sidecar_learning={row.get('sidecar_learning_status') or 'missing_sidecar_candidate_learning_ledger'} "
+            f"sidecar_learning_lead={row.get('sidecar_learning_lead_count') if row.get('sidecar_learning_lead_count') != '' else 'n/a'} "
+            f"sidecar_learning_control={row.get('sidecar_learning_control_count') if row.get('sidecar_learning_control_count') != '' else 'n/a'} "
+            f"sidecar_learning_archive={row.get('sidecar_learning_archive_count') if row.get('sidecar_learning_archive_count') != '' else 'n/a'} "
+            f"sidecar_learning_review={row.get('sidecar_learning_review_count') if row.get('sidecar_learning_review_count') != '' else 'n/a'} "
+            f"sidecar_learning_blocked={row.get('sidecar_learning_blocked_count') if row.get('sidecar_learning_blocked_count') != '' else 'n/a'} "
+            f"sidecar_post_data_playbook={row.get('sidecar_post_data_playbook_status') or 'missing_sidecar_post_data_playbook'} "
+            f"sidecar_post_data_action={row.get('sidecar_post_data_playbook_current_required_action') or 'none'} "
+            f"sidecar_post_data_candidates={row.get('sidecar_post_data_playbook_candidate_count') if row.get('sidecar_post_data_playbook_candidate_count') != '' else 'n/a'} "
+            f"sidecar_post_data_visual_gate={row.get('sidecar_post_data_playbook_visual_label_gate_passed')} "
+            f"sidecar_post_data_blockers={row.get('sidecar_post_data_playbook_pre_validation_blockers') or 'none'} "
+            f"sidecar_post_data_can_execute={row.get('sidecar_post_data_playbook_can_execute_count') if row.get('sidecar_post_data_playbook_can_execute_count') != '' else 'n/a'} "
+            f"sidecar_quality={row.get('sidecar_quality_status') or 'missing_sidecar_quality_audit'} "
+            f"sidecar_quality_hard={row.get('sidecar_quality_hard_issue_count') if row.get('sidecar_quality_hard_issue_count') != '' else 'n/a'} "
+            f"sidecar_quality_advisory={row.get('sidecar_quality_advisory_issue_count') if row.get('sidecar_quality_advisory_issue_count') != '' else 'n/a'} "
+            f"sidecar_consistency={row.get('sidecar_evidence_consistency_audit_status') or 'missing_sidecar_consistency_audit'} "
+            f"sidecar_consistency_checks={row.get('sidecar_evidence_consistency_audit_check_count') if row.get('sidecar_evidence_consistency_audit_check_count') != '' else 'n/a'} "
+            f"sidecar_consistency_issues={row.get('sidecar_evidence_consistency_audit_issue_count') if row.get('sidecar_evidence_consistency_audit_issue_count') != '' else 'n/a'} "
+            f"evidence_debt={row.get('evidence_debt_status') or 'missing_evidence_debt_register'} "
+            f"evidence_debt_count={row.get('evidence_debt_count') if row.get('evidence_debt_count') != '' else 'n/a'} "
+            f"evidence_debt_candidate={row.get('evidence_debt_candidate_count') if row.get('evidence_debt_candidate_count') != '' else 'n/a'} "
+            f"evidence_debt_global={row.get('evidence_debt_global_count') if row.get('evidence_debt_global_count') != '' else 'n/a'} "
+            f"evidence_debt_archive={row.get('evidence_debt_archived_candidate_count') if row.get('evidence_debt_archived_candidate_count') != '' else 'n/a'} "
+            f"evidence_debt_current_handoff={row.get('evidence_debt_current_runtime_handoff_action') or 'none'} "
+            f"evidence_debt_handoff_status={row.get('evidence_debt_current_runtime_handoff_status') or 'none'} "
             f"approval={row.get('approval_queue_status') or 'missing_approval_queue'} "
             f"approval_pending={row.get('approval_pending_count') if row.get('approval_pending_count') != '' else 'n/a'} "
             f"role_queue={row.get('role_queue_status') or 'missing_role_task_queue'} "
@@ -14160,6 +27512,52 @@ def render_ceo_run_index(index: dict[str, Any]) -> str:
             lines.append(
                 "  - "
                 f"decision_runtime_route={row.get('decision_quality_runtime_authorized_strategic_route')}"
+            )
+        if row.get("sidecar_quality_advisory_issue_summary"):
+            lines.append(f"  - sidecar_quality_advisory={row.get('sidecar_quality_advisory_issue_summary')}")
+        if row.get("sidecar_quality_hard_issue_summary"):
+            lines.append(f"  - sidecar_quality_hard={row.get('sidecar_quality_hard_issue_summary')}")
+        if row.get("sidecar_learning_lead_candidate"):
+            lines.append(
+                "  - "
+                f"sidecar_learning_lead={row.get('sidecar_learning_lead_candidate')} "
+                f"role={row.get('sidecar_learning_lead_product_role') or 'none'} "
+                f"authority={row.get('sidecar_learning_lead_validation_authority') or 'none'} "
+                f"next={row.get('sidecar_learning_lead_next_required_action') or 'none'}"
+            )
+        if row.get("sidecar_learning_control_candidate"):
+            lines.append(
+                "  - "
+                f"sidecar_learning_control={row.get('sidecar_learning_control_candidate')} "
+                f"reason={row.get('sidecar_learning_control_reason') or 'none'} "
+                f"next={row.get('sidecar_learning_control_next_allowed_action') or 'none'}"
+            )
+        if row.get("sidecar_learning_archive_candidate"):
+            lines.append(
+                "  - "
+                f"sidecar_learning_archive={row.get('sidecar_learning_archive_candidate')} "
+                f"reason={row.get('sidecar_learning_archive_reason') or 'none'} "
+                f"next={row.get('sidecar_learning_archive_next_allowed_action') or 'none'}"
+            )
+        if row.get("sidecar_post_data_playbook_status"):
+            lines.append(
+                "  - "
+                f"sidecar_post_data_playbook={row.get('sidecar_post_data_playbook_status')} "
+                f"action={row.get('sidecar_post_data_playbook_current_required_action') or 'none'} "
+                f"candidates={row.get('sidecar_post_data_playbook_candidate_count') if row.get('sidecar_post_data_playbook_candidate_count') != '' else 'n/a'} "
+                f"visual_gate={row.get('sidecar_post_data_playbook_visual_label_gate_passed')} "
+                f"blockers={row.get('sidecar_post_data_playbook_pre_validation_blockers') or 'none'} "
+                f"can_execute={row.get('sidecar_post_data_playbook_can_execute_count') if row.get('sidecar_post_data_playbook_can_execute_count') != '' else 'n/a'}"
+            )
+        if row.get("sidecar_visual_review_top_candidate"):
+            lines.append(
+                "  - "
+                f"sidecar_visual_top={row.get('sidecar_visual_review_top_candidate')} "
+                f"role={row.get('sidecar_visual_review_top_product_role') or 'none'} "
+                f"focus={row.get('sidecar_visual_review_top_focus') or 'none'} "
+                f"priority={row.get('sidecar_visual_review_top_priority') if row.get('sidecar_visual_review_top_priority') != '' else 'n/a'} "
+                f"gallery={row.get('sidecar_visual_review_top_gallery') or 'none'} "
+                f"labels={row.get('sidecar_visual_review_top_labels_with_images') or 'none'}"
             )
         if row.get("trace_grade_issues"):
             lines.append(f"  - trace_issues={row.get('trace_grade_issues')}")
@@ -14620,8 +28018,8 @@ def run_ceo_operating_incident_register(options: CeoOpsOptions) -> dict[str, Any
     return {"run_id": ceo_run_id, "lab_run_id": lab_run_id, "register": register, "paths": {"incident_register": path, "incident_register_report": report_path}}
 
 
-def _classify_repair_command(command: str, repair_key: str) -> dict[str, Any]:
-    text = f"{command} {repair_key}".lower()
+def _classify_repair_command(command: str, repair_key: str, *, evidence: str = "") -> dict[str, Any]:
+    text = f"{command} {repair_key} {evidence}".lower()
     manual_tokens = [
         "approval",
         "user",
@@ -14629,6 +28027,10 @@ def _classify_repair_command(command: str, repair_key: str) -> dict[str, Any]:
         "clear-stop",
         "stop_requested",
         "pending_user_approval",
+        "manual_data_gate",
+        "manual_data_import_required",
+        "import_or_curate_fresh_ohlcv_data",
+        "fresh_ohlcv_import_or_curation",
         "production",
         "promotion",
     ]
@@ -14756,7 +28158,7 @@ def _append_repair_item(
         return
     seen.add(repair_key)
     command = exact_command or owner_command
-    command_contract = _classify_repair_command(command, repair_key)
+    command_contract = _classify_repair_command(command, repair_key, evidence=evidence)
     implementation_playbook = (
         _implementation_repair_playbook(
             repair_key=repair_key,
@@ -14792,6 +28194,18 @@ def _repair_apply_command(ceo_run_id: str, repair_key: str) -> str:
         "PYTHONPATH=src python3 -m riskflow ceo repair-apply "
         f"--run-id {ceo_run_id} --repair-key {repair_key} --apply"
     )
+
+
+def _manual_data_gate_command(ceo_run_id: str) -> str:
+    return f"PYTHONPATH=src python3 -m riskflow ceo data-gate-brief --run-id {ceo_run_id}"
+
+
+def _is_manual_data_gate_repair(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(field, ""))
+        for field in ("repair_key", "category", "owner_command", "recommended_command", "closure_condition", "evidence")
+    ).lower()
+    return "import_or_curate_fresh_ohlcv_data" in text or "manual_data" in text or "fresh_ohlcv" in text
 
 
 def build_ceo_repair_plan(
@@ -14835,6 +28249,7 @@ def build_ceo_repair_plan(
     items = sorted(
         items,
         key=lambda item: (
+            0 if item.get("requires_manual_gate") else 1,
             _incident_severity_rank(str(item.get("severity", ""))),
             0 if item.get("source") == "blocker_stack" else 1,
             str(item.get("repair_key", "")),
@@ -14853,7 +28268,7 @@ def build_ceo_repair_plan(
         next_command = f"PYTHONPATH=src python3 -m riskflow ceo execute-next --run-id {ceo_run_id} --apply"
     elif top.get("requires_manual_gate"):
         status = "manual_gate_first"
-        next_command = str(top.get("recommended_command", ""))
+        next_command = _manual_data_gate_command(ceo_run_id) if _is_manual_data_gate_repair(top) else str(top.get("recommended_command", ""))
     elif top.get("needs_implementation"):
         status = "implementation_repair_required"
         next_command = ""
@@ -15280,7 +28695,9 @@ def build_ceo_action_board(
     for item in repair_plan.get("repair_items", []) or []:
         repair_key = str(item.get("repair_key", "unknown_repair"))
         command_kind = str(item.get("command_kind", ""))
-        if item.get("requires_manual_gate") or item.get("needs_implementation"):
+        if item.get("requires_manual_gate") and _is_manual_data_gate_repair(item):
+            command = _manual_data_gate_command(ceo_run_id)
+        elif item.get("requires_manual_gate") or item.get("needs_implementation"):
             command = str(item.get("recommended_command", ""))
         elif command_kind in {"runnable_cli", "diagnostic_refresh"}:
             command = _repair_apply_command(ceo_run_id, repair_key)
@@ -15736,6 +29153,510 @@ def run_ceo_operator_step(options: CeoOpsOptions) -> dict[str, Any]:
     }
 
 
+def _operator_brief_existing_path(path: Path) -> str:
+    return str(path) if path.exists() else ""
+
+
+def _build_data_gate_operator_work(root: Path) -> dict[str, Any]:
+    import_plan_path = root / "data_gate_import_plan.yaml"
+    import_batches_path = root / "data_gate_import_batches.csv"
+    import_checklist_path = root / "data_gate_import_checklist.csv"
+    import_checklist_yaml_path = root / "data_gate_import_checklist.yaml"
+    handoff_audit_path = root / "data_gate_handoff_audit.yaml"
+    symbol_matrix_path = root / "data_gate_symbol_matrix.csv"
+    candidate_unlocks_path = root / "data_gate_candidate_unlocks.csv"
+    csv_requirements_path = root / "data_gate_csv_requirements.csv"
+    data_gate_brief_path = root / "data_gate_brief.yaml"
+    fresh_data_preflight_path = root / "fresh_data_preflight.yaml"
+
+    import_plan = _load_yaml_if_exists(import_plan_path)
+    import_checklist = _load_yaml_if_exists(import_checklist_yaml_path)
+    import_checklist_summary = _data_gate_import_checklist_csv_summary(import_checklist_path)
+    handoff_audit = _load_yaml_if_exists(handoff_audit_path)
+    data_gate_brief = _load_yaml_if_exists(data_gate_brief_path)
+    fresh_data_preflight = _load_yaml_if_exists(fresh_data_preflight_path)
+    if not any(
+        [
+            import_plan,
+            import_checklist,
+            import_checklist_summary,
+            handoff_audit,
+            data_gate_brief,
+            fresh_data_preflight,
+            import_batches_path.exists(),
+            symbol_matrix_path.exists(),
+            candidate_unlocks_path.exists(),
+            csv_requirements_path.exists(),
+        ]
+    ):
+        return {}
+
+    timeframe_statuses = [
+        f"{item.get('timeframe')}:{item.get('status')}({item.get('active_count')}/{item.get('asset_count')})"
+        for item in fresh_data_preflight.get("timeframes", []) or []
+        if item.get("timeframe")
+    ]
+    required_timeframes = (
+        _csv_list(import_plan.get("required_timeframes", []) or [])
+        or _csv_list(
+            [
+                item.get("timeframe")
+                for item in fresh_data_preflight.get("timeframes", []) or []
+                if item.get("timeframe")
+            ]
+        )
+    )
+    paths = {
+        "data_gate_brief": _operator_brief_existing_path(root / "data_gate_brief.md"),
+        "data_gate_brief_yaml": _operator_brief_existing_path(data_gate_brief_path),
+        "fresh_data_preflight": _operator_brief_existing_path(fresh_data_preflight_path),
+        "fresh_data_preflight_report": _operator_brief_existing_path(root / "fresh_data_preflight.md"),
+        "import_plan": _operator_brief_existing_path(import_plan_path),
+        "import_plan_report": _operator_brief_existing_path(root / "data_gate_import_plan.md"),
+        "import_batches": _operator_brief_existing_path(import_batches_path),
+        "import_checklist": _operator_brief_existing_path(import_checklist_path),
+        "import_checklist_yaml": _operator_brief_existing_path(import_checklist_yaml_path),
+        "import_checklist_report": _operator_brief_existing_path(root / "data_gate_import_checklist.md"),
+        "handoff_audit": _operator_brief_existing_path(handoff_audit_path),
+        "handoff_audit_report": _operator_brief_existing_path(root / "data_gate_handoff_audit.md"),
+        "symbol_matrix": _operator_brief_existing_path(symbol_matrix_path),
+        "symbol_matrix_report": _operator_brief_existing_path(root / "data_gate_symbol_matrix.md"),
+        "candidate_unlocks": _operator_brief_existing_path(candidate_unlocks_path),
+        "csv_requirements": _operator_brief_existing_path(csv_requirements_path),
+    }
+    next_verification_command = (
+        import_plan.get("next_verification_command")
+        or data_gate_brief.get("next_verification_command")
+        or "PYTHONPATH=src python3 -m riskflow ceo fresh-data-preflight --run-id <run_id>"
+    )
+    return {
+        "status": (
+            data_gate_brief.get("status")
+            or import_plan.get("status")
+            or fresh_data_preflight.get("overall_status")
+            or "data_gate_work_available"
+        ),
+        "universe": import_plan.get("universe") or data_gate_brief.get("universe") or fresh_data_preflight.get("universe", ""),
+        "data_dir": import_plan.get("data_dir") or data_gate_brief.get("data_dir") or fresh_data_preflight.get("data_dir", ""),
+        "preflight_status": data_gate_brief.get("preflight_status") or fresh_data_preflight.get("overall_status", ""),
+        "safe_to_run_fresh_validation": (
+            data_gate_brief.get("safe_to_run_fresh_validation")
+            if "safe_to_run_fresh_validation" in data_gate_brief
+            else import_plan.get("safe_to_run_fresh_validation", fresh_data_preflight.get("safe_to_run_fresh_validation", ""))
+        ),
+        "manual_data_gate_active": (
+            data_gate_brief.get("manual_data_gate_active")
+            if "manual_data_gate_active" in data_gate_brief
+            else import_plan.get("manual_data_gate_active", "")
+        ),
+        "required_timeframes": required_timeframes,
+        "timeframe_statuses": _csv_list(timeframe_statuses),
+        "required_csv_count": import_plan.get("required_csv_count", _csv_data_row_count(csv_requirements_path)),
+        "required_batch_count": import_plan.get("required_batch_count", _csv_data_row_count(import_batches_path)),
+        "import_batch_row_count": _csv_data_row_count(import_batches_path),
+        "import_checklist_row_count": (
+            import_checklist.get("checklist_row_count", import_checklist_summary.get("row_count", ""))
+        ),
+        "import_checklist_pending_imports": (
+            import_checklist.get("pending_import_count", import_checklist_summary.get("pending_import_count", ""))
+        ),
+        "import_checklist_complete_ready": (
+            import_checklist.get("complete_ready_count", import_checklist_summary.get("complete_ready_count", ""))
+        ),
+        "import_checklist_missing_count": import_checklist_summary.get(
+            "missing_count",
+            "",
+        ),
+        "import_checklist_stale_count": import_checklist_summary.get(
+            "stale_count",
+            "",
+        ),
+        "handoff_audit_status": handoff_audit.get("status", ""),
+        "handoff_audit_check_count": handoff_audit.get("check_count", ""),
+        "handoff_audit_issue_count": handoff_audit.get("issue_count", ""),
+        "symbol_matrix_row_count": _csv_data_row_count(symbol_matrix_path),
+        "candidate_unlock_count": import_plan.get("candidate_unlock_count", _csv_data_row_count(candidate_unlocks_path)),
+        "csv_requirement_row_count": _csv_data_row_count(csv_requirements_path),
+        "lead_post_data_candidates": import_plan.get("lead_post_data_candidates", ""),
+        "diversity_control_candidates": import_plan.get("diversity_control_candidates", ""),
+        "archive_failure_mode_candidates": import_plan.get("archive_failure_mode_candidates", ""),
+        "post_import_sequence": import_plan.get("post_import_sequence", []) or [],
+        "next_verification_command": next_verification_command,
+        "paths": paths,
+        "readiness_effect": (
+            "manual fresh OHLCV import is required before fresh/control validation; "
+            "import completion alone does not validate or promote candidates"
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _build_sidecar_visual_label_operator_work(root: Path) -> dict[str, Any]:
+    worklist_path = root / "sidecar_visual_label_worklist.csv"
+    batches_path = root / "sidecar_visual_label_review_batches.csv"
+    progress_path = root / "sidecar_visual_label_progress.csv"
+    next_batch_path = root / "sidecar_visual_label_next_batch.csv"
+    rubric_path = root / "sidecar_visual_label_rubric.yaml"
+    entry_sheet_path = root / "sidecar_visual_label_entry_sheet.csv"
+    source_update_manifest_path = root / "sidecar_visual_label_source_update_manifest.csv"
+    source_patch_plan_path = root / "sidecar_visual_label_source_patch_plan.csv"
+    source_patch_plan_yaml_path = root / "sidecar_visual_label_source_patch_plan.yaml"
+    completion_audit_path = root / "sidecar_visual_label_completion_audit.csv"
+    completion_audit_yaml_path = root / "sidecar_visual_label_completion_audit.yaml"
+
+    worklist = _sidecar_visual_label_worklist_csv_summary(worklist_path)
+    batches = _sidecar_visual_label_batches_csv_summary(batches_path)
+    progress = _sidecar_visual_label_progress_csv_summary(progress_path)
+    next_batch = _sidecar_visual_label_next_batch_csv_summary(next_batch_path)
+    rubric = _load_yaml_if_exists(rubric_path)
+    entry_sheet = _sidecar_visual_label_entry_sheet_csv_summary(entry_sheet_path)
+    source_update = _sidecar_visual_label_source_update_manifest_csv_summary(source_update_manifest_path)
+    source_patch_plan = _sidecar_visual_label_source_patch_plan_csv_summary(source_patch_plan_path)
+    completion_audit = _load_yaml_if_exists(completion_audit_yaml_path)
+
+    if not any(
+        [
+            worklist,
+            batches,
+            progress,
+            next_batch,
+            rubric,
+            entry_sheet,
+            source_update,
+            source_patch_plan,
+            completion_audit,
+        ]
+    ):
+        return {}
+
+    next_batch_id = (
+        completion_audit.get("batch_id")
+        or next_batch.get("batch_id")
+        or progress.get("next_batch_id")
+        or rubric.get("batch_id")
+        or entry_sheet.get("batch_id")
+        or source_update.get("batch_id")
+        or source_patch_plan.get("batch_id")
+        or ""
+    )
+    required_fields = (
+        _csv_list(completion_audit.get("required_label_fields", []) or [])
+        or _csv_list(rubric.get("required_label_fields", []) or [])
+        or entry_sheet.get("required_label_fields", "")
+        or source_update.get("required_update_fields", "")
+        or next_batch.get("missing_required_labels", "")
+    )
+
+    paths = {
+        "worklist": _operator_brief_existing_path(worklist_path),
+        "worklist_report": _operator_brief_existing_path(root / "sidecar_visual_label_worklist.md"),
+        "review_batches": _operator_brief_existing_path(batches_path),
+        "review_batches_report": _operator_brief_existing_path(root / "sidecar_visual_label_review_batches.md"),
+        "progress": _operator_brief_existing_path(progress_path),
+        "progress_report": _operator_brief_existing_path(root / "sidecar_visual_label_progress.md"),
+        "next_batch": _operator_brief_existing_path(next_batch_path),
+        "next_batch_report": _operator_brief_existing_path(root / "sidecar_visual_label_next_batch.md"),
+        "next_batch_gallery": _operator_brief_existing_path(root / "sidecar_visual_label_next_batch_gallery.md"),
+        "rubric": _operator_brief_existing_path(rubric_path),
+        "rubric_report": _operator_brief_existing_path(root / "sidecar_visual_label_rubric.md"),
+        "entry_sheet": _operator_brief_existing_path(entry_sheet_path),
+        "entry_sheet_report": _operator_brief_existing_path(root / "sidecar_visual_label_entry_sheet.md"),
+        "source_update_manifest": _operator_brief_existing_path(source_update_manifest_path),
+        "source_update_manifest_report": _operator_brief_existing_path(
+            root / "sidecar_visual_label_source_update_manifest.md",
+        ),
+        "source_patch_plan": _operator_brief_existing_path(source_patch_plan_path),
+        "source_patch_plan_yaml": _operator_brief_existing_path(source_patch_plan_yaml_path),
+        "source_patch_plan_report": _operator_brief_existing_path(root / "sidecar_visual_label_source_patch_plan.md"),
+        "completion_audit": _operator_brief_existing_path(completion_audit_path),
+        "completion_audit_yaml": _operator_brief_existing_path(completion_audit_yaml_path),
+        "completion_audit_report": _operator_brief_existing_path(root / "sidecar_visual_label_completion_audit.md"),
+    }
+
+    return {
+        "status": completion_audit.get("status") or progress.get("statuses") or "visual_label_work_available",
+        "next_batch_id": next_batch_id,
+        "required_fields": required_fields,
+        "worklist_row_count": worklist.get("row_count", ""),
+        "worklist_candidate_count": worklist.get("candidate_count", ""),
+        "review_batch_count": batches.get("batch_count", ""),
+        "review_batch_row_count": batches.get("row_count", ""),
+        "progress_candidate_count": progress.get("candidate_count", ""),
+        "progress_matched_rows": progress.get("matched_label_row_count", ""),
+        "progress_pending_rows": progress.get("pending_label_row_count", ""),
+        "progress_completed_rows": progress.get("completed_label_row_count", ""),
+        "progress_not_started_candidates": progress.get("not_started_candidate_count", ""),
+        "progress_incomplete_candidates": progress.get("incomplete_candidate_count", ""),
+        "progress_complete_candidates": progress.get("complete_candidate_count", ""),
+        "next_batch_row_count": next_batch.get("row_count", ""),
+        "next_batch_candidate_count": next_batch.get("candidate_count", ""),
+        "next_batch_exact_variant_count": next_batch.get("exact_variant_count", ""),
+        "next_batch_family_timeframe_count": next_batch.get("family_timeframe_count", ""),
+        "next_batch_family_context_count": next_batch.get("family_context_count", ""),
+        "entry_sheet_row_count": entry_sheet.get("row_count", ""),
+        "entry_sheet_missing_required_cells": entry_sheet.get("missing_required_cell_count", ""),
+        "entry_sheet_missing_source_files": entry_sheet.get("missing_source_label_file_count", ""),
+        "entry_sheet_missing_source_rows": entry_sheet.get("missing_source_label_row_count", ""),
+        "entry_sheet_missing_images": entry_sheet.get("missing_image_count", ""),
+        "source_update_row_count": source_update.get("row_count", ""),
+        "source_update_pending_rows": source_update.get("pending_update_row_count", ""),
+        "source_update_required_cells": source_update.get("required_update_cell_count", ""),
+        "source_update_blocked_reference_rows": source_update.get("blocked_reference_row_count", ""),
+        "source_update_complete_rows": source_update.get("complete_row_count", ""),
+        "source_patch_plan_cell_count": source_patch_plan.get("row_count", ""),
+        "source_patch_plan_pending_cells": source_patch_plan.get("pending_source_patch_cell_count", ""),
+        "source_patch_plan_blocked_cells": source_patch_plan.get("blocked_source_patch_cell_count", ""),
+        "source_patch_plan_source_files": source_patch_plan.get("source_file_count", ""),
+        "source_patch_plan_source_rows": source_patch_plan.get("source_row_count", ""),
+        "source_patch_plan_required_fields": source_patch_plan.get("required_update_fields", ""),
+        "completion_audit_rows": completion_audit.get("row_count", ""),
+        "completion_audit_completed_rows": completion_audit.get("completed_row_count", ""),
+        "completion_audit_missing_rows": completion_audit.get("missing_required_row_count", ""),
+        "completion_audit_invalid_rows": completion_audit.get("invalid_label_row_count", ""),
+        "next_action": completion_audit.get("next_action") or "complete_required_visual_labels",
+        "paths": paths,
+        "readiness_effect": (
+            "human visual-label entry is required before sidecar quality remediation can clear; "
+            "this does not validate or promote candidates"
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _build_sidecar_post_data_operator_work(root: Path) -> dict[str, Any]:
+    playbook_path = root / "sidecar_post_data_validation_playbook.yaml"
+    playbook = _load_yaml_if_exists(playbook_path)
+    if not playbook:
+        return {}
+    return {
+        "status": playbook.get("status", ""),
+        "current_required_action": playbook.get("current_required_action", ""),
+        "candidate_count": playbook.get("candidate_count", ""),
+        "lead_post_data_candidate_count": playbook.get("lead_post_data_candidate_count", ""),
+        "diversity_control_only_count": playbook.get("diversity_control_only_count", ""),
+        "archive_failure_mode_count": playbook.get("archive_failure_mode_count", ""),
+        "manual_data_gate_active": playbook.get("manual_data_gate_active", ""),
+        "safe_to_run_fresh_validation": playbook.get("safe_to_run_fresh_validation", ""),
+        "visual_label_completion_status": playbook.get("visual_label_completion_status", ""),
+        "visual_label_gate_passed": playbook.get("visual_label_gate_passed", ""),
+        "quality_remediation_status": playbook.get("quality_remediation_status", ""),
+        "quality_remediation_required_action": playbook.get("quality_remediation_required_action", ""),
+        "pre_validation_blockers": _csv_list(playbook.get("pre_validation_blockers", []) or []),
+        "can_execute_count": _sidecar_post_data_can_execute_count(playbook),
+        "paths": {
+            "playbook": _operator_brief_existing_path(playbook_path),
+            "playbook_report": _operator_brief_existing_path(root / "sidecar_post_data_validation_playbook.md"),
+        },
+        "readiness_effect": (
+            "post-data champion/challenger validation remains blocked until fresh data, visual labels, "
+            "quality remediation, and shadow guardrails are clean"
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+    }
+
+
+def _clearance_int(value: Any) -> int:
+    return _safe_int(value) or 0
+
+
+def build_ceo_manual_gate_clearance_packet(
+    *,
+    ceo_run_id: str,
+    lab_run_id: str,
+    effective_operator: dict[str, Any],
+    data_gate_work: dict[str, Any],
+    sidecar_visual_label_work: dict[str, Any],
+    sidecar_post_data_work: dict[str, Any],
+) -> dict[str, Any]:
+    pending_data_imports = _clearance_int(data_gate_work.get("import_checklist_pending_imports"))
+    data_handoff_issues = _clearance_int(data_gate_work.get("handoff_audit_issue_count"))
+    pending_visual_label_cells = _clearance_int(
+        sidecar_visual_label_work.get("source_patch_plan_pending_cells")
+        if sidecar_visual_label_work.get("source_patch_plan_pending_cells") != ""
+        else sidecar_visual_label_work.get("entry_sheet_missing_required_cells")
+    )
+    missing_visual_label_rows = _clearance_int(sidecar_visual_label_work.get("completion_audit_missing_rows"))
+    invalid_visual_label_rows = _clearance_int(sidecar_visual_label_work.get("completion_audit_invalid_rows"))
+    post_data_can_execute_count = _clearance_int(sidecar_post_data_work.get("can_execute_count"))
+    runtime_gate_passed = (
+        effective_operator.get("manual_gate_active") is not True
+        and effective_operator.get("runtime_blocked") is not True
+    )
+    data_gate_passed = (
+        data_gate_work.get("safe_to_run_fresh_validation") is True
+        and pending_data_imports == 0
+        and data_handoff_issues == 0
+    )
+    visual_gate_passed = (
+        sidecar_post_data_work.get("visual_label_gate_passed") is True
+        and pending_visual_label_cells == 0
+        and missing_visual_label_rows == 0
+        and invalid_visual_label_rows == 0
+    )
+    post_data_gate_passed = post_data_can_execute_count > 0 and not sidecar_post_data_work.get(
+        "pre_validation_blockers"
+    )
+    gates = [
+        {
+            "gate_id": "runtime_authority",
+            "passed": runtime_gate_passed,
+            "status": "pass" if runtime_gate_passed else "blocked",
+            "required_action": "clear_runtime_manual_gate" if not runtime_gate_passed else "none",
+            "blocking_reason": effective_operator.get("runtime_block_reason", "") if not runtime_gate_passed else "",
+            "evidence": "action_board.yaml|decision_quality.yaml|operator_brief.yaml",
+        },
+        {
+            "gate_id": "fresh_data_preflight",
+            "passed": data_gate_passed,
+            "status": "pass" if data_gate_passed else "blocked",
+            "required_action": data_gate_work.get("next_verification_command", "") or "rerun_fresh_data_preflight",
+            "blocking_reason": (
+                "fresh_data_preflight_not_safe_or_pending_imports"
+                if not data_gate_passed
+                else ""
+            ),
+            "pending_count": pending_data_imports,
+            "evidence": "data_gate_import_checklist.csv|data_gate_handoff_audit.yaml|fresh_data_preflight.yaml",
+        },
+        {
+            "gate_id": "visual_label_completion",
+            "passed": visual_gate_passed,
+            "status": "pass" if visual_gate_passed else "blocked",
+            "required_action": sidecar_visual_label_work.get("next_action", "") or "complete_required_visual_labels",
+            "blocking_reason": (
+                "visual_label_completion_audit_not_passed"
+                if not visual_gate_passed
+                else ""
+            ),
+            "pending_count": pending_visual_label_cells,
+            "evidence": "sidecar_visual_label_source_patch_plan.csv|sidecar_visual_label_completion_audit.yaml",
+        },
+        {
+            "gate_id": "post_data_playbook_execution",
+            "passed": post_data_gate_passed,
+            "status": "pass" if post_data_gate_passed else "blocked",
+            "required_action": sidecar_post_data_work.get("current_required_action", "") or "clear_pre_validation_blockers",
+            "blocking_reason": sidecar_post_data_work.get("pre_validation_blockers", "") if not post_data_gate_passed else "",
+            "can_execute_count": post_data_can_execute_count,
+            "evidence": "sidecar_post_data_validation_playbook.yaml",
+        },
+    ]
+    blockers = [gate["gate_id"] for gate in gates if gate.get("passed") is not True]
+    first_blocking_gate = next((gate for gate in gates if gate.get("passed") is not True), {})
+    clearance_sequence = [
+        {
+            "step": index,
+            "gate_id": gate.get("gate_id", ""),
+            "status": gate.get("status", ""),
+            "required_action": gate.get("required_action", "") or "none",
+            "blocking_reason": gate.get("blocking_reason", "") or "",
+            "evidence": gate.get("evidence", ""),
+        }
+        for index, gate in enumerate(gates, start=1)
+    ]
+    can_start_post_data_validation = not blockers
+    return {
+        "model": CEO_MANUAL_GATE_CLEARANCE_PACKET_MODEL,
+        "generated_at": utc_now_iso(),
+        "run_id": ceo_run_id,
+        "lab_run_id": lab_run_id,
+        "status": (
+            "manual_gates_clear_for_post_data_validation"
+            if can_start_post_data_validation
+            else "manual_gate_clearance_blocked"
+        ),
+        "can_start_post_data_validation": can_start_post_data_validation,
+        "blocked_gate_count": len(blockers),
+        "blocked_gates": _csv_list(blockers),
+        "first_blocking_gate": first_blocking_gate.get("gate_id", ""),
+        "first_blocking_required_action": first_blocking_gate.get("required_action", ""),
+        "first_blocking_evidence": first_blocking_gate.get("evidence", ""),
+        "clearance_sequence": clearance_sequence,
+        "pending_data_imports": pending_data_imports,
+        "data_handoff_audit_status": data_gate_work.get("handoff_audit_status", ""),
+        "data_handoff_audit_issues": data_handoff_issues,
+        "pending_visual_label_cells": pending_visual_label_cells,
+        "missing_visual_label_rows": missing_visual_label_rows,
+        "invalid_visual_label_rows": invalid_visual_label_rows,
+        "post_data_can_execute_count": post_data_can_execute_count,
+        "gates": gates,
+        "next_required_action": (
+            sidecar_post_data_work.get("current_required_action")
+            or data_gate_work.get("next_verification_command")
+            or sidecar_visual_label_work.get("next_action")
+            or "clear_manual_gates"
+        ),
+        "authority_scope": "manual gate clearance status only",
+        "guardrail": (
+            "This packet explains whether post-data champion/challenger validation can start. It does not import "
+            "OHLCV data, fill visual labels, run validation, promote candidates, or alter production Riskflow behavior."
+        ),
+        "product_language_allowed": False,
+        "production_effect": "none",
+        "promotion_authority": "none",
+    }
+
+
+def render_ceo_manual_gate_clearance_packet(packet: dict[str, Any]) -> str:
+    lines = [
+        "# Riskflow Manual Gate Clearance Packet",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Run: {packet.get('run_id')}",
+        f"Lab run: {packet.get('lab_run_id')}",
+        f"Status: {packet.get('status')}",
+        f"Can start post-data validation: {packet.get('can_start_post_data_validation')}",
+        f"Blocked gates: {packet.get('blocked_gate_count')} {packet.get('blocked_gates') or ''}",
+        f"First blocking gate: {packet.get('first_blocking_gate') or 'none'}",
+        f"First blocking required action: {packet.get('first_blocking_required_action') or 'none'}",
+        f"First blocking evidence: {packet.get('first_blocking_evidence') or 'none'}",
+        f"Pending data imports: {packet.get('pending_data_imports')}",
+        f"Data handoff audit status/issues: {packet.get('data_handoff_audit_status')}/{packet.get('data_handoff_audit_issues')}",
+        f"Pending visual-label cells: {packet.get('pending_visual_label_cells')}",
+        f"Missing/invalid visual-label rows: {packet.get('missing_visual_label_rows')}/{packet.get('invalid_visual_label_rows')}",
+        f"Post-data can-execute candidates: {packet.get('post_data_can_execute_count')}",
+        f"Next required action: {packet.get('next_required_action') or 'none'}",
+        f"Authority scope: {packet.get('authority_scope')}",
+        "",
+        "## Gates",
+        "",
+    ]
+    for gate in packet.get("gates", []) or []:
+        lines.append(
+            "- "
+            f"{gate.get('status')} {gate.get('gate_id')} "
+            f"required_action={gate.get('required_action') or 'none'} "
+            f"reason={gate.get('blocking_reason') or 'none'}"
+        )
+    if not packet.get("gates"):
+        lines.append("- none")
+    lines.extend(["", "## Clearance Sequence", ""])
+    for step in packet.get("clearance_sequence", []) or []:
+        lines.append(
+            "- "
+            f"{step.get('step')}. {step.get('status')} {step.get('gate_id')} "
+            f"required_action={step.get('required_action') or 'none'} "
+            f"evidence={step.get('evidence') or 'none'}"
+        )
+    if not packet.get("clearance_sequence"):
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Guardrail",
+            "",
+            str(packet.get("guardrail")),
+            "Product language allowed: False",
+            "Production effect: none.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def build_ceo_operator_brief(
     *,
     ceo_run_id: str,
@@ -15747,11 +29668,19 @@ def build_ceo_operator_brief(
     role_queue: dict[str, Any] | None = None,
     approval_queue: dict[str, Any] | None = None,
     trace_grade: dict[str, Any] | None = None,
+    data_gate_work: dict[str, Any] | None = None,
+    sidecar_current_decision_packet: dict[str, Any] | None = None,
+    sidecar_visual_label_work: dict[str, Any] | None = None,
+    sidecar_post_data_work: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     primary = action_board.get("primary_action", {}) or {}
     role_queue = role_queue or {}
     approval_queue = approval_queue or {}
     trace_grade = trace_grade or {}
+    data_gate_work = data_gate_work or {}
+    sidecar_current_decision_packet = sidecar_current_decision_packet or {}
+    sidecar_visual_label_work = sidecar_visual_label_work or {}
+    sidecar_post_data_work = sidecar_post_data_work or {}
     lab_status = company_status.get("lab_status", {}) or {}
     action_board_status = str(action_board.get("status", ""))
     if action_board_status == "manual_gate_required":
@@ -15786,6 +29715,14 @@ def build_ceo_operator_brief(
         "arbitrary shell execution from YAML commands",
         "more than one bounded action without regenerating trust artifacts",
     ]
+    manual_gate_clearance = build_ceo_manual_gate_clearance_packet(
+        ceo_run_id=ceo_run_id,
+        lab_run_id=lab_run_id,
+        effective_operator=effective_operator,
+        data_gate_work=data_gate_work,
+        sidecar_visual_label_work=sidecar_visual_label_work,
+        sidecar_post_data_work=sidecar_post_data_work,
+    )
     return {
         "model": CEO_OPERATOR_BRIEF_MODEL,
         "generated_at": utc_now_iso(),
@@ -15859,6 +29796,75 @@ def build_ceo_operator_brief(
             "approval_top_pending_id": approval_queue.get("top_pending_approval_id", ""),
             "approval_record_command": approval_queue.get("top_pending_approval_record_command", ""),
             "approval_apply_command": approval_queue.get("top_pending_approval_apply_command", ""),
+            "data_gate_work_status": data_gate_work.get("status", ""),
+            "data_gate_required_timeframes": data_gate_work.get("required_timeframes", ""),
+            "data_gate_required_csv_count": data_gate_work.get("required_csv_count", ""),
+            "data_gate_required_batch_count": data_gate_work.get("required_batch_count", ""),
+            "data_gate_symbol_matrix_row_count": data_gate_work.get("symbol_matrix_row_count", ""),
+            "data_gate_candidate_unlock_count": data_gate_work.get("candidate_unlock_count", ""),
+            "data_gate_next_verification_command": data_gate_work.get("next_verification_command", ""),
+            "manual_gate_clearance_status": manual_gate_clearance.get("status", ""),
+            "manual_gate_clearance_can_start_post_data_validation": (
+                manual_gate_clearance.get("can_start_post_data_validation", "")
+            ),
+            "manual_gate_clearance_blocked_gate_count": manual_gate_clearance.get("blocked_gate_count", ""),
+            "manual_gate_clearance_blocked_gates": manual_gate_clearance.get("blocked_gates", ""),
+            "manual_gate_clearance_pending_data_imports": manual_gate_clearance.get("pending_data_imports", ""),
+            "manual_gate_clearance_pending_visual_label_cells": (
+                manual_gate_clearance.get("pending_visual_label_cells", "")
+            ),
+            "manual_gate_clearance_post_data_can_execute_count": (
+                manual_gate_clearance.get("post_data_can_execute_count", "")
+            ),
+            "sidecar_current_decision_packet_status": sidecar_current_decision_packet.get("status", ""),
+            "sidecar_current_decision_packet_decision": sidecar_current_decision_packet.get(
+                "executive_decision",
+                "",
+            ),
+            "sidecar_current_decision_packet_required_action": sidecar_current_decision_packet.get(
+                "current_required_action",
+                "",
+            ),
+            "sidecar_current_decision_packet_candidate_count": sidecar_current_decision_packet.get(
+                "candidate_count",
+                "",
+            ),
+            "sidecar_current_decision_packet_quality_remediation_status": sidecar_current_decision_packet.get(
+                "quality_remediation_status",
+                "",
+            ),
+            "sidecar_current_decision_packet_quality_remediation_required_action": (
+                sidecar_current_decision_packet.get("quality_remediation_current_required_action", "")
+            ),
+            "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count": (
+                sidecar_current_decision_packet.get("quality_remediation_autonomous_clearable_now_count", "")
+            ),
+            "sidecar_current_decision_packet_quality_remediation_human_visual_count": (
+                sidecar_current_decision_packet.get("quality_remediation_human_visual_remediation_count", "")
+            ),
+            "sidecar_current_decision_packet_quality_remediation_diversity_control_count": (
+                sidecar_current_decision_packet.get("quality_remediation_diversity_control_remediation_count", "")
+            ),
+            "sidecar_current_decision_packet_quality_remediation_archive_only_count": (
+                sidecar_current_decision_packet.get("quality_remediation_archive_only_count", "")
+            ),
+            "sidecar_visual_label_work_status": sidecar_visual_label_work.get("status", ""),
+            "sidecar_visual_label_next_batch_id": sidecar_visual_label_work.get("next_batch_id", ""),
+            "sidecar_visual_label_next_batch_row_count": sidecar_visual_label_work.get("next_batch_row_count", ""),
+            "sidecar_visual_label_entry_sheet_missing_required_cells": (
+                sidecar_visual_label_work.get("entry_sheet_missing_required_cells", "")
+            ),
+            "sidecar_visual_label_completion_audit_missing_rows": (
+                sidecar_visual_label_work.get("completion_audit_missing_rows", "")
+            ),
+            "sidecar_post_data_playbook_status": sidecar_post_data_work.get("status", ""),
+            "sidecar_post_data_playbook_current_required_action": (
+                sidecar_post_data_work.get("current_required_action", "")
+            ),
+            "sidecar_post_data_playbook_pre_validation_blockers": (
+                sidecar_post_data_work.get("pre_validation_blockers", "")
+            ),
+            "sidecar_post_data_playbook_can_execute_count": sidecar_post_data_work.get("can_execute_count", ""),
         },
         "approval_work": {
             "status": approval_queue.get("status", "missing_approval_queue"),
@@ -15914,6 +29920,43 @@ def build_ceo_operator_brief(
             "readiness_effect": "pending or blocked role tasks lower 9.9 readiness but do not approve or block production behavior",
             "production_effect": "none",
         },
+        "sidecar_current_decision": {
+            "status": sidecar_current_decision_packet.get("status", "missing_sidecar_current_decision_packet"),
+            "decision": sidecar_current_decision_packet.get("executive_decision", ""),
+            "required_action": sidecar_current_decision_packet.get("current_required_action", ""),
+            "candidate_count": sidecar_current_decision_packet.get("candidate_count", ""),
+            "quality_remediation_status": sidecar_current_decision_packet.get("quality_remediation_status", ""),
+            "quality_remediation_required_action": sidecar_current_decision_packet.get(
+                "quality_remediation_current_required_action",
+                "",
+            ),
+            "quality_remediation_autonomous_clearable_now_count": sidecar_current_decision_packet.get(
+                "quality_remediation_autonomous_clearable_now_count",
+                "",
+            ),
+            "quality_remediation_human_visual_count": sidecar_current_decision_packet.get(
+                "quality_remediation_human_visual_remediation_count",
+                "",
+            ),
+            "quality_remediation_diversity_control_count": sidecar_current_decision_packet.get(
+                "quality_remediation_diversity_control_remediation_count",
+                "",
+            ),
+            "quality_remediation_archive_only_count": sidecar_current_decision_packet.get(
+                "quality_remediation_archive_only_count",
+                "",
+            ),
+            "product_language_allowed": False,
+            "production_effect": "none",
+            "readiness_effect": (
+                "current sidecar packet summarizes warning/reset decision and remediation state; "
+                "it does not clear manual gates or validate candidates"
+            ),
+        },
+        "data_gate_work": data_gate_work,
+        "sidecar_visual_label_work": sidecar_visual_label_work,
+        "sidecar_post_data_work": sidecar_post_data_work,
+        "manual_gate_clearance": manual_gate_clearance,
         "recommended_next_action": next_action,
         "why": [
             str(primary.get("rationale", "")) or "Action board selected the current primary action.",
@@ -15928,6 +29971,24 @@ def build_ceo_operator_brief(
             "approval_queue": "approval_queue.yaml",
             "approval_status": "approval_status.yaml",
             "role_task_queue": "role_task_queue.yaml",
+            "data_gate_brief": "data_gate_brief.md",
+            "data_gate_import_plan": "data_gate_import_plan.yaml",
+            "data_gate_import_batches": "data_gate_import_batches.csv",
+            "data_gate_symbol_matrix": "data_gate_symbol_matrix.csv",
+            "data_gate_candidate_unlocks": "data_gate_candidate_unlocks.csv",
+            "data_gate_csv_requirements": "data_gate_csv_requirements.csv",
+            "fresh_data_preflight": "fresh_data_preflight.yaml",
+            "sidecar_current_decision_packet": "sidecar_current_decision_packet.yaml",
+            "sidecar_current_decision_packet_report": "sidecar_current_decision_packet.md",
+            "sidecar_visual_label_progress": "sidecar_visual_label_progress.csv",
+            "sidecar_visual_label_next_batch": "sidecar_visual_label_next_batch.csv",
+            "sidecar_visual_label_next_batch_gallery": "sidecar_visual_label_next_batch_gallery.md",
+            "sidecar_visual_label_entry_sheet": "sidecar_visual_label_entry_sheet.csv",
+            "sidecar_visual_label_source_update_manifest": "sidecar_visual_label_source_update_manifest.csv",
+            "sidecar_visual_label_rubric": "sidecar_visual_label_rubric.yaml",
+            "sidecar_visual_label_completion_audit": "sidecar_visual_label_completion_audit.yaml",
+            "sidecar_post_data_validation_playbook": "sidecar_post_data_validation_playbook.yaml",
+            "manual_gate_clearance_packet": "manual_gate_clearance_packet.yaml",
         },
         "guardrail": "Operator brief is a human-readable summary only. It does not approve execution or production behavior.",
         "product_language_allowed": False,
@@ -16014,6 +30075,39 @@ def render_ceo_operator_brief(brief: dict[str, Any]) -> str:
         "approval_top_pending_id",
         "approval_record_command",
         "approval_apply_command",
+        "data_gate_work_status",
+        "data_gate_required_timeframes",
+        "data_gate_required_csv_count",
+        "data_gate_required_batch_count",
+        "data_gate_symbol_matrix_row_count",
+        "data_gate_candidate_unlock_count",
+        "data_gate_next_verification_command",
+        "manual_gate_clearance_status",
+        "manual_gate_clearance_can_start_post_data_validation",
+        "manual_gate_clearance_blocked_gate_count",
+        "manual_gate_clearance_blocked_gates",
+        "manual_gate_clearance_pending_data_imports",
+        "manual_gate_clearance_pending_visual_label_cells",
+        "manual_gate_clearance_post_data_can_execute_count",
+        "sidecar_current_decision_packet_status",
+        "sidecar_current_decision_packet_decision",
+        "sidecar_current_decision_packet_required_action",
+        "sidecar_current_decision_packet_candidate_count",
+        "sidecar_current_decision_packet_quality_remediation_status",
+        "sidecar_current_decision_packet_quality_remediation_required_action",
+        "sidecar_current_decision_packet_quality_remediation_autonomous_clearable_now_count",
+        "sidecar_current_decision_packet_quality_remediation_human_visual_count",
+        "sidecar_current_decision_packet_quality_remediation_diversity_control_count",
+        "sidecar_current_decision_packet_quality_remediation_archive_only_count",
+        "sidecar_visual_label_work_status",
+        "sidecar_visual_label_next_batch_id",
+        "sidecar_visual_label_next_batch_row_count",
+        "sidecar_visual_label_entry_sheet_missing_required_cells",
+        "sidecar_visual_label_completion_audit_missing_rows",
+        "sidecar_post_data_playbook_status",
+        "sidecar_post_data_playbook_current_required_action",
+        "sidecar_post_data_playbook_pre_validation_blockers",
+        "sidecar_post_data_playbook_can_execute_count",
     ]:
         lines.append(f"- {key}: {situation.get(key)}")
     approval = brief.get("approval_work", {}) or {}
@@ -16045,6 +30139,248 @@ def render_ceo_operator_brief(brief: dict[str, Any]) -> str:
             f"- Readiness effect: {trace.get('readiness_effect')}",
         ]
     )
+    data_gate = brief.get("data_gate_work", {}) or {}
+    if data_gate:
+        paths = data_gate.get("paths", {}) or {}
+        lines.extend(
+            [
+                "",
+                "## Data Gate Work",
+                "",
+                f"- Status: {data_gate.get('status')}",
+                f"- Universe: {data_gate.get('universe') or 'none'}",
+                f"- Data dir: {data_gate.get('data_dir') or 'none'}",
+                f"- Preflight status: {data_gate.get('preflight_status') or 'none'}",
+                f"- Safe to run fresh validation: {data_gate.get('safe_to_run_fresh_validation')}",
+                f"- Manual data gate active: {data_gate.get('manual_data_gate_active')}",
+                f"- Required timeframes: {data_gate.get('required_timeframes') or 'none'}",
+                f"- Timeframe statuses: {data_gate.get('timeframe_statuses') or 'none'}",
+                f"- Required CSVs: {data_gate.get('required_csv_count')}",
+                f"- Required batches: {data_gate.get('required_batch_count')}",
+                f"- Import batch rows: {data_gate.get('import_batch_row_count')}",
+                (
+                    "- Import checklist rows/pending/ready: "
+                    f"{data_gate.get('import_checklist_row_count')}/"
+                    f"{data_gate.get('import_checklist_pending_imports')}/"
+                    f"{data_gate.get('import_checklist_complete_ready')}"
+                ),
+                (
+                    "- Import checklist missing/stale: "
+                    f"{data_gate.get('import_checklist_missing_count')}/"
+                    f"{data_gate.get('import_checklist_stale_count')}"
+                ),
+                (
+                    "- Handoff audit status/checks/issues: "
+                    f"{data_gate.get('handoff_audit_status') or 'none'}/"
+                    f"{data_gate.get('handoff_audit_check_count')}/"
+                    f"{data_gate.get('handoff_audit_issue_count')}"
+                ),
+                f"- Symbol matrix rows: {data_gate.get('symbol_matrix_row_count')}",
+                f"- Candidate unlocks: {data_gate.get('candidate_unlock_count')}",
+                f"- CSV requirement rows: {data_gate.get('csv_requirement_row_count')}",
+                f"- Lead post-data candidates: {data_gate.get('lead_post_data_candidates') or 'none'}",
+                f"- Diversity/control candidates: {data_gate.get('diversity_control_candidates') or 'none'}",
+                f"- Archive failure-mode candidates: {data_gate.get('archive_failure_mode_candidates') or 'none'}",
+                f"- Next verification command: `{data_gate.get('next_verification_command') or ''}`",
+                f"- Data-gate brief: {paths.get('data_gate_brief') or 'none'}",
+                f"- Import plan: {paths.get('import_plan') or 'none'}",
+                f"- Import batches: {paths.get('import_batches') or 'none'}",
+                f"- Import checklist: {paths.get('import_checklist') or 'none'}",
+                f"- Import checklist report: {paths.get('import_checklist_report') or 'none'}",
+                f"- Handoff audit: {paths.get('handoff_audit') or 'none'}",
+                f"- Handoff audit report: {paths.get('handoff_audit_report') or 'none'}",
+                f"- Symbol matrix: {paths.get('symbol_matrix') or 'none'}",
+                f"- Candidate unlocks: {paths.get('candidate_unlocks') or 'none'}",
+                f"- CSV requirements: {paths.get('csv_requirements') or 'none'}",
+                f"- Fresh data preflight: {paths.get('fresh_data_preflight') or 'none'}",
+                f"- Product language allowed: {data_gate.get('product_language_allowed')}",
+                f"- Production effect: {data_gate.get('production_effect')}",
+                f"- Readiness effect: {data_gate.get('readiness_effect')}",
+            ]
+        )
+        sequence = data_gate.get("post_import_sequence", []) or []
+        if sequence:
+            lines.extend(["", "### Post-Import Sequence", ""])
+            lines.extend(f"{index}. {item}" for index, item in enumerate(sequence, start=1))
+    clearance = brief.get("manual_gate_clearance", {}) or {}
+    if clearance:
+        lines.extend(
+            [
+                "",
+                "## Manual Gate Clearance",
+                "",
+                f"- Status: {clearance.get('status')}",
+                f"- Can start post-data validation: {clearance.get('can_start_post_data_validation')}",
+                f"- Blocked gates: {clearance.get('blocked_gate_count')} {clearance.get('blocked_gates') or ''}",
+                f"- First blocking gate: {clearance.get('first_blocking_gate') or 'none'}",
+                f"- First blocking required action: {clearance.get('first_blocking_required_action') or 'none'}",
+                f"- First blocking evidence: {clearance.get('first_blocking_evidence') or 'none'}",
+                f"- Pending data imports: {clearance.get('pending_data_imports')}",
+                (
+                    "- Data handoff audit status/issues: "
+                    f"{clearance.get('data_handoff_audit_status')}/"
+                    f"{clearance.get('data_handoff_audit_issues')}"
+                ),
+                f"- Pending visual-label cells: {clearance.get('pending_visual_label_cells')}",
+                (
+                    "- Missing/invalid visual-label rows: "
+                    f"{clearance.get('missing_visual_label_rows')}/"
+                    f"{clearance.get('invalid_visual_label_rows')}"
+                ),
+                f"- Post-data can-execute candidates: {clearance.get('post_data_can_execute_count')}",
+                f"- Next required action: {clearance.get('next_required_action') or 'none'}",
+                f"- Authority scope: {clearance.get('authority_scope')}",
+            ]
+        )
+        for gate in clearance.get("gates", []) or []:
+            lines.append(
+                "- "
+                f"{gate.get('status')} {gate.get('gate_id')} "
+                f"required_action={gate.get('required_action') or 'none'} "
+                f"reason={gate.get('blocking_reason') or 'none'}"
+            )
+        sequence = clearance.get("clearance_sequence", []) or []
+        if sequence:
+            lines.extend(["", "### Clearance Sequence", ""])
+            for step in sequence:
+                lines.append(
+                    "- "
+                    f"{step.get('step')}. {step.get('status')} {step.get('gate_id')} "
+                    f"required_action={step.get('required_action') or 'none'}"
+                )
+    sidecar = brief.get("sidecar_current_decision", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Sidecar Current Decision",
+            "",
+            f"- Status: {sidecar.get('status')}",
+            f"- Decision: {sidecar.get('decision') or 'none'}",
+            f"- Required action: {sidecar.get('required_action') or 'none'}",
+            f"- Candidates: {sidecar.get('candidate_count')}",
+            f"- Quality remediation status: {sidecar.get('quality_remediation_status') or 'none'}",
+            (
+                "- Quality remediation required action: "
+                f"{sidecar.get('quality_remediation_required_action') or 'none'}"
+            ),
+            (
+                "- Quality remediation autonomous/human/diversity/archive: "
+                f"{sidecar.get('quality_remediation_autonomous_clearable_now_count')}/"
+                f"{sidecar.get('quality_remediation_human_visual_count')}/"
+                f"{sidecar.get('quality_remediation_diversity_control_count')}/"
+                f"{sidecar.get('quality_remediation_archive_only_count')}"
+            ),
+            f"- Product language allowed: {sidecar.get('product_language_allowed')}",
+            f"- Production effect: {sidecar.get('production_effect')}",
+            f"- Readiness effect: {sidecar.get('readiness_effect')}",
+        ]
+    )
+    visual_labels = brief.get("sidecar_visual_label_work", {}) or {}
+    if visual_labels:
+        paths = visual_labels.get("paths", {}) or {}
+        lines.extend(
+            [
+                "",
+                "## Sidecar Visual Label Work",
+                "",
+                f"- Status: {visual_labels.get('status')}",
+                f"- Next batch: {visual_labels.get('next_batch_id') or 'none'}",
+                f"- Required fields: {visual_labels.get('required_fields') or 'none'}",
+                (
+                    "- Progress matched/pending/completed rows: "
+                    f"{visual_labels.get('progress_matched_rows')}/"
+                    f"{visual_labels.get('progress_pending_rows')}/"
+                    f"{visual_labels.get('progress_completed_rows')}"
+                ),
+                (
+                    "- Progress not-started/incomplete/complete candidates: "
+                    f"{visual_labels.get('progress_not_started_candidates')}/"
+                    f"{visual_labels.get('progress_incomplete_candidates')}/"
+                    f"{visual_labels.get('progress_complete_candidates')}"
+                ),
+                f"- Review batches/rows: {visual_labels.get('review_batch_count')}/{visual_labels.get('review_batch_row_count')}",
+                f"- Next batch rows: {visual_labels.get('next_batch_row_count')}",
+                (
+                    "- Next batch exact/family-timeframe/context rows: "
+                    f"{visual_labels.get('next_batch_exact_variant_count')}/"
+                    f"{visual_labels.get('next_batch_family_timeframe_count')}/"
+                    f"{visual_labels.get('next_batch_family_context_count')}"
+                ),
+                f"- Entry sheet rows: {visual_labels.get('entry_sheet_row_count')}",
+                f"- Entry sheet missing required cells: {visual_labels.get('entry_sheet_missing_required_cells')}",
+                (
+                    "- Source update rows/pending/cells: "
+                    f"{visual_labels.get('source_update_row_count')}/"
+                    f"{visual_labels.get('source_update_pending_rows')}/"
+                    f"{visual_labels.get('source_update_required_cells')}"
+                ),
+                (
+                    "- Source patch plan cells/pending/blocked: "
+                    f"{visual_labels.get('source_patch_plan_cell_count')}/"
+                    f"{visual_labels.get('source_patch_plan_pending_cells')}/"
+                    f"{visual_labels.get('source_patch_plan_blocked_cells')}"
+                ),
+                (
+                    "- Source patch plan files/rows: "
+                    f"{visual_labels.get('source_patch_plan_source_files')}/"
+                    f"{visual_labels.get('source_patch_plan_source_rows')}"
+                ),
+                (
+                    "- Completion audit rows/completed/missing/invalid: "
+                    f"{visual_labels.get('completion_audit_rows')}/"
+                    f"{visual_labels.get('completion_audit_completed_rows')}/"
+                    f"{visual_labels.get('completion_audit_missing_rows')}/"
+                    f"{visual_labels.get('completion_audit_invalid_rows')}"
+                ),
+                f"- Next action: {visual_labels.get('next_action') or 'none'}",
+                f"- Next batch path: {paths.get('next_batch') or 'none'}",
+                f"- Next batch gallery: {paths.get('next_batch_gallery') or 'none'}",
+                f"- Entry sheet: {paths.get('entry_sheet') or 'none'}",
+                f"- Source update manifest: {paths.get('source_update_manifest') or 'none'}",
+                f"- Source patch plan: {paths.get('source_patch_plan') or 'none'}",
+                f"- Source patch plan report: {paths.get('source_patch_plan_report') or 'none'}",
+                f"- Rubric: {paths.get('rubric') or 'none'}",
+                f"- Completion audit: {paths.get('completion_audit_yaml') or paths.get('completion_audit') or 'none'}",
+                f"- Product language allowed: {visual_labels.get('product_language_allowed')}",
+                f"- Production effect: {visual_labels.get('production_effect')}",
+                f"- Readiness effect: {visual_labels.get('readiness_effect')}",
+            ]
+        )
+    post_data = brief.get("sidecar_post_data_work", {}) or {}
+    if post_data:
+        paths = post_data.get("paths", {}) or {}
+        lines.extend(
+            [
+                "",
+                "## Sidecar Post-Data Playbook",
+                "",
+                f"- Status: {post_data.get('status')}",
+                f"- Current required action: {post_data.get('current_required_action') or 'none'}",
+                f"- Candidates: {post_data.get('candidate_count')}",
+                (
+                    "- Lead/control/archive: "
+                    f"{post_data.get('lead_post_data_candidate_count')}/"
+                    f"{post_data.get('diversity_control_only_count')}/"
+                    f"{post_data.get('archive_failure_mode_count')}"
+                ),
+                f"- Manual data gate active: {post_data.get('manual_data_gate_active')}",
+                f"- Safe to run fresh validation: {post_data.get('safe_to_run_fresh_validation')}",
+                f"- Visual-label completion status: {post_data.get('visual_label_completion_status') or 'none'}",
+                f"- Visual-label gate passed: {post_data.get('visual_label_gate_passed')}",
+                f"- Quality remediation status: {post_data.get('quality_remediation_status') or 'none'}",
+                (
+                    "- Quality remediation required action: "
+                    f"{post_data.get('quality_remediation_required_action') or 'none'}"
+                ),
+                f"- Pre-validation blockers: {post_data.get('pre_validation_blockers') or 'none'}",
+                f"- Can-execute candidates: {post_data.get('can_execute_count')}",
+                f"- Playbook: {paths.get('playbook') or 'none'}",
+                f"- Playbook report: {paths.get('playbook_report') or 'none'}",
+                f"- Product language allowed: {post_data.get('product_language_allowed')}",
+                f"- Production effect: {post_data.get('production_effect')}",
+                f"- Readiness effect: {post_data.get('readiness_effect')}",
+            ]
+        )
     specialist = brief.get("specialist_work", {}) or {}
     lines.extend(
         [
@@ -16120,6 +30456,10 @@ def run_ceo_operator_brief(
     final_action_board = _load_yaml_if_exists(root / "action_board.yaml") or action_board_result["action_board"]
     final_decision_quality = _load_yaml_if_exists(root / "decision_quality.yaml") or decision_quality_result["decision_quality"]
     trace_grade = _load_yaml_if_exists(root / "trace_grade.yaml")
+    sidecar_current_decision_packet = _load_yaml_if_exists(root / "sidecar_current_decision_packet.yaml")
+    data_gate_work = _build_data_gate_operator_work(root)
+    sidecar_visual_label_work = _build_sidecar_visual_label_operator_work(root)
+    sidecar_post_data_work = _build_sidecar_post_data_operator_work(root)
     approval_result = run_ceo_approval_queue(diagnostic_options)
     role_result = run_ceo_role_queue(diagnostic_options)
     brief = build_ceo_operator_brief(
@@ -16132,11 +30472,22 @@ def run_ceo_operator_brief(
         role_queue=role_result["queue"],
         approval_queue=approval_result["queue"],
         trace_grade=trace_grade,
+        data_gate_work=data_gate_work,
+        sidecar_current_decision_packet=sidecar_current_decision_packet,
+        sidecar_visual_label_work=sidecar_visual_label_work,
+        sidecar_post_data_work=sidecar_post_data_work,
     )
     path = root / "operator_brief.yaml"
     report_path = root / "operator_brief.md"
+    clearance_path = root / "manual_gate_clearance_packet.yaml"
+    clearance_report_path = root / "manual_gate_clearance_packet.md"
     atomic_write_yaml(path, brief)
     atomic_write_text(report_path, render_ceo_operator_brief(brief))
+    atomic_write_yaml(clearance_path, brief.get("manual_gate_clearance", {}) or {})
+    atomic_write_text(
+        clearance_report_path,
+        render_ceo_manual_gate_clearance_packet(brief.get("manual_gate_clearance", {}) or {}),
+    )
     return {
         "run_id": ceo_run_id,
         "lab_run_id": lab_run_id,
@@ -16144,6 +30495,8 @@ def run_ceo_operator_brief(
         "paths": {
             "operator_brief": path,
             "operator_brief_report": report_path,
+            "manual_gate_clearance_packet": clearance_path,
+            "manual_gate_clearance_packet_report": clearance_report_path,
             "action_board": action_board_result["paths"]["action_board"],
             "decision_quality": decision_quality_result["paths"]["decision_quality"],
             "approval_queue": approval_result["paths"]["queue"],
@@ -16761,6 +31114,8 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
     contract_result = run_ceo_fresh_withheld_validation_contract(diagnostic_options)
     promotion_result = run_ceo_promotion_proposal(diagnostic_options)
     evidence_debt_result = run_ceo_evidence_debt_register(diagnostic_options)
+    sidecar_brief_result = run_ceo_sidecar_evidence_brief(diagnostic_options)
+    data_gate_result = run_ceo_data_gate_brief(diagnostic_options)
     approval_result = run_ceo_approval_queue(diagnostic_options)
     kpi_result = run_ceo_executive_kpis(diagnostic_options)
     role_result = run_ceo_role_queue(diagnostic_options)
@@ -16821,6 +31176,13 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
     )
     repair_apply = _load_yaml_if_exists(root / "repair_apply.yaml")
     repair_apply_report = root / "repair_apply.md"
+    repair_apply_status = repair_apply.get("status", "")
+    if not repair_apply_status:
+        repair_apply_status = (
+            "missing_repair_apply"
+            if _repair_apply_required_by_current_plan(repair_result["repair_plan"])
+            else "not_required_by_current_repair_plan"
+        )
     role_result_validation = _load_yaml_if_exists(root / "role_result_validation.yaml")
     role_queue = role_result["queue"]
     approval_top_pending_item = (approval_result["queue"].get("pending_items", []) or [{}])[0]
@@ -16837,6 +31199,9 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
     final_flight_dashboard = flight_result["dashboard"]
     final_mission_score = mission_result["mission_score"]
     final_strategy_dashboard = strategy_result["dashboard"]
+    sidecar_visual_review_top = _sidecar_visual_review_top_action(sidecar_brief_result["brief"])
+    sidecar_learning_summary = _sidecar_learning_action_summary(sidecar_brief_result["candidate_learning_ledger"])
+    sidecar_current_packet = sidecar_brief_result["current_decision_packet"]
     lines = [
         "# Riskflow CEO Final Report",
         "",
@@ -16867,7 +31232,7 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         f"- Blocker stack: {blocker_stack_result['paths']['blocker_stack_report']}",
         f"- Operating incident register: {incident_result['paths']['incident_register_report']}",
         f"- Repair plan: {repair_result['paths']['repair_plan_report']}",
-        f"- Repair apply: {repair_apply_report}" if repair_apply_report.exists() else "- Repair apply: missing",
+        f"- Repair apply: {repair_apply_report}" if repair_apply_report.exists() else f"- Repair apply: {repair_apply_status}",
         f"- Action board: {action_board_result['paths']['action_board_report']}",
         f"- Operator brief: {operator_brief_result['paths']['operator_brief_report']}",
         f"- Artifact coherence: {coherence_result['paths']['artifact_coherence_report']}",
@@ -16881,7 +31246,136 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
         f"- Capability backlog: {backlog_result['paths']['backlog_report']}",
         f"- Fresh/withheld validation contract: {contract_result['paths']['report']}",
         f"- Promotion proposal: {promotion_result['paths']['proposal_report']}",
+        f"- Promotion candidates: {root / 'promotion_candidates.md'}",
         f"- Evidence debt register: {evidence_debt_result['paths']['register_report']}",
+        f"- Sidecar evidence brief: {sidecar_brief_result['paths']['sidecar_evidence_brief_report']}",
+        f"- Sidecar evidence candidate table: {sidecar_brief_result['paths']['sidecar_evidence_candidates']}",
+        f"- Sidecar visual-review handoff table: {sidecar_brief_result['paths']['sidecar_visual_review_handoff']}",
+        f"- Sidecar visual-review coverage: {sidecar_brief_result['paths']['sidecar_visual_review_coverage']}",
+        f"- Sidecar visual-review coverage report: {sidecar_brief_result['paths']['sidecar_visual_review_coverage_report']}",
+        f"- Sidecar visual-label worklist: {sidecar_brief_result['paths']['sidecar_visual_label_worklist']}",
+        f"- Sidecar visual-label worklist report: {sidecar_brief_result['paths']['sidecar_visual_label_worklist_report']}",
+        f"- Sidecar visual-label review batches: {sidecar_brief_result['paths']['sidecar_visual_label_review_batches']}",
+        (
+            "- Sidecar visual-label review batches report: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_review_batches_report']}"
+        ),
+        f"- Sidecar visual-label progress: {sidecar_brief_result['paths']['sidecar_visual_label_progress']}",
+        f"- Sidecar visual-label progress report: {sidecar_brief_result['paths']['sidecar_visual_label_progress_report']}",
+        f"- Sidecar visual-label next batch: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch']}",
+        f"- Sidecar visual-label next batch report: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch_report']}",
+        f"- Sidecar visual-label next batch gallery: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch_gallery']}",
+        f"- Sidecar visual-label decision context: {sidecar_brief_result['paths']['sidecar_visual_label_decision_context']}",
+        (
+            "- Sidecar visual-label decision context report: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_decision_context_report']}"
+        ),
+        f"- Sidecar visual-label rubric: {sidecar_brief_result['paths']['sidecar_visual_label_rubric']}",
+        f"- Sidecar visual-label rubric report: {sidecar_brief_result['paths']['sidecar_visual_label_rubric_report']}",
+        f"- Sidecar visual-label entry sheet: {sidecar_brief_result['paths']['sidecar_visual_label_entry_sheet']}",
+        (
+            "- Sidecar visual-label entry sheet report: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_entry_sheet_report']}"
+        ),
+        (
+            "- Sidecar visual-label source update manifest: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_source_update_manifest']}"
+        ),
+        (
+            "- Sidecar visual-label source update manifest report: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_source_update_manifest_report']}"
+        ),
+        f"- Sidecar visual-label source patch plan: {sidecar_brief_result['paths']['sidecar_visual_label_source_patch_plan']}",
+        (
+            "- Sidecar visual-label source patch plan YAML: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_source_patch_plan_yaml']}"
+        ),
+        (
+            "- Sidecar visual-label source patch plan report: "
+            f"{sidecar_brief_result['paths']['sidecar_visual_label_source_patch_plan_report']}"
+        ),
+        f"- Sidecar visual-label completion audit: {sidecar_brief_result['paths']['sidecar_visual_label_completion_audit']}",
+        f"- Sidecar visual-label completion audit YAML: {sidecar_brief_result['paths']['sidecar_visual_label_completion_audit_yaml']}",
+        f"- Sidecar visual-label completion audit report: {sidecar_brief_result['paths']['sidecar_visual_label_completion_audit_report']}",
+        f"- Sidecar visual-review top candidate: {sidecar_visual_review_top.get('sidecar_visual_review_top_candidate') or 'none'}",
+        f"- Sidecar visual-review top focus: {sidecar_visual_review_top.get('sidecar_visual_review_top_focus') or 'none'}",
+        f"- Sidecar visual-review top gallery: {sidecar_visual_review_top.get('sidecar_visual_review_top_gallery') or 'none'}",
+        f"- Sidecar visual-review top labels: {sidecar_visual_review_top.get('sidecar_visual_review_top_labels_with_images') or 'none'}",
+        f"- Sidecar champion/challenger evidence table: {sidecar_brief_result['paths']['sidecar_champion_challenger_evidence']}",
+        f"- Sidecar champion/challenger quality audit: {sidecar_brief_result['paths']['sidecar_champion_challenger_quality_audit']}",
+        (
+            "- Sidecar champion/challenger quality audit report: "
+            f"{sidecar_brief_result['paths']['sidecar_champion_challenger_quality_audit_report']}"
+        ),
+        f"- Sidecar quality remediation plan: {sidecar_brief_result['paths']['sidecar_quality_remediation_plan']}",
+        (
+            "- Sidecar quality remediation plan report: "
+            f"{sidecar_brief_result['paths']['sidecar_quality_remediation_plan_report']}"
+        ),
+        f"- Sidecar evidence gap matrix: {sidecar_brief_result['paths']['sidecar_evidence_gap_matrix']}",
+        f"- Sidecar candidate readiness summary: {sidecar_brief_result['paths']['sidecar_candidate_readiness_summary']}",
+        f"- Sidecar candidate readiness summary report: {sidecar_brief_result['paths']['sidecar_candidate_readiness_summary_report']}",
+        f"- Sidecar validation queue: {sidecar_brief_result['paths']['sidecar_validation_queue']}",
+        f"- Sidecar validation queue report: {sidecar_brief_result['paths']['sidecar_validation_queue_report']}",
+        f"- Sidecar champion/challenger validation design: {sidecar_brief_result['paths']['sidecar_champion_challenger_validation_design']}",
+        f"- Sidecar champion/challenger validation design report: {sidecar_brief_result['paths']['sidecar_champion_challenger_validation_design_report']}",
+        f"- Sidecar data-gate unlock matrix: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix']}",
+        f"- Sidecar data-gate unlock matrix YAML: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix_yaml']}",
+        f"- Sidecar data-gate unlock matrix report: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix_report']}",
+        f"- Sidecar evidence consistency audit: {sidecar_brief_result['paths']['sidecar_evidence_consistency_audit']}",
+        f"- Sidecar evidence consistency audit report: {sidecar_brief_result['paths']['sidecar_evidence_consistency_audit_report']}",
+        f"- Sidecar evidence consistency audit status: {sidecar_brief_result['consistency_audit'].get('status')}",
+        (
+            "- Sidecar evidence consistency audit checks/issues: "
+            f"{sidecar_brief_result['consistency_audit'].get('check_count')}/"
+            f"{sidecar_brief_result['consistency_audit'].get('issue_count')}"
+        ),
+        f"- Sidecar evidence packet index: {sidecar_brief_result['paths']['sidecar_evidence_packet_index']}",
+        f"- Sidecar evidence packet index report: {sidecar_brief_result['paths']['sidecar_evidence_packet_index_report']}",
+        f"- Sidecar candidate decision cards: {sidecar_brief_result['paths']['sidecar_candidate_decision_cards']}",
+        f"- Sidecar current decision packet: {sidecar_brief_result['paths']['sidecar_current_decision_packet']}",
+        f"- Sidecar current decision packet report: {sidecar_brief_result['paths']['sidecar_current_decision_packet_report']}",
+        f"- Sidecar current decision packet status: {sidecar_current_packet.get('status')}",
+        f"- Sidecar current decision packet decision: {sidecar_current_packet.get('executive_decision')}",
+        (
+            "- Sidecar current decision packet quality remediation status: "
+            f"{sidecar_current_packet.get('quality_remediation_status')}"
+        ),
+        (
+            "- Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+            f"{sidecar_current_packet.get('quality_remediation_autonomous_clearable_now_count')}/"
+            f"{sidecar_current_packet.get('quality_remediation_human_visual_remediation_count')}/"
+            f"{sidecar_current_packet.get('quality_remediation_diversity_control_remediation_count')}/"
+            f"{sidecar_current_packet.get('quality_remediation_archive_only_count')}"
+        ),
+        f"- Sidecar shadow guardrail audit: {sidecar_brief_result['paths']['sidecar_shadow_guardrail_audit_report']}",
+        f"- Sidecar evidence source manifest: {sidecar_brief_result['paths']['sidecar_evidence_source_manifest']}",
+        f"- Sidecar evidence source health: {sidecar_brief_result['paths']['sidecar_evidence_source_health']}",
+        f"- Sidecar evidence source health YAML: {sidecar_brief_result['paths']['sidecar_evidence_source_health_yaml']}",
+        f"- Sidecar evidence source health report: {sidecar_brief_result['paths']['sidecar_evidence_source_health_report']}",
+        f"- Sidecar evidence source fingerprints: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints']}",
+        f"- Sidecar evidence source fingerprints YAML: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints_yaml']}",
+        f"- Sidecar evidence source fingerprints report: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints_report']}",
+        f"- Sidecar candidate learning ledger: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger']}",
+        f"- Sidecar candidate learning ledger YAML: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger_yaml']}",
+        f"- Sidecar candidate learning ledger report: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger_report']}",
+        f"- Sidecar post-data validation playbook: {sidecar_brief_result['paths']['sidecar_post_data_validation_playbook']}",
+        f"- Sidecar post-data validation playbook report: {sidecar_brief_result['paths']['sidecar_post_data_validation_playbook_report']}",
+        f"- Sidecar current handoff: {sidecar_brief_result['paths']['sidecar_current_handoff']}",
+        f"- Sidecar current handoff report: {sidecar_brief_result['paths']['sidecar_current_handoff_report']}",
+        f"- Sidecar candidate decision matrix: {sidecar_brief_result['paths']['sidecar_candidate_decision_matrix']}",
+        f"- Sidecar candidate decision matrix report: {sidecar_brief_result['paths']['sidecar_candidate_decision_matrix_report']}",
+        f"- Sidecar learning lead candidate: {sidecar_learning_summary.get('sidecar_learning_lead_candidate') or 'none'}",
+        f"- Sidecar learning control candidate: {sidecar_learning_summary.get('sidecar_learning_control_candidate') or 'none'}",
+        f"- Sidecar learning archive candidate: {sidecar_learning_summary.get('sidecar_learning_archive_candidate') or 'none'}",
+        f"- Sidecar frozen-spec review table: {sidecar_brief_result['paths']['sidecar_frozen_spec_review']}",
+        f"- Data gate brief: {data_gate_result['paths']['data_gate_brief_report']}",
+        f"- Data gate CSV requirement table: {data_gate_result['paths']['data_gate_csv_requirements']}",
+        f"- Data gate import plan: {data_gate_result['paths']['data_gate_import_plan']}",
+        f"- Data gate import plan report: {data_gate_result['paths']['data_gate_import_plan_report']}",
+        f"- Data gate import batch table: {data_gate_result['paths']['data_gate_import_batches']}",
+        f"- Data gate symbol matrix: {data_gate_result['paths']['data_gate_symbol_matrix']}",
+        f"- Data gate symbol matrix report: {data_gate_result['paths']['data_gate_symbol_matrix_report']}",
     ]
     if lab_report:
         lines.append(f"- Lab report: {lab_report}")
@@ -16949,7 +31443,7 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             f"- Top repair: {repair_result['repair_plan'].get('top_repair') or 'none'}",
             f"- Top repair kind: {repair_result['repair_plan'].get('top_repair_kind') or 'none'}",
             f"- Repair next command: {repair_result['repair_plan'].get('next_command')}",
-            f"- Repair apply status: {repair_apply.get('status', 'missing_repair_apply')}",
+            f"- Repair apply status: {repair_apply_status}",
             f"- Repair apply key: {repair_apply.get('repair_key', '') or 'none'}",
             f"- Repair apply executed: {repair_apply.get('action_executed', '')}",
             f"- Repair apply closed: {repair_apply.get('repair_closed', '')}",
@@ -17014,11 +31508,280 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             f"- Capability backlog items: {backlog_result['backlog'].get('backlog_count')}",
             f"- Fresh/withheld contract status: {contract_result['contract'].get('status')}",
             f"- Promotion proposal status: {promotion_result['proposal'].get('status')}",
+            f"- Promotion candidates: {root / 'promotion_candidates.md'}",
             f"- Evidence debt: {evidence_debt_result['register'].get('status')} "
             f"({evidence_debt_result['register'].get('debt_count')} items)",
             f"- Next evidence debt action: {evidence_debt_result['register'].get('next_action')}",
+            f"- Sidecar evidence brief: {sidecar_brief_result['brief'].get('status')}",
+            f"- Sidecar candidates: {sidecar_brief_result['brief'].get('candidate_count')}",
+            f"- Sidecar evidence candidate table: {sidecar_brief_result['paths']['sidecar_evidence_candidates']}",
+            f"- Sidecar visual-review handoff table: {sidecar_brief_result['paths']['sidecar_visual_review_handoff']}",
+            f"- Sidecar visual-review coverage: {sidecar_brief_result['paths']['sidecar_visual_review_coverage']}",
+            f"- Sidecar visual-review coverage report: {sidecar_brief_result['paths']['sidecar_visual_review_coverage_report']}",
+            (
+                "- Sidecar visual-review coverage ready/missing/empty-label: "
+                f"{sidecar_brief_result['visual_review_coverage'].get('review_assets_ready_count')}/"
+                f"{sidecar_brief_result['visual_review_coverage'].get('missing_asset_count')}/"
+                f"{sidecar_brief_result['visual_review_coverage'].get('empty_label_count')}"
+            ),
+            (
+                "- Sidecar visual-review human-review started/pending: "
+                f"{sidecar_brief_result['visual_review_coverage'].get('human_review_started_count')}/"
+                f"{sidecar_brief_result['visual_review_coverage'].get('human_review_pending_count')}"
+            ),
+            f"- Sidecar visual-label worklist: {sidecar_brief_result['paths']['sidecar_visual_label_worklist']}",
+            f"- Sidecar visual-label worklist report: {sidecar_brief_result['paths']['sidecar_visual_label_worklist_report']}",
+            (
+                "- Sidecar visual-label pending rows/candidates: "
+                f"{sidecar_brief_result['visual_label_worklist'].get('pending_label_row_count')}/"
+                f"{sidecar_brief_result['visual_label_worklist'].get('candidate_count')}"
+            ),
+            f"- Sidecar visual-label review batches: {sidecar_brief_result['paths']['sidecar_visual_label_review_batches']}",
+            (
+                "- Sidecar visual-label review batches report: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_review_batches_report']}"
+            ),
+            (
+                "- Sidecar visual-label review batch count/rows: "
+                f"{sidecar_brief_result['visual_label_batches'].get('batch_count')}/"
+                f"{sidecar_brief_result['visual_label_batches'].get('pending_label_row_count')}"
+            ),
+            f"- Sidecar visual-label progress: {sidecar_brief_result['paths']['sidecar_visual_label_progress']}",
+            f"- Sidecar visual-label progress report: {sidecar_brief_result['paths']['sidecar_visual_label_progress_report']}",
+            (
+                "- Sidecar visual-label progress matched/pending/completed: "
+                f"{sidecar_brief_result['visual_label_progress'].get('matched_label_row_count')}/"
+                f"{sidecar_brief_result['visual_label_progress'].get('pending_label_row_count')}/"
+                f"{sidecar_brief_result['visual_label_progress'].get('completed_label_row_count')}"
+            ),
+            (
+                "- Sidecar visual-label progress next batch: "
+                f"{sidecar_brief_result['visual_label_progress'].get('next_batch_id') or 'none'}"
+            ),
+            f"- Sidecar visual-label next batch: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch']}",
+            f"- Sidecar visual-label next batch report: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch_report']}",
+            f"- Sidecar visual-label next batch gallery: {sidecar_brief_result['paths']['sidecar_visual_label_next_batch_gallery']}",
+            f"- Sidecar visual-label rubric: {sidecar_brief_result['paths']['sidecar_visual_label_rubric']}",
+            f"- Sidecar visual-label rubric report: {sidecar_brief_result['paths']['sidecar_visual_label_rubric_report']}",
+            f"- Sidecar visual-label entry sheet: {sidecar_brief_result['paths']['sidecar_visual_label_entry_sheet']}",
+            (
+                "- Sidecar visual-label entry sheet report: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_entry_sheet_report']}"
+            ),
+            (
+                "- Sidecar visual-label entry sheet rows: "
+                f"{sidecar_brief_result['visual_label_entry_sheet'].get('row_count')}"
+            ),
+            (
+                "- Sidecar visual-label source update manifest: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_source_update_manifest']}"
+            ),
+            (
+                "- Sidecar visual-label source update manifest report: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_source_update_manifest_report']}"
+            ),
+            (
+                "- Sidecar visual-label source update rows/pending/cells: "
+                f"{sidecar_brief_result['visual_label_source_update_manifest'].get('row_count')}/"
+                f"{sidecar_brief_result['visual_label_source_update_manifest'].get('pending_update_row_count')}/"
+                f"{sidecar_brief_result['visual_label_source_update_manifest'].get('required_update_cell_count')}"
+            ),
+            f"- Sidecar visual-label source patch plan: {sidecar_brief_result['paths']['sidecar_visual_label_source_patch_plan']}",
+            (
+                "- Sidecar visual-label source patch plan report: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_source_patch_plan_report']}"
+            ),
+            (
+                "- Sidecar visual-label source patch cells/pending/blocked: "
+                f"{sidecar_brief_result['visual_label_source_patch_plan'].get('source_patch_cell_count')}/"
+                f"{sidecar_brief_result['visual_label_source_patch_plan'].get('pending_source_patch_cell_count')}/"
+                f"{sidecar_brief_result['visual_label_source_patch_plan'].get('blocked_source_patch_cell_count')}"
+            ),
+            (
+                "- Sidecar visual-label completion audit: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_completion_audit']}"
+            ),
+            (
+                "- Sidecar visual-label completion audit YAML: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_completion_audit_yaml']}"
+            ),
+            (
+                "- Sidecar visual-label completion audit report: "
+                f"{sidecar_brief_result['paths']['sidecar_visual_label_completion_audit_report']}"
+            ),
+            (
+                "- Sidecar visual-label next batch rows: "
+                f"{sidecar_brief_result['visual_label_next_batch'].get('row_count')}"
+            ),
+            (
+                "- Sidecar visual-label rubric required fields: "
+                f"{_csv_list(sidecar_brief_result['visual_label_rubric'].get('required_label_fields', []) or []) or 'none'}"
+            ),
+            (
+                "- Sidecar visual-label completion rows/completed/missing/invalid: "
+                f"{sidecar_brief_result['visual_label_completion_audit'].get('row_count')}/"
+                f"{sidecar_brief_result['visual_label_completion_audit'].get('completed_row_count')}/"
+                f"{sidecar_brief_result['visual_label_completion_audit'].get('missing_required_row_count')}/"
+                f"{sidecar_brief_result['visual_label_completion_audit'].get('invalid_label_row_count')}"
+            ),
+            f"- Sidecar visual-review top candidate: {sidecar_visual_review_top.get('sidecar_visual_review_top_candidate') or 'none'}",
+            f"- Sidecar visual-review top focus: {sidecar_visual_review_top.get('sidecar_visual_review_top_focus') or 'none'}",
+            f"- Sidecar visual-review top priority: {sidecar_visual_review_top.get('sidecar_visual_review_top_priority') if sidecar_visual_review_top.get('sidecar_visual_review_top_priority') != '' else 'n/a'}",
+            f"- Sidecar visual-review top gallery: {sidecar_visual_review_top.get('sidecar_visual_review_top_gallery') or 'none'}",
+            f"- Sidecar visual-review top labels: {sidecar_visual_review_top.get('sidecar_visual_review_top_labels_with_images') or 'none'}",
+            f"- Sidecar champion/challenger evidence table: {sidecar_brief_result['paths']['sidecar_champion_challenger_evidence']}",
+            (
+                "- Sidecar champion/challenger quality audit: "
+                f"{sidecar_brief_result['paths']['sidecar_champion_challenger_quality_audit']}"
+            ),
+            (
+                "- Sidecar champion/challenger quality audit report: "
+                f"{sidecar_brief_result['paths']['sidecar_champion_challenger_quality_audit_report']}"
+            ),
+            f"- Sidecar quality remediation plan: {sidecar_brief_result['paths']['sidecar_quality_remediation_plan']}",
+            (
+                "- Sidecar quality remediation plan report: "
+                f"{sidecar_brief_result['paths']['sidecar_quality_remediation_plan_report']}"
+            ),
+            f"- Sidecar quality remediation status: {sidecar_brief_result['quality_remediation_plan'].get('status')}",
+            (
+                "- Sidecar quality remediation autonomous/human/diversity/archive: "
+                f"{sidecar_brief_result['quality_remediation_plan'].get('autonomous_clearable_now_count')}/"
+                f"{sidecar_brief_result['quality_remediation_plan'].get('human_visual_remediation_count')}/"
+                f"{sidecar_brief_result['quality_remediation_plan'].get('diversity_control_remediation_count')}/"
+                f"{sidecar_brief_result['quality_remediation_plan'].get('archive_only_count')}"
+            ),
+            f"- Sidecar champion/challenger quality status: {sidecar_brief_result['champion_challenger_quality'].get('status')}",
+            f"- Sidecar champion/challenger quality issues: {sidecar_brief_result['champion_challenger_quality'].get('issue_count')}",
+            (
+                "- Sidecar champion/challenger quality hard/advisory issues: "
+                f"{sidecar_brief_result['champion_challenger_quality'].get('hard_issue_count')}/"
+                f"{sidecar_brief_result['champion_challenger_quality'].get('advisory_issue_count')}"
+            ),
+            f"- Sidecar evidence gap matrix: {sidecar_brief_result['paths']['sidecar_evidence_gap_matrix']}",
+            f"- Sidecar candidate readiness summary: {sidecar_brief_result['paths']['sidecar_candidate_readiness_summary']}",
+            f"- Sidecar candidate readiness summary report: {sidecar_brief_result['paths']['sidecar_candidate_readiness_summary_report']}",
+            f"- Sidecar validation queue: {sidecar_brief_result['paths']['sidecar_validation_queue']}",
+            f"- Sidecar validation queue report: {sidecar_brief_result['paths']['sidecar_validation_queue_report']}",
+            f"- Sidecar champion/challenger validation design: {sidecar_brief_result['paths']['sidecar_champion_challenger_validation_design']}",
+            f"- Sidecar champion/challenger validation design report: {sidecar_brief_result['paths']['sidecar_champion_challenger_validation_design_report']}",
+            f"- Sidecar data-gate unlock matrix: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix']}",
+            f"- Sidecar data-gate unlock matrix YAML: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix_yaml']}",
+            f"- Sidecar data-gate unlock matrix report: {sidecar_brief_result['paths']['sidecar_data_gate_unlock_matrix_report']}",
+            f"- Sidecar evidence consistency audit: {sidecar_brief_result['paths']['sidecar_evidence_consistency_audit']}",
+            f"- Sidecar evidence consistency audit report: {sidecar_brief_result['paths']['sidecar_evidence_consistency_audit_report']}",
+            f"- Sidecar evidence consistency audit status: {sidecar_brief_result['consistency_audit'].get('status')}",
+            (
+                "- Sidecar evidence consistency audit checks/issues: "
+                f"{sidecar_brief_result['consistency_audit'].get('check_count')}/"
+                f"{sidecar_brief_result['consistency_audit'].get('issue_count')}"
+            ),
+            f"- Sidecar evidence packet index: {sidecar_brief_result['paths']['sidecar_evidence_packet_index']}",
+            f"- Sidecar evidence packet index report: {sidecar_brief_result['paths']['sidecar_evidence_packet_index_report']}",
+            f"- Sidecar candidate decision cards: {sidecar_brief_result['paths']['sidecar_candidate_decision_cards']}",
+            f"- Sidecar current decision packet: {sidecar_brief_result['paths']['sidecar_current_decision_packet']}",
+            f"- Sidecar current decision packet report: {sidecar_brief_result['paths']['sidecar_current_decision_packet_report']}",
+            f"- Sidecar current decision packet status: {sidecar_current_packet.get('status')}",
+            f"- Sidecar current decision packet decision: {sidecar_current_packet.get('executive_decision')}",
+            (
+                "- Sidecar current decision packet quality remediation status: "
+                f"{sidecar_current_packet.get('quality_remediation_status')}"
+            ),
+            (
+                "- Sidecar current decision packet quality remediation autonomous/human/diversity/archive: "
+                f"{sidecar_current_packet.get('quality_remediation_autonomous_clearable_now_count')}/"
+                f"{sidecar_current_packet.get('quality_remediation_human_visual_remediation_count')}/"
+                f"{sidecar_current_packet.get('quality_remediation_diversity_control_remediation_count')}/"
+                f"{sidecar_current_packet.get('quality_remediation_archive_only_count')}"
+            ),
+            f"- Sidecar shadow guardrail: {sidecar_brief_result['guardrail_audit'].get('status')} "
+            f"violations={sidecar_brief_result['guardrail_audit'].get('violation_count')}",
+            f"- Sidecar shadow guardrail audit: {sidecar_brief_result['paths']['sidecar_shadow_guardrail_audit_report']}",
+            f"- Sidecar evidence source manifest: {sidecar_brief_result['paths']['sidecar_evidence_source_manifest']}",
+            f"- Sidecar evidence source health: {sidecar_brief_result['paths']['sidecar_evidence_source_health']}",
+            f"- Sidecar evidence source health YAML: {sidecar_brief_result['paths']['sidecar_evidence_source_health_yaml']}",
+            f"- Sidecar evidence source health report: {sidecar_brief_result['paths']['sidecar_evidence_source_health_report']}",
+            f"- Sidecar evidence source health status: {sidecar_brief_result['source_health'].get('status')}",
+            f"- Sidecar evidence source health issues: {sidecar_brief_result['source_health'].get('issue_count')}",
+            (
+                "- Sidecar evidence source health missing required refs: "
+                f"{sidecar_brief_result['source_health'].get('missing_required_source_ref_count')}"
+            ),
+            (
+                "- Sidecar evidence source health wrong-type required refs: "
+                f"{sidecar_brief_result['source_health'].get('wrong_type_required_source_ref_count')}"
+            ),
+            f"- Sidecar evidence source fingerprints: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints']}",
+            f"- Sidecar evidence source fingerprints YAML: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints_yaml']}",
+            f"- Sidecar evidence source fingerprints report: {sidecar_brief_result['paths']['sidecar_evidence_source_fingerprints_report']}",
+            f"- Sidecar evidence source fingerprints status: {sidecar_brief_result['source_fingerprints'].get('status')}",
+            f"- Sidecar evidence source fingerprints issues: {sidecar_brief_result['source_fingerprints'].get('issue_count')}",
+            (
+                "- Sidecar evidence source fingerprints files: "
+                f"{sidecar_brief_result['source_fingerprints'].get('fingerprinted_file_count')}/"
+                f"{sidecar_brief_result['source_fingerprints'].get('file_ref_count')}"
+            ),
+            (
+                "- Sidecar evidence source fingerprints CSV row counts: "
+                f"{sidecar_brief_result['source_fingerprints'].get('csv_row_count_recorded_count')}/"
+                f"{sidecar_brief_result['source_fingerprints'].get('csv_ref_count')}"
+            ),
+            f"- Sidecar candidate learning ledger: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger']}",
+            f"- Sidecar candidate learning ledger YAML: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger_yaml']}",
+            f"- Sidecar candidate learning ledger report: {sidecar_brief_result['paths']['sidecar_candidate_learning_ledger_report']}",
+            f"- Sidecar candidate learning ledger status: {sidecar_brief_result['candidate_learning_ledger'].get('status')}",
+            (
+                "- Sidecar candidate learning ledger lead/control/archive/review/blocked: "
+                f"{sidecar_brief_result['candidate_learning_ledger'].get('lead_post_data_candidate_count')}/"
+                f"{sidecar_brief_result['candidate_learning_ledger'].get('diversity_control_only_count')}/"
+                f"{sidecar_brief_result['candidate_learning_ledger'].get('archive_failure_mode_count')}/"
+                f"{sidecar_brief_result['candidate_learning_ledger'].get('review_only_candidate_count')}/"
+                f"{sidecar_brief_result['candidate_learning_ledger'].get('quality_blocked_review_only_count')}"
+            ),
+            f"- Sidecar post-data validation playbook: {sidecar_brief_result['paths']['sidecar_post_data_validation_playbook']}",
+            f"- Sidecar post-data validation playbook report: {sidecar_brief_result['paths']['sidecar_post_data_validation_playbook_report']}",
+            f"- Sidecar post-data playbook status: {sidecar_brief_result['post_data_playbook'].get('status')}",
+            f"- Sidecar post-data required action: {sidecar_brief_result['post_data_playbook'].get('current_required_action')}",
+            f"- Sidecar post-data candidate count: {sidecar_brief_result['post_data_playbook'].get('candidate_count')}",
+            f"- Sidecar current handoff: {sidecar_brief_result['paths']['sidecar_current_handoff']}",
+            f"- Sidecar current handoff report: {sidecar_brief_result['paths']['sidecar_current_handoff_report']}",
+            f"- Sidecar current handoff status: {sidecar_brief_result['current_handoff'].get('status')}",
+            f"- Sidecar current handoff required action: {sidecar_brief_result['current_handoff'].get('current_required_action')}",
+            f"- Sidecar candidate decision matrix: {sidecar_brief_result['paths']['sidecar_candidate_decision_matrix']}",
+            f"- Sidecar candidate decision matrix report: {sidecar_brief_result['paths']['sidecar_candidate_decision_matrix_report']}",
+            f"- Sidecar learning lead candidate: {sidecar_learning_summary.get('sidecar_learning_lead_candidate') or 'none'}",
+            f"- Sidecar learning lead next required: {sidecar_learning_summary.get('sidecar_learning_lead_next_required_action') or 'none'}",
+            f"- Sidecar learning control candidate: {sidecar_learning_summary.get('sidecar_learning_control_candidate') or 'none'}",
+            f"- Sidecar learning control reason: {sidecar_learning_summary.get('sidecar_learning_control_reason') or 'none'}",
+            f"- Sidecar learning archive candidate: {sidecar_learning_summary.get('sidecar_learning_archive_candidate') or 'none'}",
+            f"- Sidecar learning archive reason: {sidecar_learning_summary.get('sidecar_learning_archive_reason') or 'none'}",
+            f"- Sidecar review-only frozen specs: {sidecar_brief_result['brief'].get('review_only_frozen_spec_count')}",
+            f"- Sidecar official frozen plan exists: {sidecar_brief_result['brief'].get('official_frozen_candidate_validation_plan_exists')}",
+            f"- Sidecar frozen-spec review table: {sidecar_brief_result['paths']['sidecar_frozen_spec_review']}",
+            f"- Sidecar fresh-data blocked: {sidecar_brief_result['brief'].get('fresh_data_blocked_count')}",
+            f"- Sidecar next action: {sidecar_brief_result['brief'].get('next_action')}",
+            f"- Data gate brief: {data_gate_result['brief'].get('status')}",
+            f"- Data gate safe fresh validation: {data_gate_result['brief'].get('safe_to_run_fresh_validation')}",
+            f"- Data gate required timeframes: {data_gate_result['brief'].get('required_timeframes') or []}",
+            f"- Data gate CSV requirements: {data_gate_result['brief'].get('csv_requirement_count')}",
+            f"- Data gate CSV requirement table: {data_gate_result['paths']['data_gate_csv_requirements']}",
+            f"- Data gate blocked candidates: {data_gate_result['brief'].get('blocked_candidate_count')}",
+            f"- Data gate candidate unlocks: {data_gate_result['brief'].get('candidate_unlock_count')}",
+            f"- Data gate candidate unlock table: {data_gate_result['paths']['data_gate_candidate_unlocks']}",
+            f"- Data gate import plan: {data_gate_result['paths']['data_gate_import_plan']}",
+            f"- Data gate import plan report: {data_gate_result['paths']['data_gate_import_plan_report']}",
+            f"- Data gate import batches: {data_gate_result['import_plan'].get('required_batch_count')}",
+            f"- Data gate import batch table: {data_gate_result['paths']['data_gate_import_batches']}",
+            f"- Data gate symbol matrix: {data_gate_result['paths']['data_gate_symbol_matrix']}",
+            f"- Data gate symbol matrix rows: {data_gate_result['symbol_matrix'].get('symbol_count')}",
+            f"- Data gate symbol matrix report: {data_gate_result['paths']['data_gate_symbol_matrix_report']}",
+            f"- Data gate next verification: {data_gate_result['brief'].get('next_verification_command')}",
             "",
-            packet_path.read_text(encoding="utf-8") if packet_path.exists() else "",
+            "## Historical Decision Packet",
+            "",
+            f"- Packet path: {packet_path if packet_path.exists() else 'missing'}",
+            "- Note: this packet is retained as historical block context. Current sidecar, data-gate, "
+            "promotion-candidate, and CEO operating snapshot fields above are authoritative for present status.",
         ]
     )
     report_path = root / "final_ceo_report.md"
@@ -17056,7 +31819,155 @@ def run_ceo_report(options: CeoOpsOptions) -> dict[str, Any]:
             "capability_backlog_report": backlog_result["paths"]["backlog_report"],
             "fresh_withheld_validation_contract_report": contract_result["paths"]["report"],
             "promotion_proposal_report": promotion_result["paths"]["proposal_report"],
+            "promotion_candidates": root / "promotion_candidates.md",
             "evidence_debt_register_report": evidence_debt_result["paths"]["register_report"],
+            "sidecar_evidence_brief_report": sidecar_brief_result["paths"]["sidecar_evidence_brief_report"],
+            "sidecar_evidence_candidates": sidecar_brief_result["paths"]["sidecar_evidence_candidates"],
+            "sidecar_visual_review_handoff": sidecar_brief_result["paths"]["sidecar_visual_review_handoff"],
+            "sidecar_visual_review_coverage": sidecar_brief_result["paths"]["sidecar_visual_review_coverage"],
+            "sidecar_visual_review_coverage_report": sidecar_brief_result["paths"][
+                "sidecar_visual_review_coverage_report"
+            ],
+            "sidecar_visual_label_worklist": sidecar_brief_result["paths"]["sidecar_visual_label_worklist"],
+            "sidecar_visual_label_worklist_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_worklist_report"
+            ],
+            "sidecar_visual_label_review_batches": sidecar_brief_result["paths"][
+                "sidecar_visual_label_review_batches"
+            ],
+            "sidecar_visual_label_review_batches_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_review_batches_report"
+            ],
+            "sidecar_visual_label_progress": sidecar_brief_result["paths"]["sidecar_visual_label_progress"],
+            "sidecar_visual_label_progress_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_progress_report"
+            ],
+            "sidecar_visual_label_next_batch": sidecar_brief_result["paths"]["sidecar_visual_label_next_batch"],
+            "sidecar_visual_label_next_batch_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_next_batch_report"
+            ],
+            "sidecar_visual_label_next_batch_gallery": sidecar_brief_result["paths"][
+                "sidecar_visual_label_next_batch_gallery"
+            ],
+            "sidecar_visual_label_decision_context": sidecar_brief_result["paths"][
+                "sidecar_visual_label_decision_context"
+            ],
+            "sidecar_visual_label_decision_context_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_decision_context_report"
+            ],
+            "sidecar_visual_label_rubric": sidecar_brief_result["paths"]["sidecar_visual_label_rubric"],
+            "sidecar_visual_label_rubric_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_rubric_report"
+            ],
+            "sidecar_visual_label_entry_sheet": sidecar_brief_result["paths"]["sidecar_visual_label_entry_sheet"],
+            "sidecar_visual_label_entry_sheet_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_entry_sheet_report"
+            ],
+            "sidecar_visual_label_source_update_manifest": sidecar_brief_result["paths"][
+                "sidecar_visual_label_source_update_manifest"
+            ],
+            "sidecar_visual_label_source_update_manifest_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_source_update_manifest_report"
+            ],
+            "sidecar_visual_label_source_patch_plan": sidecar_brief_result["paths"][
+                "sidecar_visual_label_source_patch_plan"
+            ],
+            "sidecar_visual_label_source_patch_plan_yaml": sidecar_brief_result["paths"][
+                "sidecar_visual_label_source_patch_plan_yaml"
+            ],
+            "sidecar_visual_label_source_patch_plan_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_source_patch_plan_report"
+            ],
+            "sidecar_visual_label_completion_audit": sidecar_brief_result["paths"][
+                "sidecar_visual_label_completion_audit"
+            ],
+            "sidecar_visual_label_completion_audit_yaml": sidecar_brief_result["paths"][
+                "sidecar_visual_label_completion_audit_yaml"
+            ],
+            "sidecar_visual_label_completion_audit_report": sidecar_brief_result["paths"][
+                "sidecar_visual_label_completion_audit_report"
+            ],
+            "sidecar_champion_challenger_evidence": sidecar_brief_result["paths"]["sidecar_champion_challenger_evidence"],
+            "sidecar_champion_challenger_quality_audit": sidecar_brief_result["paths"][
+                "sidecar_champion_challenger_quality_audit"
+            ],
+            "sidecar_champion_challenger_quality_audit_report": sidecar_brief_result["paths"][
+                "sidecar_champion_challenger_quality_audit_report"
+            ],
+            "sidecar_quality_remediation_plan": sidecar_brief_result["paths"]["sidecar_quality_remediation_plan"],
+            "sidecar_quality_remediation_plan_report": sidecar_brief_result["paths"][
+                "sidecar_quality_remediation_plan_report"
+            ],
+            "sidecar_evidence_gap_matrix": sidecar_brief_result["paths"]["sidecar_evidence_gap_matrix"],
+            "sidecar_candidate_readiness_summary": sidecar_brief_result["paths"]["sidecar_candidate_readiness_summary"],
+            "sidecar_candidate_readiness_summary_report": sidecar_brief_result["paths"][
+                "sidecar_candidate_readiness_summary_report"
+            ],
+            "sidecar_validation_queue": sidecar_brief_result["paths"]["sidecar_validation_queue"],
+            "sidecar_validation_queue_report": sidecar_brief_result["paths"]["sidecar_validation_queue_report"],
+            "sidecar_champion_challenger_validation_design": sidecar_brief_result["paths"][
+                "sidecar_champion_challenger_validation_design"
+            ],
+            "sidecar_champion_challenger_validation_design_report": sidecar_brief_result["paths"][
+                "sidecar_champion_challenger_validation_design_report"
+            ],
+            "sidecar_data_gate_unlock_matrix": sidecar_brief_result["paths"]["sidecar_data_gate_unlock_matrix"],
+            "sidecar_data_gate_unlock_matrix_yaml": sidecar_brief_result["paths"]["sidecar_data_gate_unlock_matrix_yaml"],
+            "sidecar_data_gate_unlock_matrix_report": sidecar_brief_result["paths"][
+                "sidecar_data_gate_unlock_matrix_report"
+            ],
+            "sidecar_evidence_consistency_audit": sidecar_brief_result["paths"]["sidecar_evidence_consistency_audit"],
+            "sidecar_evidence_consistency_audit_report": sidecar_brief_result["paths"][
+                "sidecar_evidence_consistency_audit_report"
+            ],
+            "sidecar_evidence_packet_index": sidecar_brief_result["paths"]["sidecar_evidence_packet_index"],
+            "sidecar_evidence_packet_index_report": sidecar_brief_result["paths"]["sidecar_evidence_packet_index_report"],
+            "sidecar_candidate_decision_cards": sidecar_brief_result["paths"]["sidecar_candidate_decision_cards"],
+            "sidecar_current_decision_packet": sidecar_brief_result["paths"]["sidecar_current_decision_packet"],
+            "sidecar_current_decision_packet_report": sidecar_brief_result["paths"][
+                "sidecar_current_decision_packet_report"
+            ],
+            "sidecar_shadow_guardrail_audit": sidecar_brief_result["paths"]["sidecar_shadow_guardrail_audit"],
+            "sidecar_shadow_guardrail_audit_report": sidecar_brief_result["paths"]["sidecar_shadow_guardrail_audit_report"],
+            "sidecar_evidence_source_manifest": sidecar_brief_result["paths"]["sidecar_evidence_source_manifest"],
+            "sidecar_evidence_source_health": sidecar_brief_result["paths"]["sidecar_evidence_source_health"],
+            "sidecar_evidence_source_health_yaml": sidecar_brief_result["paths"]["sidecar_evidence_source_health_yaml"],
+            "sidecar_evidence_source_health_report": sidecar_brief_result["paths"]["sidecar_evidence_source_health_report"],
+            "sidecar_evidence_source_fingerprints": sidecar_brief_result["paths"]["sidecar_evidence_source_fingerprints"],
+            "sidecar_evidence_source_fingerprints_yaml": sidecar_brief_result["paths"][
+                "sidecar_evidence_source_fingerprints_yaml"
+            ],
+            "sidecar_evidence_source_fingerprints_report": sidecar_brief_result["paths"][
+                "sidecar_evidence_source_fingerprints_report"
+            ],
+            "sidecar_candidate_learning_ledger": sidecar_brief_result["paths"]["sidecar_candidate_learning_ledger"],
+            "sidecar_candidate_learning_ledger_yaml": sidecar_brief_result["paths"][
+                "sidecar_candidate_learning_ledger_yaml"
+            ],
+            "sidecar_candidate_learning_ledger_report": sidecar_brief_result["paths"][
+                "sidecar_candidate_learning_ledger_report"
+            ],
+            "sidecar_post_data_validation_playbook": sidecar_brief_result["paths"][
+                "sidecar_post_data_validation_playbook"
+            ],
+            "sidecar_post_data_validation_playbook_report": sidecar_brief_result["paths"][
+                "sidecar_post_data_validation_playbook_report"
+            ],
+            "sidecar_current_handoff": sidecar_brief_result["paths"]["sidecar_current_handoff"],
+            "sidecar_current_handoff_report": sidecar_brief_result["paths"]["sidecar_current_handoff_report"],
+            "sidecar_candidate_decision_matrix": sidecar_brief_result["paths"]["sidecar_candidate_decision_matrix"],
+            "sidecar_candidate_decision_matrix_report": sidecar_brief_result["paths"][
+                "sidecar_candidate_decision_matrix_report"
+            ],
+            "sidecar_frozen_spec_review": sidecar_brief_result["paths"]["sidecar_frozen_spec_review"],
+            "data_gate_brief_report": data_gate_result["paths"]["data_gate_brief_report"],
+            "data_gate_csv_requirements": data_gate_result["paths"]["data_gate_csv_requirements"],
+            "data_gate_candidate_unlocks": data_gate_result["paths"]["data_gate_candidate_unlocks"],
+            "data_gate_import_plan": data_gate_result["paths"]["data_gate_import_plan"],
+            "data_gate_import_plan_report": data_gate_result["paths"]["data_gate_import_plan_report"],
+            "data_gate_import_batches": data_gate_result["paths"]["data_gate_import_batches"],
+            "data_gate_symbol_matrix": data_gate_result["paths"]["data_gate_symbol_matrix"],
+            "data_gate_symbol_matrix_report": data_gate_result["paths"]["data_gate_symbol_matrix_report"],
             **review["paths"],
         },
     }
@@ -17205,6 +32116,9 @@ def run_ceo_heartbeat_status(options: CeoOpsOptions) -> dict[str, Any]:
         company_status=company_status,
         decision=decision,
     )
+    root = ceo_dir(options, ceo_run_id)
+    payload = _heartbeat_status_with_runtime_authority(payload, root=root)
+    payload = _heartbeat_status_with_artifact_summaries(payload, root=root)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_yaml(path, payload)
     return {

@@ -53,6 +53,8 @@ VISUAL_REVIEW_COLUMNS = [
     "notes",
 ]
 
+GRAMMAR_REVIEW_GALLERY_MODEL = "grammar_review_label_gallery_v0"
+
 
 @dataclass(frozen=True)
 class VisualReviewSettings:
@@ -500,6 +502,136 @@ def render_visual_review_image(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
+
+
+def _safe_filename_part(value: object) -> str:
+    text = str(value).strip().replace(" ", "_").replace(":", "")
+    safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in text)
+    return safe.strip("_") or "unknown"
+
+
+def _lookup_event_date(index: pd.Index, date: object) -> object | None:
+    timestamp = pd.Timestamp(date)
+    if timestamp in index:
+        return timestamp
+    if isinstance(index, pd.DatetimeIndex):
+        matches = index[index == timestamp]
+        if len(matches):
+            return matches[0]
+    return None
+
+
+def _review_forward_bars(row: pd.Series, fallback: int = 30) -> int:
+    column = str(row.get("review_outcome_column", ""))
+    if column.startswith("forward_relative_return_"):
+        try:
+            return max(1, int(column.rsplit("_", 1)[-1]))
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _write_grammar_label_gallery(records: pd.DataFrame, output_path: Path, *, report_root: Path) -> None:
+    lines = [
+        "# Grammar Review Label Gallery",
+        "",
+        "This gallery renders grammar-review label rows onto local Riskflow chart snapshots. It is for visual research, not formula promotion.",
+        "",
+    ]
+    if records.empty:
+        lines.extend(["No label rows were available for gallery rendering.", ""])
+    for _, row in records.iterrows():
+        raw_image_path = str(row.get("image_path", "") or "")
+        if raw_image_path:
+            image_path = Path(raw_image_path)
+            try:
+                image_ref = image_path.relative_to(report_root)
+            except ValueError:
+                image_ref = image_path
+        else:
+            image_ref = None
+        outcome = pd.to_numeric(pd.Series([row.get("review_outcome")]), errors="coerce").iloc[0]
+        forward_return = pd.to_numeric(pd.Series([row.get("forward_return")]), errors="coerce").iloc[0]
+        outcome_text = "n/a" if pd.isna(outcome) else f"{float(outcome):.2%}"
+        forward_text = "n/a" if pd.isna(forward_return) else f"{float(forward_return):.2%}"
+        lines.extend(
+            [
+                f"## {row.get('review_bucket')} - {row.get('symbol')} - {row.get('date')}",
+                "",
+                f"- Timeframe: `{row.get('timeframe')}`",
+                f"- Family: `{row.get('family_id')}`",
+                f"- Direction: `{row.get('direction')}`",
+                f"- Terminal relative outcome: {outcome_text}",
+                f"- Absolute forward return: {forward_text}",
+                f"- Suggested labels: `{row.get('suggested_labels')}`",
+                f"- Render status: `{row.get('render_status')}`",
+                "",
+            ]
+        )
+        if image_ref is not None:
+            lines.extend([f"![{row.get('symbol')} grammar review]({image_ref.as_posix()})", ""])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def render_grammar_review_label_gallery(
+    labels: pd.DataFrame,
+    raw_frames_by_timeframe: dict[str, dict[str, pd.DataFrame]],
+    analysis_frames_by_timeframe: dict[str, dict[str, pd.DataFrame]],
+    *,
+    output_dir: str | Path,
+    lookback_bars: int = 80,
+    forward_bars: int | None = None,
+    max_images: int = 48,
+) -> tuple[pd.DataFrame, dict[str, Path]]:
+    """Render chart images for rows from a grammar-review label sheet."""
+    gallery_dir = Path(output_dir)
+    image_dir = gallery_dir / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    for old_image in image_dir.glob("*.png"):
+        old_image.unlink()
+
+    records = labels.head(max_images).copy()
+    image_paths: list[str] = []
+    render_statuses: list[str] = []
+    for sequence, (_, row) in enumerate(records.iterrows(), start=1):
+        timeframe = str(row.get("timeframe", "")).strip().lower()
+        symbol = str(row.get("symbol", "")).strip()
+        raw_frame = raw_frames_by_timeframe.get(timeframe, {}).get(symbol)
+        analysis_frame = analysis_frames_by_timeframe.get(timeframe, {}).get(symbol)
+        if raw_frame is None or analysis_frame is None:
+            image_paths.append("")
+            render_statuses.append("missing_frame")
+            continue
+        event_date = _lookup_event_date(analysis_frame.index, row.get("date"))
+        if event_date is None:
+            image_paths.append("")
+            render_statuses.append("missing_event_date")
+            continue
+        safe_bucket = _safe_filename_part(row.get("review_bucket", "case"))
+        safe_symbol = _safe_filename_part(symbol)
+        safe_date = pd.Timestamp(event_date).strftime("%Y%m%d_%H%M")
+        output_path = image_dir / f"{sequence:02d}_{safe_bucket}_{safe_symbol}_{safe_date}.png"
+        render_visual_review_image(
+            symbol,
+            event_date,
+            raw_frame,
+            analysis_frame,
+            output_path,
+            lookback_bars=lookback_bars,
+            forward_bars=forward_bars if forward_bars is not None and forward_bars > 0 else _review_forward_bars(row),
+        )
+        image_paths.append(str(output_path))
+        render_statuses.append("rendered")
+
+    records["image_path"] = image_paths
+    records["render_status"] = render_statuses
+    records["gallery_model"] = GRAMMAR_REVIEW_GALLERY_MODEL
+    labels_with_images_csv = gallery_dir / "human_review_labels_with_images.csv"
+    gallery_md = gallery_dir / "gallery.md"
+    records.to_csv(labels_with_images_csv, index=False)
+    _write_grammar_label_gallery(records, gallery_md, report_root=gallery_dir)
+    return records, {"labels_with_images_csv": labels_with_images_csv, "gallery_md": gallery_md, "image_dir": image_dir}
 
 
 def _write_gallery(records: pd.DataFrame, output_path: Path, *, report_root: Path) -> None:

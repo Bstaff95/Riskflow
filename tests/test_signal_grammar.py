@@ -284,6 +284,8 @@ def test_calculate_signal_grammar_features_builds_sidecars_and_events() -> None:
     assert features["grammar_minus_1_5_reclaim_after_coil_event"].any()
     assert features["grammar_zero_reclaim_confirmation_event"].any()
     assert features["grammar_hot_leader_reset_warning_event"].any()
+    assert features["grammar_constructive_reset_watch_event"].any()
+    assert features["grammar_unstable_reset_warning_event"].any()
 
 
 def test_detect_signal_grammar_events_exposes_registered_candidate_masks() -> None:
@@ -295,3 +297,5 @@ def test_detect_signal_grammar_events_exposes_registered_candidate_masks() -> No
     assert events["grammar_minus_1_5_reclaim_after_coil_v0"].any()
     assert events["grammar_zero_reclaim_confirmation_v0"].any()
     assert events["grammar_hot_leader_reset_warning_v0"].any()
+    assert events["grammar_constructive_reset_watch_v0"].any()
+    assert events["grammar_unstable_reset_warning_v0"].any()

@@ -63,6 +63,7 @@ GRAMMAR_FEATURE_COLUMNS = [
     "grammar_recent_hot_leader_20",
     "grammar_hot_leader_cooloff",
     "grammar_reset_quality_watch",
+    "grammar_constructive_reset_watch",
     "grammar_pressure_acceptance_event",
     "grammar_viscosity_acceptance_flush_reclaim_event",
     "grammar_low_zone_failed_weakness_event",
@@ -75,6 +76,8 @@ GRAMMAR_FEATURE_COLUMNS = [
     "grammar_bearish_divergence_warning_event",
     "grammar_chaotic_chop_warning_event",
     "grammar_hot_leader_reset_warning_event",
+    "grammar_constructive_reset_watch_event",
+    "grammar_unstable_reset_warning_event",
 ]
 
 GRAMMAR_EVENT_NAMES = (
@@ -90,6 +93,8 @@ GRAMMAR_EVENT_NAMES = (
     "grammar_bearish_divergence_warning_v0",
     "grammar_chaotic_chop_warning_v0",
     "grammar_hot_leader_reset_warning_v0",
+    "grammar_constructive_reset_watch_v0",
+    "grammar_unstable_reset_warning_v0",
 )
 
 SCENARIO_TAGS = {
@@ -346,6 +351,13 @@ def calculate_signal_grammar_features(frame: pd.DataFrame) -> pd.DataFrame:
         & signal.between(-1.5, 1.0)
         & (compression >= 50.0)
     ).fillna(False)
+    features["grammar_constructive_reset_watch"] = (
+        features["grammar_reset_quality_watch"]
+        & signal.between(-1.0, 1.0)
+        & (features["grammar_signal_slope_3"] >= -0.12)
+        & (features["grammar_viscosity_cross_count_20"] <= 5.0)
+        & ~features["grammar_chaotic_chop_quality"]
+    ).fillna(False)
 
     viscosity_reclaim = (above_viscosity & ~above_viscosity.shift(1, fill_value=False)).fillna(False)
     recent_coil = _recent(features["grammar_coil_under_viscosity"], 10)
@@ -383,6 +395,21 @@ def calculate_signal_grammar_features(frame: pd.DataFrame) -> pd.DataFrame:
     ).fillna(False)
     features["grammar_chaotic_chop_warning_event"] = features["grammar_chaotic_chop_quality"]
     features["grammar_hot_leader_reset_warning_event"] = features["grammar_hot_leader_cooloff"]
+    features["grammar_constructive_reset_watch_event"] = (
+        features["grammar_constructive_reset_watch"]
+        & ((signal.diff() >= 0.0) | (features["grammar_pressure_area_delta_5"] >= 0.0))
+    ).fillna(False)
+    recent_plus_1_5_lost = _recent(features["grammar_plus_1_5_lost"], 5)
+    recent_upper_rejection = _recent(features["grammar_upper_band_rejection"], 5)
+    features["grammar_unstable_reset_warning_event"] = (
+        features["grammar_hot_leader_cooloff"]
+        & (
+            recent_plus_1_5_lost
+            | recent_upper_rejection
+            | features["grammar_chaotic_chop_quality"]
+        )
+        & (signal.diff() < 0.0)
+    ).fillna(False)
 
     for column in GRAMMAR_FEATURE_COLUMNS:
         if column not in features.columns:
@@ -409,6 +436,8 @@ def detect_signal_grammar_events(frame: pd.DataFrame) -> dict[str, pd.Series]:
         "grammar_bearish_divergence_warning_v0": "grammar_bearish_divergence_warning_event",
         "grammar_chaotic_chop_warning_v0": "grammar_chaotic_chop_warning_event",
         "grammar_hot_leader_reset_warning_v0": "grammar_hot_leader_reset_warning_event",
+        "grammar_constructive_reset_watch_v0": "grammar_constructive_reset_watch_event",
+        "grammar_unstable_reset_warning_v0": "grammar_unstable_reset_warning_event",
     }
     events: dict[str, pd.Series] = {}
     for event_name, column in event_columns.items():

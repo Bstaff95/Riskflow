@@ -5,7 +5,12 @@ import pandas as pd
 
 from riskflow.cli import build_analysis_frames, main
 from riskflow.config import AssetConfig, BenchmarkConfig, UniverseConfig
-from riskflow.visual_review import VisualReviewSettings, build_visual_review_records, run_visual_review
+from riskflow.visual_review import (
+    VisualReviewSettings,
+    build_visual_review_records,
+    render_grammar_review_label_gallery,
+    run_visual_review,
+)
 
 
 def _raw_frame(multiplier: float = 1.0) -> pd.DataFrame:
@@ -182,6 +187,37 @@ def test_run_visual_review_writes_gallery_and_images(tmp_path) -> None:
     assert all(pd.notna(path) for path in records["image_path"])
 
 
+def test_render_grammar_review_label_gallery_writes_images(tmp_path) -> None:
+    labels = pd.DataFrame(
+        [
+            {
+                "review_bucket": "constructive_reset_misclassified",
+                "symbol": "TEST",
+                "date": "2024-02-25",
+                "timeframe": "1d",
+                "family_id": "constructive_reset_without_unstable_control",
+                "direction": "positive",
+                "review_outcome": -0.25,
+                "forward_return": -0.10,
+                "suggested_labels": "constructive_reset_misclassified",
+            }
+        ]
+    )
+
+    records, paths = render_grammar_review_label_gallery(
+        labels,
+        {"1d": {"TEST": _raw_frame()}},
+        {"1d": {"TEST": _analysis_frame()}},
+        output_dir=tmp_path / "gallery",
+        max_images=1,
+    )
+
+    assert paths["labels_with_images_csv"].exists()
+    assert paths["gallery_md"].exists()
+    assert records.loc[0, "render_status"] == "rendered"
+    assert records.loc[0, "image_path"].endswith(".png")
+
+
 def test_visual_review_cli_creates_outputs(tmp_path) -> None:
     config_path = tmp_path / "universe.yaml"
     data_dir = tmp_path / "raw"
@@ -235,6 +271,71 @@ assets:
     assert status == 0
     assert (tmp_path / "reports" / "visual_review" / "events.csv").exists()
     assert (tmp_path / "reports" / "visual_review" / "gallery.md").exists()
+
+
+def test_grammar_review_gallery_cli_creates_outputs(tmp_path) -> None:
+    config_path = tmp_path / "universe.yaml"
+    data_dir = tmp_path / "raw"
+    labels_path = tmp_path / "labels.csv"
+    data_dir.mkdir()
+    config_path.write_text(
+        """
+name: test_universe
+benchmark:
+  type: equal_weight_basket
+  name: MEME_BASKET
+  exclude_self: true
+min_active_members: 1
+assets:
+  - symbol: AAA
+    name: AAA
+    sector: memes
+    subgroup: test
+  - symbol: BBB
+    name: BBB
+    sector: memes
+    subgroup: test
+""".strip(),
+        encoding="utf-8",
+    )
+    _raw_frame(1.0).to_csv(data_dir / "AAA_1d.csv", index_label="date")
+    _raw_frame(1.1).to_csv(data_dir / "BBB_1d.csv", index_label="date")
+    pd.DataFrame(
+        [
+            {
+                "review_bucket": "broad_reset_warning_strong_avoided_downside",
+                "symbol": "AAA",
+                "date": "2024-02-25",
+                "timeframe": "1d",
+                "family_id": "sidecar_hot_leader_reset_warning_current",
+                "direction": "negative",
+                "review_outcome": -0.30,
+                "forward_return": -0.20,
+                "suggested_labels": "avoided_downside",
+            }
+        ]
+    ).to_csv(labels_path, index=False)
+
+    status = main(
+        [
+            "grammar-review-gallery",
+            "--config",
+            str(config_path),
+            "--data-dir",
+            str(data_dir),
+            "--labels-csv",
+            str(labels_path),
+            "--output-dir",
+            str(tmp_path / "gallery"),
+            "--max-images",
+            "1",
+        ]
+    )
+
+    assert status == 0
+    assert (tmp_path / "gallery" / "human_review_labels_with_images.csv").exists()
+    assert (tmp_path / "gallery" / "gallery.md").exists()
+    assert any((tmp_path / "gallery" / "images").glob("*.png"))
 
 
 def test_visual_review_does_not_change_analysis_frame_contract() -> None:

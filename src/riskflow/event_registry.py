@@ -257,6 +257,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         value_column="compression_score",
         description="Research sidecar: compressed clean oscillator chop plus reclaim.",
     ),
+    "grammar_constructive_reset_watch_v0": _spec(
+        "grammar_constructive_reset_watch_v0",
+        GRAMMAR_EVENT,
+        priority=118,
+        value_column="grammar_constructive_reset_watch",
+        description="Research sidecar: hot leader cooloff that compresses without unstable reset warning behavior.",
+    ),
     "grammar_zero_rejection_v0": _spec(
         "grammar_zero_rejection_v0",
         GRAMMAR_EVENT,
@@ -288,6 +295,14 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         direction="negative",
         value_column="final_signal",
         description="Research sidecar: hot leader cooloff or reset warning after +1.5/+2 pressure.",
+    ),
+    "grammar_unstable_reset_warning_v0": _spec(
+        "grammar_unstable_reset_warning_v0",
+        GRAMMAR_EVENT,
+        priority=134,
+        direction="negative",
+        value_column="final_signal",
+        description="Research sidecar: hot leader cooloff with sharp loss, rejection, or chaotic reset behavior.",
     ),
 }
 
